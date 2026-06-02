@@ -9,6 +9,11 @@ import (
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
+// Focus layout:
+//   0..N-1  : table rows (←/→ for columns within a row)
+//   N       : < 이전 >
+//   N+1     : < 다음 >
+
 const (
 	colKiCp = iota
 	colK8s
@@ -22,21 +27,22 @@ type groupRow struct {
 	checks   [colCount]bool
 }
 
-// S2Groups assigns nodes to groups via a checkbox table.
 type S2Groups struct {
-	rows   []groupRow
-	curRow int
-	curCol int
-	width  int
-	height int
+	rows     []groupRow
+	curRow   int
+	curCol   int
+	focusNav bool // true = nav buttons focused
+	navIdx   int  // 0=이전, 1=다음
+	width    int
+	height   int
 }
 
 func NewS2Groups() *S2Groups { return &S2Groups{} }
 
-func (s *S2Groups) Title() string      { return "그룹 할당" }
-func (s *S2Groups) SetSize(w, h int)   { s.width = w; s.height = h }
-func (s *S2Groups) FooterHelp() string {
-	return "↑/↓: 행 이동  ←/→: 열 이동  space: 토글  ctrl+n: 다음  ctrl+p: 이전"
+func (s *S2Groups) Title() string { return "그룹 할당" }
+func (s *S2Groups) SetSize(w, h int) {
+	s.width = w
+	s.height = h
 }
 
 func (s *S2Groups) SyncFromState(st *state.AppState) {
@@ -45,13 +51,15 @@ func (s *S2Groups) SyncFromState(st *state.AppState) {
 		s.rows[i] = groupRow{
 			nodeName: n.Name,
 			checks: [colCount]bool{
-				colKiCp: st.IsKiCpNode(n.Name),
-				colK8s:  st.IsK8sNode(n.Name),
+				colKiCp:  st.IsKiCpNode(n.Name),
+				colK8s:   st.IsK8sNode(n.Name),
 				colK8sCp: st.IsK8sCpNode(n.Name),
-				colGPU:  st.IsNvidiaGPUNode(n.Name),
+				colGPU:   st.IsNvidiaGPUNode(n.Name),
 			},
 		}
 	}
+	s.curRow = 0
+	s.focusNav = false
 }
 
 func (s *S2Groups) SyncToState(st *state.AppState) {
@@ -86,10 +94,9 @@ func (s *S2Groups) Validate() []string {
 	if !hasK8s {
 		return []string{"k8s_node 그룹에 최소 1개 이상의 노드를 할당해주세요"}
 	}
-	// k8s_cp, nvidia_gpu는 k8s_node가 체크된 노드만 유효
 	for _, r := range s.rows {
 		if !r.checks[colK8s] && (r.checks[colK8sCp] || r.checks[colGPU]) {
-			return []string{"k8s_cp 또는 nvidia_gpu는 k8s_node로 지정된 노드에만 설정할 수 있습니다"}
+			return []string{"k8s_cp / nvidia_gpu는 k8s_node로 지정된 노드에만 설정할 수 있습니다"}
 		}
 	}
 	return nil
@@ -102,22 +109,43 @@ func (s *S2Groups) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if s.curRow > 0 {
+			if s.focusNav {
+				s.focusNav = false
+			} else if s.curRow > 0 {
 				s.curRow--
 			}
 		case "down", "j":
-			if s.curRow < len(s.rows)-1 {
-				s.curRow++
+			if !s.focusNav {
+				if s.curRow < len(s.rows)-1 {
+					s.curRow++
+				} else {
+					s.focusNav = true
+					s.navIdx = 0
+				}
 			}
 		case "left", "h":
-			if s.curCol > 0 {
+			if s.focusNav {
+				if s.navIdx > 0 {
+					s.navIdx--
+				}
+			} else if s.curCol > 0 {
 				s.curCol--
 			}
 		case "right", "l":
-			if s.curCol < colCount-1 {
+			if s.focusNav {
+				if s.navIdx < 1 {
+					s.navIdx++
+				}
+			} else if s.curCol < colCount-1 {
 				s.curCol++
 			}
-		case " ":
+		case " ", "enter":
+			if s.focusNav {
+				if s.navIdx == 0 {
+					return s, Prev()
+				}
+				return s, Next()
+			}
 			if len(s.rows) > 0 {
 				s.toggle(s.curRow, s.curCol)
 			}
@@ -132,11 +160,9 @@ func (s *S2Groups) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S2Groups) toggle(row, col int) {
 	r := &s.rows[row]
-	// k8s_cp and GPU require k8s_node to be checked first
 	if (col == colK8sCp || col == colGPU) && !r.checks[colK8s] {
 		return
 	}
-	// Unchecking k8s_node also unchecks k8s_cp and GPU
 	if col == colK8s && r.checks[colK8s] {
 		r.checks[colK8sCp] = false
 		r.checks[colGPU] = false
@@ -146,27 +172,24 @@ func (s *S2Groups) toggle(row, col int) {
 
 func (s *S2Groups) View() string {
 	var b strings.Builder
-
 	b.WriteString(styles.StyleTitle.Render("그룹 할당") + "\n")
-	b.WriteString(styles.StyleMuted.Render("각 노드의 역할을 선택합니다.") + "\n\n")
+	b.WriteString(styles.StyleMuted.Render("각 노드의 역할을 선택합니다.  ←/→: 열 이동  Space: 토글") + "\n\n")
 
 	colLabels := []string{"ki_cp_node", "k8s_node", "k8s_cp", "nvidia_gpu"}
-	colW := []int{14, 12, 12, 12, 12}
+	colW := []int{14, 14, 12, 12, 12}
 
-	// Header
 	header := lipgloss.NewStyle().Width(colW[0]).Bold(true).Render("노드")
 	for i, l := range colLabels {
-		style := lipgloss.NewStyle().Width(colW[i+1]).Bold(true).Foreground(lipgloss.Color("69"))
-		header += style.Render(l)
+		header += lipgloss.NewStyle().Width(colW[i+1]).Bold(true).Foreground(styles.ColorPrimary).Render(l)
 	}
 	b.WriteString(header + "\n")
-	b.WriteString(strings.Repeat("─", 62) + "\n")
+	b.WriteString(strings.Repeat("─", s.width) + "\n")
 
 	for rowIdx, r := range s.rows {
-		isSelectedRow := rowIdx == s.curRow
+		isSelectedRow := !s.focusNav && rowIdx == s.curRow
 		nameStyle := lipgloss.NewStyle().Width(colW[0])
 		if isSelectedRow {
-			nameStyle = nameStyle.Foreground(lipgloss.Color("212")).Bold(true)
+			nameStyle = nameStyle.Foreground(styles.ColorPrimary).Bold(true)
 		}
 		row := nameStyle.Render(r.nodeName)
 		for colIdx, checked := range r.checks {
@@ -176,10 +199,8 @@ func (s *S2Groups) View() string {
 			}
 			cellStyle := lipgloss.NewStyle().Width(colW[colIdx+1]).Align(lipgloss.Center)
 			if isSelectedRow && colIdx == s.curCol {
-				cellStyle = cellStyle.Background(lipgloss.Color("62")).Bold(true)
-				mark = " " + mark + " "
+				cellStyle = cellStyle.Reverse(true).Bold(true)
 			}
-			// Dim k8s_cp/GPU cells when k8s_node not checked
 			if (colIdx == colK8sCp || colIdx == colGPU) && !r.checks[colK8s] {
 				mark = styles.StyleMuted.Render("-")
 			}
@@ -188,8 +209,11 @@ func (s *S2Groups) View() string {
 		b.WriteString(row + "\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(styles.StyleMuted.Render("참고: k8s_cp, nvidia_gpu는 k8s_node가 체크된 노드에서만 활성화됩니다") + "\n")
+	b.WriteString("\n" + styles.StyleMuted.Render("* k8s_cp / nvidia_gpu는 k8s_node 체크 후 활성화") + "\n")
+
+	prevFocused := s.focusNav && s.navIdx == 0
+	nextFocused := s.focusNav && s.navIdx == 1
+	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()
 }

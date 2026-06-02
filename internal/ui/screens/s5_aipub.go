@@ -11,26 +11,43 @@ import (
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
+// Focus layout:
+//   0  : ingress zone
+//   1  : HA mode toggle
+//   2  : storage class
+//   3  : CP nodes section header (→ inline list navigation)
+//   4  : harbor subdomain
+//   5  : harbor replicas
+//   6  : harbor registry storage
+//   7  : harbor postgresql storage
+//   8  : harbor redis storage
+//   9  : harbor trivy storage
+//   10 : < 이전 >
+//   11 : < 다음 >
+
 const (
-	s5IngressZone = iota
-	s5HaMode
-	s5StorageClass
-	s5CpNodes
-	s5HarborSubdomain
-	s5HarborReplicas
-	s5HarborRegistry
-	s5HarborPg
-	s5HarborRedis
-	s5HarborTrivy
-	s5FieldCount
+	s5FocusIngressZone = iota
+	s5FocusHaMode
+	s5FocusStorageClass
+	s5FocusCpNodes
+	s5FocusHarborSubdomain
+	s5FocusHarborReplicas
+	s5FocusHarborRegistry
+	s5FocusHarborPg
+	s5FocusHarborRedis
+	s5FocusHarborTrivy
+	s5FocusPrev
+	s5FocusNext
+	s5FocusMax = s5FocusNext
 )
 
 type S5Aipub struct {
-	ingressZone    textinput.Model
-	haMode         bool
-	storageClass   textinput.Model
-	k8sNodeNames   []string
-	cpNodeChecks   []bool
+	ingressZone     textinput.Model
+	haMode          bool
+	storageClass    textinput.Model
+	k8sNodeNames    []string
+	cpNodeChecks    []bool
+	cpNodeCursor    int // cursor within CP nodes list (when s5FocusCpNodes is active)
 	harborSubdomain textinput.Model
 	harborReplicas  textinput.Model
 	harborRegistry  textinput.Model
@@ -38,9 +55,9 @@ type S5Aipub struct {
 	harborRedis     textinput.Model
 	harborTrivy     textinput.Model
 
-	focus  int
-	width  int
-	height int
+	focusIdx int
+	width    int
+	height   int
 }
 
 func NewS5Aipub() *S5Aipub {
@@ -62,10 +79,10 @@ func NewS5Aipub() *S5Aipub {
 	}
 }
 
-func (s *S5Aipub) Title() string      { return "AIPub 설정" }
-func (s *S5Aipub) SetSize(w, h int)   { s.width = w; s.height = h }
-func (s *S5Aipub) FooterHelp() string {
-	return "tab: 필드 이동  space: HA 토글  숫자: CP 노드 토글  ctrl+n: 다음"
+func (s *S5Aipub) Title() string { return "AIPub 설정" }
+func (s *S5Aipub) SetSize(w, h int) {
+	s.width = w
+	s.height = h
 }
 
 func (s *S5Aipub) SyncFromState(st *state.AppState) {
@@ -83,6 +100,8 @@ func (s *S5Aipub) SyncFromState(st *state.AppState) {
 	s.harborPg.SetValue(st.HarborPostgresqlStorageSize)
 	s.harborRedis.SetValue(st.HarborRedisStorageSize)
 	s.harborTrivy.SetValue(st.HarborTrivyStorageSize)
+	s.focusIdx = 0
+	s.cpNodeCursor = 0
 	s.syncFocus()
 }
 
@@ -124,128 +143,138 @@ func (s *S5Aipub) Validate() []string {
 
 func (s *S5Aipub) Init() tea.Cmd { return nil }
 
+func (s *S5Aipub) inputs() []*textinput.Model {
+	return []*textinput.Model{
+		s5FocusIngressZone:     &s.ingressZone,
+		s5FocusHaMode:          nil,
+		s5FocusStorageClass:    &s.storageClass,
+		s5FocusCpNodes:         nil,
+		s5FocusHarborSubdomain: &s.harborSubdomain,
+		s5FocusHarborReplicas:  &s.harborReplicas,
+		s5FocusHarborRegistry:  &s.harborRegistry,
+		s5FocusHarborPg:        &s.harborPg,
+		s5FocusHarborRedis:     &s.harborRedis,
+		s5FocusHarborTrivy:     &s.harborTrivy,
+	}
+}
+
+func (s *S5Aipub) syncFocus() {
+	for _, inp := range s.inputs() {
+		if inp != nil {
+			inp.Blur()
+		}
+	}
+	inps := s.inputs()
+	if s.focusIdx < len(inps) && inps[s.focusIdx] != nil {
+		inps[s.focusIdx].Focus()
+	}
+}
+
 func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "tab":
-			s.focus = (s.focus + 1) % s5FieldCount
-			s.syncFocus()
-		case "shift+tab":
-			s.focus = (s.focus - 1 + s5FieldCount) % s5FieldCount
-			s.syncFocus()
-		case " ":
-			if s.focus == s5HaMode {
+		case "up", "k":
+			if s.focusIdx == s5FocusCpNodes && s.cpNodeCursor > 0 {
+				s.cpNodeCursor--
+				return s, nil
+			}
+			if s.focusIdx > 0 {
+				s.focusIdx--
+				if s.focusIdx == s5FocusCpNodes {
+					s.cpNodeCursor = len(s.cpNodeChecks) - 1
+					if s.cpNodeCursor < 0 {
+						s.cpNodeCursor = 0
+					}
+				}
+				s.syncFocus()
+			}
+		case "down", "j":
+			if s.focusIdx == s5FocusCpNodes && s.cpNodeCursor < len(s.cpNodeChecks)-1 {
+				s.cpNodeCursor++
+				return s, nil
+			}
+			if s.focusIdx < s5FocusMax {
+				s.focusIdx++
+				s.cpNodeCursor = 0
+				s.syncFocus()
+			}
+		case "enter", " ":
+			switch s.focusIdx {
+			case s5FocusPrev:
+				return s, Prev()
+			case s5FocusNext:
+				return s, Next()
+			case s5FocusHaMode:
 				s.haMode = !s.haMode
+			case s5FocusCpNodes:
+				if s.cpNodeCursor < len(s.cpNodeChecks) {
+					s.cpNodeChecks[s.cpNodeCursor] = !s.cpNodeChecks[s.cpNodeCursor]
+				}
 			}
 		case "ctrl+n":
 			return s, Next()
 		case "ctrl+p":
 			return s, Prev()
-		default:
-			// Numeric keys toggle cp nodes
-			if s.focus == s5CpNodes && len(msg.String()) == 1 {
-				idx := int(msg.String()[0] - '1')
-				if idx >= 0 && idx < len(s.cpNodeChecks) {
-					s.cpNodeChecks[idx] = !s.cpNodeChecks[idx]
-				}
-			}
 		}
 	}
 	var cmd tea.Cmd
-	switch s.focus {
-	case s5IngressZone:
-		s.ingressZone, cmd = s.ingressZone.Update(msg)
-	case s5StorageClass:
-		s.storageClass, cmd = s.storageClass.Update(msg)
-	case s5HarborSubdomain:
-		s.harborSubdomain, cmd = s.harborSubdomain.Update(msg)
-	case s5HarborReplicas:
-		s.harborReplicas, cmd = s.harborReplicas.Update(msg)
-	case s5HarborRegistry:
-		s.harborRegistry, cmd = s.harborRegistry.Update(msg)
-	case s5HarborPg:
-		s.harborPg, cmd = s.harborPg.Update(msg)
-	case s5HarborRedis:
-		s.harborRedis, cmd = s.harborRedis.Update(msg)
-	case s5HarborTrivy:
-		s.harborTrivy, cmd = s.harborTrivy.Update(msg)
+	inps := s.inputs()
+	if s.focusIdx < len(inps) && inps[s.focusIdx] != nil {
+		*inps[s.focusIdx], cmd = inps[s.focusIdx].Update(msg)
 	}
 	return s, cmd
-}
-
-func (s *S5Aipub) syncFocus() {
-	inputs := []*textinput.Model{
-		s5IngressZone: &s.ingressZone,
-		s5StorageClass: &s.storageClass,
-		s5HarborSubdomain: &s.harborSubdomain,
-		s5HarborReplicas: &s.harborReplicas,
-		s5HarborRegistry: &s.harborRegistry,
-		s5HarborPg: &s.harborPg,
-		s5HarborRedis: &s.harborRedis,
-		s5HarborTrivy: &s.harborTrivy,
-	}
-	for i, inp := range inputs {
-		if inp == nil {
-			continue
-		}
-		if i == s.focus {
-			inp.Focus()
-		} else {
-			inp.Blur()
-		}
-	}
 }
 
 func (s *S5Aipub) View() string {
 	var b strings.Builder
 	b.WriteString(styles.StyleTitle.Render("AIPub 설정") + "\n\n")
 
-	rf := func(label string, f int, view string) string {
-		return renderField(label, view, s.focus == f)
-	}
+	f := s.focusIdx
 
-	b.WriteString(rf("인그레스 도메인", s5IngressZone, s.ingressZone.View()))
+	b.WriteString(RenderSectionHeader("인그레스 도메인", f == s5FocusIngressZone) +
+		"  " + s.ingressZone.View() + "\n")
 
-	// HA Mode
 	haStr := styles.RadioOff + " 비활성"
 	if s.haMode {
 		haStr = styles.RadioOn + " 활성"
 	}
-	haLabel := styles.StyleLabel.Render("AIPub HA 모드:")
-	if s.focus == s5HaMode {
-		haLabel = styles.StyleLabelFocused.Render("AIPub HA 모드:")
-	}
-	b.WriteString(haLabel + "  " + haStr + "\n")
+	b.WriteString(RenderSectionHeader("AIPub HA 모드", f == s5FocusHaMode) +
+		"  " + haStr + "\n")
 
 	scView := s.storageClass.View()
 	if !s.haMode {
-		scView = styles.StyleMuted.Render("(HA 비활성 — 불필요)")
+		scView = styles.StyleMuted.Render("(HA 비활성)")
 	}
-	b.WriteString(rf("StorageClass", s5StorageClass, scView))
+	b.WriteString(RenderSectionHeader("StorageClass", f == s5FocusStorageClass) +
+		"  " + scView + "\n\n")
 
-	// CP Nodes checklist
-	cpLabel := styles.StyleLabel.Render("AIPub CP 노드:")
-	if s.focus == s5CpNodes {
-		cpLabel = styles.StyleLabelFocused.Render("AIPub CP 노드:")
-	}
-	b.WriteString(cpLabel + "\n")
+	b.WriteString(RenderSectionHeader("AIPub CP 노드", f == s5FocusCpNodes) + "\n")
 	for i, n := range s.k8sNodeNames {
+		nodeFocused := f == s5FocusCpNodes && s.cpNodeCursor == i
 		mark := styles.CheckOff
 		if s.cpNodeChecks[i] {
 			mark = styles.CheckOn
 		}
-		b.WriteString(fmt.Sprintf("  [%d] %s %s\n", i+1, mark, n))
+		row := fmt.Sprintf("    %s %s", mark, n)
+		b.WriteString(RenderRow(row, nodeFocused, s.width) + "\n")
 	}
-	b.WriteString(styles.StyleMuted.Render("  숫자 키로 토글") + "\n")
+	if len(s.k8sNodeNames) == 0 {
+		b.WriteString(styles.StyleMuted.Render("    (2단계에서 k8s_node 지정 후 표시)") + "\n")
+	}
+	b.WriteString("\n")
 
-	b.WriteString("\n" + styles.StylePrimary.Render("Harbor 설정") + "\n")
-	b.WriteString(rf("서브도메인", s5HarborSubdomain, s.harborSubdomain.View()))
-	b.WriteString(rf("레플리카 수", s5HarborReplicas, s.harborReplicas.View()))
-	b.WriteString(rf("레지스트리 스토리지", s5HarborRegistry, s.harborRegistry.View()))
-	b.WriteString(rf("PostgreSQL 스토리지", s5HarborPg, s.harborPg.View()))
-	b.WriteString(rf("Redis 스토리지", s5HarborRedis, s.harborRedis.View()))
-	b.WriteString(rf("Trivy 스토리지", s5HarborTrivy, s.harborTrivy.View()))
+	b.WriteString(styles.StylePrimary.Render("Harbor 설정") + "\n")
+	b.WriteString(RenderSectionHeader("서브도메인", f == s5FocusHarborSubdomain) + "  " + s.harborSubdomain.View() + "\n")
+	b.WriteString(RenderSectionHeader("레플리카 수", f == s5FocusHarborReplicas) + "  " + s.harborReplicas.View() + "\n")
+	b.WriteString(RenderSectionHeader("레지스트리 스토리지", f == s5FocusHarborRegistry) + "  " + s.harborRegistry.View() + "\n")
+	b.WriteString(RenderSectionHeader("PostgreSQL 스토리지", f == s5FocusHarborPg) + "  " + s.harborPg.View() + "\n")
+	b.WriteString(RenderSectionHeader("Redis 스토리지", f == s5FocusHarborRedis) + "  " + s.harborRedis.View() + "\n")
+	b.WriteString(RenderSectionHeader("Trivy 스토리지", f == s5FocusHarborTrivy) + "  " + s.harborTrivy.View() + "\n")
+
+	prevFocused := f == s5FocusPrev
+	nextFocused := f == s5FocusNext
+	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()
 }

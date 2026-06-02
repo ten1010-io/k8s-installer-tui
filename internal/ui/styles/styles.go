@@ -3,46 +3,40 @@ package styles
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	colorPrimary  = lipgloss.Color("69")  // blue
-	colorSuccess  = lipgloss.Color("42")  // green
-	colorWarning  = lipgloss.Color("214") // orange
-	colorError    = lipgloss.Color("196") // red
-	colorMuted    = lipgloss.Color("240") // gray
-	colorSelected = lipgloss.Color("212") // pink
-	colorBorder   = lipgloss.Color("238")
-
-	StyleTitle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorPrimary).
-			PaddingBottom(1)
+	ColorPrimary = lipgloss.Color("69")  // blue
+	colorSuccess = lipgloss.Color("42")  // green
+	colorError   = lipgloss.Color("196") // red
+	colorMuted   = lipgloss.Color("240") // gray
+	ColorBorder  = lipgloss.Color("238")
 
 	StyleHeader = lipgloss.NewStyle().
-			Background(colorPrimary).
+			Background(ColorPrimary).
 			Foreground(lipgloss.Color("15")).
 			Padding(0, 2).
 			Bold(true)
 
 	StyleStep = lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Padding(0, 1)
+			Foreground(colorMuted)
 
 	StyleStepActive = lipgloss.NewStyle().
-			Foreground(colorPrimary).
-			Bold(true).
-			Padding(0, 1)
+			Foreground(ColorPrimary).
+			Bold(true)
 
 	StyleStepDone = lipgloss.NewStyle().
-			Foreground(colorSuccess).
-			Padding(0, 1)
+			Foreground(colorSuccess)
+
+	StyleTitle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorPrimary)
 
 	StyleLabel = lipgloss.NewStyle().
 			Foreground(colorMuted).
-			Width(32)
+			Width(28)
 
 	StyleLabelFocused = lipgloss.NewStyle().
-				Foreground(colorPrimary).
+				Foreground(ColorPrimary).
 				Bold(true).
-				Width(32)
+				Width(28)
 
 	StyleError = lipgloss.NewStyle().
 			Foreground(colorError).
@@ -52,44 +46,10 @@ var (
 			Foreground(colorSuccess).
 			Bold(true)
 
-	StyleWarning = lipgloss.NewStyle().
-			Foreground(colorWarning)
-
 	StyleMuted = lipgloss.NewStyle().
 			Foreground(colorMuted)
 
-	StyleSelected = lipgloss.NewStyle().
-			Foreground(colorSelected).
-			Bold(true)
-
-	StyleBox = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder).
-			Padding(0, 1)
-
-	StyleFooter = lipgloss.NewStyle().
-			Foreground(colorMuted).
-			BorderTop(true).
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(colorBorder).
-			Padding(0, 1)
-
-	StyleTableHeader = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorPrimary).
-				BorderBottom(true).
-				BorderStyle(lipgloss.NormalBorder()).
-				BorderForeground(colorBorder)
-
-	StyleTableRow = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("250"))
-
-	StyleTableRowSelected = lipgloss.NewStyle().
-				Background(lipgloss.Color("62")).
-				Foreground(lipgloss.Color("15")).
-				Bold(true)
-
-	StylePrimary = lipgloss.NewStyle().Foreground(colorPrimary)
+	StylePrimary = lipgloss.NewStyle().Foreground(ColorPrimary)
 
 	CheckOn  = StyleSuccess.Render("✓")
 	CheckOff = StyleMuted.Render("✗")

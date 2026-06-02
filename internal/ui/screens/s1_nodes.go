@@ -11,28 +11,42 @@ import (
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
+// List mode focus layout:
+//   0..N-1  : node rows
+//   N       : < 추가 >
+//   N+1     : < 이전 >
+//   N+2     : < 다음 >
+//
+// Form mode focus layout:
+//   0  : name field
+//   1  : host field
+//   2  : port field
+//   3  : user field
+//   4  : < 저장 >
+//   5  : < 취소 >
+
 const (
 	s1FieldName = iota
 	s1FieldHost
 	s1FieldPort
 	s1FieldUser
 	s1FieldCount
+
+	s1FormSave   = s1FieldCount
+	s1FormCancel = s1FieldCount + 1
+	s1FormMax    = s1FormCancel
 )
 
-// S1Nodes is the first wizard screen: define nodes.
 type S1Nodes struct {
-	nodes   []state.NodeConfig
-	cursor  int
-	editing bool
-	editIdx int // -1 = new node
-
-	fields    [s1FieldCount]textinput.Model
-	focusField int
-	formErr   string
-
-	width  int
-	height int
-	err    string
+	nodes    []state.NodeConfig
+	focusIdx int // list mode focus
+	editing  bool
+	editIdx  int // -1 = new node
+	formFocus int
+	fields   [s1FieldCount]textinput.Model
+	formErr  string
+	width    int
+	height   int
 }
 
 func NewS1Nodes() *S1Nodes {
@@ -49,18 +63,16 @@ func NewS1Nodes() *S1Nodes {
 	return s
 }
 
-func (s *S1Nodes) Title() string      { return "노드 정의" }
-func (s *S1Nodes) SetSize(w, h int)   { s.width = w; s.height = h }
-func (s *S1Nodes) FooterHelp() string {
-	if s.editing {
-		return "tab: 다음 필드  shift+tab: 이전 필드  enter: 저장  esc: 취소"
-	}
-	return "a: 추가  e/enter: 편집  d: 삭제  ↑/↓: 이동  ctrl+n: 다음"
+func (s *S1Nodes) Title() string { return "노드 정의" }
+func (s *S1Nodes) SetSize(w, h int) {
+	s.width = w
+	s.height = h
 }
 
 func (s *S1Nodes) SyncFromState(st *state.AppState) {
 	s.nodes = make([]state.NodeConfig, len(st.Nodes))
 	copy(s.nodes, st.Nodes)
+	s.clampFocus()
 }
 
 func (s *S1Nodes) SyncToState(st *state.AppState) {
@@ -90,6 +102,18 @@ func (s *S1Nodes) Validate() []string {
 
 func (s *S1Nodes) Init() tea.Cmd { return nil }
 
+func (s *S1Nodes) listMax() int { return len(s.nodes) + 2 }
+
+func (s *S1Nodes) clampFocus() {
+	max := s.listMax()
+	if s.focusIdx > max {
+		s.focusIdx = max
+	}
+	if s.focusIdx < 0 {
+		s.focusIdx = 0
+	}
+}
+
 func (s *S1Nodes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.editing {
 		return s.updateForm(msg)
@@ -102,30 +126,43 @@ func (s *S1Nodes) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if s.cursor > 0 {
-				s.cursor--
+			if s.focusIdx > 0 {
+				s.focusIdx--
 			}
 		case "down", "j":
-			if s.cursor < len(s.nodes)-1 {
-				s.cursor++
+			if s.focusIdx < s.listMax() {
+				s.focusIdx++
 			}
+		case "enter", " ":
+			return s.activateList()
 		case "a":
 			s.openForm(-1, state.NodeConfig{})
-		case "e", "enter":
-			if len(s.nodes) > 0 {
-				s.openForm(s.cursor, s.nodes[s.cursor])
-			}
 		case "d", "delete":
-			if len(s.nodes) > 0 {
-				s.nodes = append(s.nodes[:s.cursor], s.nodes[s.cursor+1:]...)
-				if s.cursor >= len(s.nodes) && s.cursor > 0 {
-					s.cursor--
-				}
+			if s.focusIdx < len(s.nodes) && len(s.nodes) > 0 {
+				s.nodes = append(s.nodes[:s.focusIdx], s.nodes[s.focusIdx+1:]...)
+				s.clampFocus()
 			}
 		case "ctrl+n":
 			return s, Next()
 		case "ctrl+p":
 			return s, Prev()
+		}
+	}
+	return s, nil
+}
+
+func (s *S1Nodes) activateList() (tea.Model, tea.Cmd) {
+	max := s.listMax()
+	switch s.focusIdx {
+	case max - 1: // < 이전 >
+		return s, Prev()
+	case max: // < 다음 >
+		return s, Next()
+	case len(s.nodes): // < 추가 >
+		s.openForm(-1, state.NodeConfig{})
+	default:
+		if s.focusIdx < len(s.nodes) {
+			s.openForm(s.focusIdx, s.nodes[s.focusIdx])
 		}
 	}
 	return s, nil
@@ -139,35 +176,77 @@ func (s *S1Nodes) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.editing = false
 			s.formErr = ""
 			return s, nil
-		case "tab":
-			s.fields[s.focusField].Blur()
-			s.focusField = (s.focusField + 1) % s1FieldCount
-			s.fields[s.focusField].Focus()
-			return s, textinput.Blink
-		case "shift+tab":
-			s.fields[s.focusField].Blur()
-			s.focusField = (s.focusField - 1 + s1FieldCount) % s1FieldCount
-			s.fields[s.focusField].Focus()
-			return s, textinput.Blink
-		case "enter":
-			if err := s.saveForm(); err != "" {
-				s.formErr = err
-				return s, nil
+		case "up":
+			if s.formFocus > 0 {
+				if s.formFocus < s1FieldCount {
+					s.fields[s.formFocus].Blur()
+				}
+				s.formFocus--
+				if s.formFocus < s1FieldCount {
+					s.fields[s.formFocus].Focus()
+					return s, textinput.Blink
+				}
 			}
-			s.editing = false
-			s.formErr = ""
+		case "down", "tab":
+			if s.formFocus < s1FormMax {
+				if s.formFocus < s1FieldCount {
+					s.fields[s.formFocus].Blur()
+				}
+				s.formFocus++
+				if s.formFocus < s1FieldCount {
+					s.fields[s.formFocus].Focus()
+					return s, textinput.Blink
+				}
+			}
+		case "shift+tab":
+			if s.formFocus > 0 {
+				if s.formFocus < s1FieldCount {
+					s.fields[s.formFocus].Blur()
+				}
+				s.formFocus--
+				if s.formFocus < s1FieldCount {
+					s.fields[s.formFocus].Focus()
+					return s, textinput.Blink
+				}
+			}
+		case "enter", " ":
+			switch s.formFocus {
+			case s1FormSave:
+				if err := s.saveForm(); err != "" {
+					s.formErr = err
+					return s, nil
+				}
+				s.editing = false
+				s.formErr = ""
+			case s1FormCancel:
+				s.editing = false
+				s.formErr = ""
+			default:
+				// Enter on field: move to next
+				if s.formFocus < s1FieldCount {
+					s.fields[s.formFocus].Blur()
+				}
+				s.formFocus++
+				if s.formFocus < s1FieldCount {
+					s.fields[s.formFocus].Focus()
+					return s, textinput.Blink
+				}
+			}
 			return s, nil
 		}
 	}
-	var cmd tea.Cmd
-	s.fields[s.focusField], cmd = s.fields[s.focusField].Update(msg)
-	return s, cmd
+	if s.formFocus < s1FieldCount {
+		var cmd tea.Cmd
+		s.fields[s.formFocus], cmd = s.fields[s.formFocus].Update(msg)
+		return s, cmd
+	}
+	return s, nil
 }
 
 func (s *S1Nodes) openForm(idx int, n state.NodeConfig) {
 	s.editIdx = idx
 	s.editing = true
-	s.focusField = s1FieldName
+	s.formFocus = s1FieldName
 	s.formErr = ""
 	s.fields[s1FieldName].SetValue(n.Name)
 	s.fields[s1FieldHost].SetValue(n.AnsibleHost)
@@ -176,7 +255,7 @@ func (s *S1Nodes) openForm(idx int, n state.NodeConfig) {
 	for i := range s.fields {
 		s.fields[i].Blur()
 	}
-	s.fields[s.focusField].Focus()
+	s.fields[s.formFocus].Focus()
 }
 
 func (s *S1Nodes) saveForm() string {
@@ -188,7 +267,6 @@ func (s *S1Nodes) saveForm() string {
 	if host == "" {
 		return "ansible_host를 입력해주세요"
 	}
-	// Check duplicate (exclude self when editing)
 	for i, n := range s.nodes {
 		if n.Name == name && i != s.editIdx {
 			return fmt.Sprintf("노드 이름 '%s'가 이미 존재합니다", name)
@@ -202,7 +280,7 @@ func (s *S1Nodes) saveForm() string {
 	}
 	if s.editIdx == -1 {
 		s.nodes = append(s.nodes, nc)
-		s.cursor = len(s.nodes) - 1
+		s.focusIdx = len(s.nodes) - 1
 	} else {
 		s.nodes[s.editIdx] = nc
 	}
@@ -210,53 +288,52 @@ func (s *S1Nodes) saveForm() string {
 }
 
 func (s *S1Nodes) View() string {
+	if s.editing {
+		return s.viewForm()
+	}
+	return s.viewList()
+}
+
+func (s *S1Nodes) viewList() string {
 	var b strings.Builder
-
 	b.WriteString(styles.StyleTitle.Render("노드 정의") + "\n")
-	b.WriteString(styles.StyleMuted.Render("inventory.yml의 all.hosts 섹션을 구성합니다.") + "\n\n")
+	b.WriteString(styles.StyleMuted.Render("inventory.yml › all.hosts") + "\n\n")
 
-	// Table header
-	colW := []int{14, 18, 8, 14}
-	headers := []string{"이름", "ansible_host", "포트", "SSH 유저"}
+	colW := []int{14, 18, 8, 12}
 	header := ""
-	for i, h := range headers {
-		header += lipgloss.NewStyle().Width(colW[i]).Bold(true).Foreground(lipgloss.Color("69")).Render(h)
+	for i, h := range []string{"이름", "ansible_host", "포트", "SSH 유저"} {
+		header += lipgloss.NewStyle().Width(colW[i]).Bold(true).Foreground(styles.ColorPrimary).Render(h)
 	}
 	b.WriteString(header + "\n")
-	b.WriteString(strings.Repeat("─", 56) + "\n")
+	b.WriteString(strings.Repeat("─", s.width) + "\n")
 
 	if len(s.nodes) == 0 {
-		b.WriteString(styles.StyleMuted.Render("  노드가 없습니다. [a]를 눌러 추가하세요.") + "\n")
+		b.WriteString(styles.StyleMuted.Render("  (노드 없음)") + "\n")
 	}
 	for i, n := range s.nodes {
 		port := n.AnsiblePort
 		if port == "" {
-			port = styles.StyleMuted.Render("22")
+			port = "22"
 		}
 		user := n.AnsibleUser
 		if user == "" {
-			user = styles.StyleMuted.Render("root")
+			user = "root"
 		}
-		row := ""
-		row += lipgloss.NewStyle().Width(colW[0]).Render(n.Name)
-		row += lipgloss.NewStyle().Width(colW[1]).Render(n.AnsibleHost)
-		row += lipgloss.NewStyle().Width(colW[2]).Render(port)
-		row += lipgloss.NewStyle().Width(colW[3]).Render(user)
-		if i == s.cursor && !s.editing {
-			b.WriteString(styles.StyleTableRowSelected.Render(row) + "\n")
-		} else {
-			b.WriteString(row + "\n")
-		}
+		row := lipgloss.NewStyle().Width(colW[0]).Render(n.Name) +
+			lipgloss.NewStyle().Width(colW[1]).Render(n.AnsibleHost) +
+			lipgloss.NewStyle().Width(colW[2]).Render(port) +
+			lipgloss.NewStyle().Width(colW[3]).Render(user)
+		b.WriteString(RenderRow(row, s.focusIdx == i, s.width) + "\n")
 	}
+
 	b.WriteString("\n")
+	addFocused := s.focusIdx == len(s.nodes)
+	b.WriteString("  " + RenderButton("추가", addFocused) +
+		styles.StyleMuted.Render("  (a: 추가  d: 삭제  Enter: 편집)") + "\n")
 
-	if s.err != "" {
-		b.WriteString(styles.StyleError.Render("✗ "+s.err) + "\n\n")
-	}
-
-	if s.editing {
-		b.WriteString(s.viewForm())
-	}
+	prevFocused := s.focusIdx == s.listMax()-1
+	nextFocused := s.focusIdx == s.listMax()
+	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()
 }
@@ -267,23 +344,28 @@ func (s *S1Nodes) viewForm() string {
 		title = "노드 편집"
 	}
 	var b strings.Builder
-	b.WriteString(styles.StyleBox.Render(
-		styles.StyleSelected.Render(title) + "\n\n" +
-			renderField("이름", s.fields[s1FieldName].View(), s.focusField == s1FieldName) +
-			renderField("ansible_host", s.fields[s1FieldHost].View(), s.focusField == s1FieldHost) +
-			renderField("ansible_port", s.fields[s1FieldPort].View(), s.focusField == s1FieldPort) +
-			renderField("ansible_ssh_user", s.fields[s1FieldUser].View(), s.focusField == s1FieldUser),
-	))
-	if s.formErr != "" {
-		b.WriteString("\n" + styles.StyleError.Render("✗ "+s.formErr))
+	b.WriteString(styles.StyleTitle.Render(title) + "\n\n")
+
+	labels := []string{"이름", "ansible_host", "ansible_port", "ansible_ssh_user"}
+	for i, label := range labels {
+		focused := s.formFocus == i
+		lStyle := styles.StyleLabel
+		if focused {
+			lStyle = styles.StyleLabelFocused
+		}
+		b.WriteString(lStyle.Render(label+":") + "  " + s.fields[i].View() + "\n")
 	}
+
+	if s.formErr != "" {
+		b.WriteString("\n" + styles.StyleError.Render("✗ "+s.formErr) + "\n")
+	}
+
+	b.WriteString("\n")
+	saveFocused := s.formFocus == s1FormSave
+	cancelFocused := s.formFocus == s1FormCancel
+	b.WriteString("  " + RenderButton("저장", saveFocused) + "  " + RenderButton("취소", cancelFocused))
+	b.WriteString(styles.StyleMuted.Render("  (Esc: 취소)"))
+
 	return b.String()
 }
 
-func renderField(label, input string, focused bool) string {
-	lStyle := styles.StyleLabel
-	if focused {
-		lStyle = styles.StyleLabelFocused
-	}
-	return lStyle.Render(label+":") + "  " + input + "\n"
-}

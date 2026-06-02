@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,7 +16,7 @@ type App struct {
 	current       int
 	width         int
 	height        int
-	screenErrors  []string // validation errors from current screen's Next attempt
+	screenErrors  []string
 	inventoryPath string
 	varsPath      string
 }
@@ -30,10 +29,7 @@ func NewApp(s *state.AppState, inventoryPath, varsPath string) *App {
 	s5 := screens.NewS5Aipub()
 	s6 := screens.NewS6CertMode()
 	s7 := screens.NewS7Preview(s, inventoryPath, varsPath)
-
-	// Pre-load first screen
 	s1.SyncFromState(s)
-
 	return &App{
 		appState:      s,
 		screenList:    []screens.Screen{s1, s2, s3, s4, s5, s6, s7},
@@ -49,8 +45,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
+		_, contentW, contentH := a.panelDims()
 		for _, sc := range a.screenList {
-			sc.SetSize(msg.Width, msg.Height-4)
+			sc.SetSize(contentW, contentH)
 		}
 		return a, nil
 
@@ -83,67 +80,96 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Delegate to current screen
 	newModel, cmd := a.screenList[a.current].Update(msg)
 	a.screenList[a.current] = newModel.(screens.Screen)
 	return a, cmd
 }
 
 func (a *App) View() string {
-	header := a.renderHeader()
+	if a.width == 0 {
+		return "로딩 중..."
+	}
+
+	panelW, _, _ := a.panelDims()
+
+	// Screen content
 	body := a.screenList[a.current].View()
-	footer := a.renderFooter()
 
-	// Trim body to avoid overflow
-	bodyLines := strings.Split(body, "\n")
-	maxBodyLines := a.height - 6
-	if maxBodyLines < 1 {
-		maxBodyLines = 1
-	}
-	if len(bodyLines) > maxBodyLines {
-		bodyLines = bodyLines[:maxBodyLines]
-	}
-	body = strings.Join(bodyLines, "\n")
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
-}
-
-func (a *App) renderHeader() string {
-	steps := make([]string, len(a.screenList))
-	titles := []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "5.AIPub", "6.인증서", "7.저장"}
-	for i := range a.screenList {
-		t := titles[i]
-		switch {
-		case i == a.current:
-			steps[i] = styles.StyleStepActive.Render("[ " + t + " ]")
-		case i < a.current:
-			steps[i] = styles.StyleStepDone.Render("✓ " + t)
-		default:
-			steps[i] = styles.StyleStep.Render(t)
-		}
-	}
-	bar := strings.Join(steps, styles.StyleMuted.Render(" › "))
-	return styles.StyleHeader.Width(a.width).Render("k8s-installer-tui") + "\n" +
-		styles.StyleMuted.Render(bar) + "\n"
-}
-
-func (a *App) renderFooter() string {
-	hint := a.screenList[a.current].FooterHelp()
-
-	errs := ""
+	// Validation errors shown inside the panel
 	if len(a.screenErrors) > 0 {
 		msgs := make([]string, len(a.screenErrors))
 		for i, e := range a.screenErrors {
 			msgs[i] = "✗ " + e
 		}
-		errs = "\n" + styles.StyleError.Render(strings.Join(msgs, "\n"))
+		body += "\n" + styles.StyleError.Render(strings.Join(msgs, "\n"))
 	}
 
-	nav := fmt.Sprintf("  %s | %s | %s",
-		styles.StyleMuted.Render("ctrl+n: 다음"),
-		styles.StyleMuted.Render("ctrl+p: 이전"),
-		styles.StyleMuted.Render("ctrl+c: 종료"),
-	)
+	// Bordered center panel
+	innerW := panelW - 4 // 2 border + 2 padding
+	panel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(styles.ColorBorder).
+		Padding(0, 1).
+		Width(innerW).
+		Render(body)
 
-	return styles.StyleFooter.Width(a.width).Render(hint+nav+errs)
+	// Center horizontally
+	panelRenderedW := lipgloss.Width(panel)
+	leftPad := (a.width - panelRenderedW) / 2
+	if leftPad < 0 {
+		leftPad = 0
+	}
+	pad := strings.Repeat(" ", leftPad)
+	panelLines := strings.Split(panel, "\n")
+	for i, l := range panelLines {
+		panelLines[i] = pad + l
+	}
+	centeredPanel := strings.Join(panelLines, "\n")
+
+	// Header
+	header := a.renderHeader(panelW, leftPad)
+
+	// Footer hint
+	footer := styles.StyleMuted.Render("  ↑/↓: 이동   Enter: 선택   Ctrl+C: 종료")
+
+	return header + "\n" + centeredPanel + "\n" + footer
+}
+
+func (a *App) renderHeader(panelW, leftPad int) string {
+	pad := strings.Repeat(" ", leftPad)
+
+	title := pad + styles.StyleHeader.Render(" k8s-installer-tui ")
+
+	stepTitles := []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "5.AIPub", "6.인증서", "7.저장"}
+	parts := make([]string, len(a.screenList))
+	for i, t := range stepTitles {
+		switch {
+		case i == a.current:
+			parts[i] = styles.StyleStepActive.Render("[ " + t + " ]")
+		case i < a.current:
+			parts[i] = styles.StyleStepDone.Render("✓ " + t)
+		default:
+			parts[i] = styles.StyleStep.Render(t)
+		}
+	}
+	stepBar := pad + " " + strings.Join(parts, styles.StyleMuted.Render(" › "))
+
+	return title + "\n" + stepBar
+}
+
+// panelDims returns (panelWidth, contentWidth, contentHeight).
+func (a *App) panelDims() (int, int, int) {
+	panelW := a.width - 4
+	if panelW > 84 {
+		panelW = 84
+	}
+	if panelW < 44 {
+		panelW = 44
+	}
+	contentW := panelW - 4 // border(2) + padding(2)
+	contentH := a.height - 5 // header(2) + panel border(2) + footer(1)
+	if contentH < 10 {
+		contentH = 10
+	}
+	return panelW, contentW, contentH
 }

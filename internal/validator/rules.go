@@ -48,13 +48,8 @@ func validateNodes(s *state.AppState) []Error {
 		} else {
 			seen[n.Name] = true
 		}
-		if net.ParseIP(n.AnsibleHost) == nil {
-			if _, err := net.LookupHost(n.AnsibleHost); n.AnsibleHost == "" || err != nil {
-				// Accept IPs and hostnames; validate only that it's not empty
-				if n.AnsibleHost == "" {
-					errs = append(errs, Error{prefix + ".ansible_host", "ansible_host를 입력해주세요"})
-				}
-			}
+		if n.AnsibleHost == "" {
+			errs = append(errs, Error{prefix + ".ansible_host", "ansible_host를 입력해주세요"})
 		}
 		if n.AnsiblePort != "" {
 			p, err := strconv.Atoi(n.AnsiblePort)

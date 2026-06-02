@@ -1,0 +1,4 @@
+dist/
+*.exe
+go.sum
+.DS_Store

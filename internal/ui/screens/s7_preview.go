@@ -117,7 +117,13 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "up", "k":
 			if s.focusIdx == s7FocusViewport {
-				s.vp.LineUp(1)
+				if s.vp.YOffset == 0 {
+					// 뷰포트 맨 위 → 탭으로 포커스 이동
+					s.focusIdx--
+					s.refreshViewport()
+				} else {
+					s.vp.LineUp(1)
+				}
 				return s, nil
 			}
 			if s.focusIdx > 0 {
@@ -126,13 +132,21 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "down", "j":
 			if s.focusIdx == s7FocusViewport {
-				s.vp.LineDown(1)
+				if s.vp.AtBottom() {
+					// 뷰포트 맨 아래 → nav로 포커스 이동
+					s.focusIdx = s7FocusNav
+				} else {
+					s.vp.LineDown(1)
+				}
 				return s, nil
 			}
 			if s.focusIdx < s7FocusMax {
 				s.focusIdx++
 				s.refreshViewport()
 			}
+		case "tab":
+			// 뷰포트 스크롤 중에도 Tab으로 바로 nav 이동
+			s.focusIdx = s7FocusNav
 		case "left", "h":
 			if s.focusIdx == s7FocusNav && s.navIdx > 0 {
 				s.navIdx--

@@ -45,7 +45,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
-		_, contentW, contentH := a.panelDims()
+		_, contentW, contentH := a.dims()
 		for _, sc := range a.screenList {
 			sc.SetSize(contentW, contentH)
 		}
@@ -90,12 +90,11 @@ func (a *App) View() string {
 		return "로딩 중..."
 	}
 
-	panelW, _, _ := a.panelDims()
+	outerBoxW, contentW, _ := a.dims()
+	outerContentW := outerBoxW - 4 // border(2) + padding(2)
 
-	// Screen content
+	// Screen body
 	body := a.screenList[a.current].View()
-
-	// Validation errors shown inside the panel
 	if len(a.screenErrors) > 0 {
 		msgs := make([]string, len(a.screenErrors))
 		for i, e := range a.screenErrors {
@@ -104,41 +103,65 @@ func (a *App) View() string {
 		body += "\n" + styles.StyleError.Render(strings.Join(msgs, "\n"))
 	}
 
-	// Bordered center panel — thick border for nmtui-like panel separation
-	innerW := panelW - 4 // 2 border + 2 padding
-	panel := lipgloss.NewStyle().
+	// Inner panel (thick blue border — the actual screen content box)
+	innerPanel := lipgloss.NewStyle().
 		Border(lipgloss.ThickBorder()).
 		BorderForeground(styles.ColorPrimary).
 		Padding(0, 1).
-		Width(innerW).
+		Width(contentW).
 		Render(body)
 
-	// Center horizontally
-	panelRenderedW := lipgloss.Width(panel)
-	leftPad := (a.width - panelRenderedW) / 2
-	if leftPad < 0 {
-		leftPad = 0
+	// Outer box content: top space + header + step bar + inner panel + label
+	var ob strings.Builder
+	ob.WriteString("\n") // breathing room above header
+	ob.WriteString(a.renderHeader(outerContentW))
+	ob.WriteString("\n\n")
+	ob.WriteString(innerPanel)
+	ob.WriteString("\n\n")
+	ob.WriteString(styles.StyleMuted.Render("  ↑/↓: 이동   Enter: 선택   Ctrl+C: 종료"))
+	ob.WriteString("\n")
+
+	// Outer box (thin rounded border — wraps everything)
+	outerBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("250")).
+		Padding(0, 1).
+		Width(outerContentW).
+		Render(ob.String())
+
+	// Center outer box horizontally
+	outerRenderedW := lipgloss.Width(outerBox)
+	leftMargin := (a.width - outerRenderedW) / 2
+	if leftMargin < 0 {
+		leftMargin = 0
 	}
-	pad := strings.Repeat(" ", leftPad)
-	panelLines := strings.Split(panel, "\n")
-	for i, l := range panelLines {
-		panelLines[i] = pad + l
+
+	// Fill terminal with dark blue background; outer box floats in the center
+	darkBg := lipgloss.NewStyle().Background(lipgloss.Color("4"))
+	outerLines := strings.Split(outerBox, "\n")
+
+	result := make([]string, a.height)
+	for i := range result {
+		// Line 0 is empty dark-blue (top margin)
+		lineIdx := i - 1
+		var mid string
+		if lineIdx >= 0 && lineIdx < len(outerLines) {
+			mid = outerLines[lineIdx]
+		}
+		midW := lipgloss.Width(mid)
+		leftW := leftMargin
+		rightW := a.width - leftW - midW
+		if rightW < 0 {
+			rightW = 0
+		}
+		result[i] = darkBg.Width(leftW).Render("") + mid + darkBg.Width(rightW).Render("")
 	}
-	centeredPanel := strings.Join(panelLines, "\n")
 
-	// Header
-	header := a.renderHeader(panelW, leftPad)
-
-	// Footer hint
-	footer := styles.StyleMuted.Render("  ↑/↓: 이동   Enter: 선택   Ctrl+C: 종료")
-
-	return header + "\n" + centeredPanel + "\n" + footer
+	return strings.Join(result, "\n")
 }
 
-func (a *App) renderHeader(panelW, leftPad int) string {
-	pad := strings.Repeat(" ", leftPad)
-
-	title := pad + styles.StyleHeader.Render(" k8s-installer-tui ")
+func (a *App) renderHeader(width int) string {
+	title := styles.StyleHeader.Width(width).Render(" k8s-installer-tui ")
 
 	stepTitles := []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "5.AIPub", "6.인증서", "7.저장"}
 	parts := make([]string, len(a.screenList))
@@ -152,24 +175,28 @@ func (a *App) renderHeader(panelW, leftPad int) string {
 			parts[i] = styles.StyleStep.Render(t)
 		}
 	}
-	stepBar := pad + " " + strings.Join(parts, styles.StyleMuted.Render(" › "))
-
+	stepBar := " " + strings.Join(parts, styles.StyleMuted.Render(" › "))
 	return title + "\n" + stepBar
 }
 
-// panelDims returns (panelWidth, contentWidth, contentHeight).
-func (a *App) panelDims() (int, int, int) {
-	panelW := a.width - 4
-	if panelW > 84 {
-		panelW = 84
+// dims returns (outerBoxTotalWidth, screenContentWidth, screenContentHeight).
+func (a *App) dims() (int, int, int) {
+	outerBoxW := a.width - 4 // 2-char dark-blue margin each side
+	if outerBoxW > 114 {
+		outerBoxW = 114
 	}
-	if panelW < 44 {
-		panelW = 44
+	if outerBoxW < 52 {
+		outerBoxW = 52
 	}
-	contentW := panelW - 4 // border(2) + padding(2)
-	contentH := a.height - 5 // header(2) + panel border(2) + footer(1)
-	if contentH < 10 {
-		contentH = 10
+	// outerContentW = outerBoxW - border(2) - padding(2) = outerBoxW - 4
+	// innerPanelContentW = outerContentW - innerBorder(2) - innerPadding(2) = outerBoxW - 8
+	contentW := outerBoxW - 8
+	if contentW < 32 {
+		contentW = 32
 	}
-	return panelW, contentW, contentH
+	contentH := a.height - 12 // outer border+padding + header(2) + spacing(4) + footer(1) + margins(3)
+	if contentH < 5 {
+		contentH = 5
+	}
+	return outerBoxW, contentW, contentH
 }

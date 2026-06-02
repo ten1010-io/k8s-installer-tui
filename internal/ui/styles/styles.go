@@ -16,7 +16,7 @@ var (
 	ColorBorder  = lipgloss.Color("238")
 	colorSuccess = lipgloss.Color("42")
 	colorError   = lipgloss.Color("196")
-	colorMuted   = lipgloss.Color("240")
+	colorMuted   = lipgloss.Color("250")
 
 	StyleHeader = lipgloss.NewStyle().
 			Background(ColorPrimary).

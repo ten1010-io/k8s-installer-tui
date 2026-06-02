@@ -244,9 +244,9 @@ func (s *S5Aipub) View() string {
 	b.WriteString(RenderSectionHeader("인그레스 도메인", f == s5FocusIngressZone) +
 		"  " + s.ingressZone.View() + "\n")
 
-	haStr := styles.RadioOff + " 비활성"
+	haStr := styles.RadioOff() + " 비활성"
 	if s.haMode {
-		haStr = styles.RadioOn + " 활성"
+		haStr = styles.RadioOn() + " 활성"
 	}
 	b.WriteString(RenderSectionHeader("AIPub HA 모드", f == s5FocusHaMode) +
 		"  " + haStr + "\n")
@@ -261,9 +261,9 @@ func (s *S5Aipub) View() string {
 	b.WriteString(RenderSectionHeader("AIPub CP 노드", f == s5FocusCpNodes) + "\n")
 	for i, n := range s.k8sNodeNames {
 		nodeFocused := f == s5FocusCpNodes && s.cpNodeCursor == i
-		mark := styles.CheckOff
+		mark := styles.CheckOff()
 		if s.cpNodeChecks[i] {
-			mark = styles.CheckOn
+			mark = styles.CheckOn()
 		}
 		row := fmt.Sprintf("    %s %s", mark, n)
 		b.WriteString(RenderRow(row, nodeFocused, s.width) + "\n")

@@ -208,9 +208,9 @@ func renderGroupRow(r groupRow, colW []int, selected bool, curCol int) string {
 
 		row := rs.Width(2).Render("▶") + rs.Width(colW[0]-2).Render(r.nodeName)
 		for colIdx, checked := range r.checks {
-			mark := styles.CheckOff
+			mark := styles.CheckOff()
 			if checked {
-				mark = styles.CheckOn
+				mark = styles.CheckOn()
 			}
 			if (colIdx == colK8sCp || colIdx == colGPU) && !r.checks[colK8s] {
 				mark = "-"
@@ -226,9 +226,9 @@ func renderGroupRow(r groupRow, colW []int, selected bool, curCol int) string {
 
 	row := "  " + lipgloss.NewStyle().Width(colW[0]-2).Render(r.nodeName)
 	for colIdx, checked := range r.checks {
-		mark := styles.CheckOff
+		mark := styles.CheckOff()
 		if checked {
-			mark = styles.CheckOn
+			mark = styles.CheckOn()
 		}
 		if (colIdx == colK8sCp || colIdx == colGPU) && !r.checks[colK8s] {
 			mark = styles.StyleMuted.Render("-")

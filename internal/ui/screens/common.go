@@ -29,10 +29,12 @@ func Save() tea.Cmd { return func() tea.Msg { return SaveMsg{} } }
 
 // focusedStyle returns a style that applies the focus background/foreground.
 // Using CompleteColor ensures the highlight works in TrueColor, ANSI256, and ANSI-16.
+// focusedStyle uses ANSI-16 color 12 (bright blue, \033[104m) for background.
+// ANSI-16 colors 0-15 work regardless of the terminal's color profile.
 func focusedStyle(width int) lipgloss.Style {
 	s := lipgloss.NewStyle().
-		Background(styles.FocusBg).
-		Foreground(styles.FocusFg).
+		Background(lipgloss.Color("12")).
+		Foreground(lipgloss.Color("15")).
 		Bold(true)
 	if width > 0 {
 		s = s.Width(width)
@@ -45,8 +47,8 @@ func RenderButton(label string, focused bool) string {
 	text := "< " + label + " >"
 	if focused {
 		return lipgloss.NewStyle().
-			Background(styles.FocusBg).
-			Foreground(styles.FocusFg).
+			Background(lipgloss.Color("12")).
+			Foreground(lipgloss.Color("15")).
 			Bold(true).
 			Padding(0, 1).
 			Render(text)

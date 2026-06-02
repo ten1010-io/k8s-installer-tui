@@ -60,8 +60,12 @@ var (
 
 	StylePrimary = lipgloss.NewStyle().Foreground(ColorPrimary)
 
-	CheckOn  = StyleSuccess.Render("✓")
-	CheckOff = StyleMuted.Render("✗")
-	RadioOn  = StylePrimary.Render("●")
-	RadioOff = StyleMuted.Render("○")
 )
+
+// CheckOn/Off and RadioOn/Off are functions (not vars) so they call Render()
+// at display time, after main() has set COLORTERM — ensuring the lipgloss
+// renderer is initialized with the correct color profile.
+func CheckOn() string  { return StyleSuccess.Render("✓") }
+func CheckOff() string { return StyleMuted.Render("✗") }
+func RadioOn() string  { return StylePrimary.Render("●") }
+func RadioOff() string { return StyleMuted.Render("○") }

@@ -378,9 +378,9 @@ func (s *S4Kubernetes) viewLBForm() string {
 	b.WriteString(styles.StyleLabel.Render("노드 (Space/Enter: 토글):") + "\n")
 	for i, n := range s.lbNodes {
 		focused := s.lbFormFocus == nodeBase+i
-		mark := styles.CheckOff
+		mark := styles.CheckOff()
 		if s.lbChecks[i] {
-			mark = styles.CheckOn
+			mark = styles.CheckOn()
 		}
 		row := "  " + mark + " " + n
 		b.WriteString(RenderRow(row, focused, s.width) + "\n")

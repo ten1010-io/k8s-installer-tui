@@ -268,9 +268,9 @@ func (s *S3Network) View() string {
 
 	// HA mode
 	haFocused := s.focusIdx == s3FocusHaMode
-	haStr := styles.RadioOff + " 비활성"
+	haStr := styles.RadioOff() + " 비활성"
 	if s.haMode {
-		haStr = styles.RadioOn + " 활성"
+		haStr = styles.RadioOn() + " 활성"
 	}
 	b.WriteString(RenderSectionHeader("Control Plane HA 모드", haFocused) + "  " + haStr + "\n\n")
 
@@ -284,9 +284,9 @@ func (s *S3Network) View() string {
 
 	// DNSSEC
 	dnsFocused := s.focusIdx == s3FocusDNSSEC
-	dnssecStr := styles.RadioOff + " 비활성"
+	dnssecStr := styles.RadioOff() + " 비활성"
 	if s.dnssec {
-		dnssecStr = styles.RadioOn + " 활성"
+		dnssecStr = styles.RadioOn() + " 활성"
 	}
 	b.WriteString(RenderSectionHeader("DNSSEC 검증", dnsFocused) + "  " + dnssecStr + "\n\n")
 

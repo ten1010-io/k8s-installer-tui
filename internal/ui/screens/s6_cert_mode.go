@@ -114,10 +114,10 @@ func (s *S6CertMode) View() string {
 
 	for i, m := range certModes {
 		optFocused := s.focusIdx == i
-		radio := styles.RadioOff
+		radio := styles.RadioOff()
 		labelStyle := styles.StyleMuted
 		if i == s.selected {
-			radio = styles.RadioOn
+			radio = styles.RadioOn()
 			labelStyle = styles.StylePrimary
 		}
 		line := radio + " " + labelStyle.Render(m.label)

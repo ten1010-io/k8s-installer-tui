@@ -160,9 +160,11 @@ func (s *S1Nodes) activateList() (tea.Model, tea.Cmd) {
 		return s, Next()
 	case len(s.nodes): // < 추가 >
 		s.openForm(-1, state.NodeConfig{})
+		return s, textinput.Blink
 	default:
 		if s.focusIdx < len(s.nodes) {
 			s.openForm(s.focusIdx, s.nodes[s.focusIdx])
+			return s, textinput.Blink
 		}
 	}
 	return s, nil
@@ -319,16 +321,8 @@ func (s *S1Nodes) viewList() string {
 		if user == "" {
 			user = "root"
 		}
-		cursor := "  "
-		if s.focusIdx == i {
-			cursor = "▶ "
-		}
-		row := cursor +
-			lipgloss.NewStyle().Width(colW[0]).Render(n.Name) +
-			lipgloss.NewStyle().Width(colW[1]).Render(n.AnsibleHost) +
-			lipgloss.NewStyle().Width(colW[2]).Render(port) +
-			lipgloss.NewStyle().Width(colW[3]).Render(user)
-		b.WriteString(RenderRow(row, s.focusIdx == i, s.width) + "\n")
+		focused := s.focusIdx == i
+		b.WriteString(renderNodeRow(n.Name, n.AnsibleHost, port, user, colW, focused) + "\n")
 	}
 
 	b.WriteString("\n")
@@ -372,5 +366,26 @@ func (s *S1Nodes) viewForm() string {
 	b.WriteString(styles.StyleMuted.Render("  (Esc: 취소)"))
 
 	return b.String()
+}
+
+// renderNodeRow renders a single node row, applying background to each cell
+// individually so ANSI reset codes between cells don't break the highlight.
+func renderNodeRow(name, host, port, user string, colW []int, focused bool) string {
+	if focused {
+		cs := lipgloss.NewStyle().
+			Background(lipgloss.Color("62")).
+			Foreground(lipgloss.Color("15")).
+			Bold(true)
+		return cs.Width(2).Render("▶") +
+			cs.Width(colW[0]).Render(name) +
+			cs.Width(colW[1]).Render(host) +
+			cs.Width(colW[2]).Render(port) +
+			cs.Width(colW[3]).Render(user)
+	}
+	return "  " +
+		lipgloss.NewStyle().Width(colW[0]).Render(name) +
+		lipgloss.NewStyle().Width(colW[1]).Foreground(styles.ColorPrimary).Render(host) +
+		lipgloss.NewStyle().Width(colW[2]).Render(port) +
+		lipgloss.NewStyle().Width(colW[3]).Render(user)
 }
 

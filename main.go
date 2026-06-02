@@ -15,6 +15,13 @@ import (
 var version = "dev"
 
 func main() {
+	// termenv (lipgloss) detects color support from COLORTERM/TERM env vars.
+	// SSH sessions often don't forward COLORTERM, causing lipgloss to fall back
+	// to 16-color mode even on 256-color terminals. Force truecolor so lipgloss
+	// always outputs 256-color escape codes, matching what nmtui/k9s see.
+	if os.Getenv("COLORTERM") == "" {
+		os.Setenv("COLORTERM", "truecolor")
+	}
 	inventoryPath := flag.String("inventory", "inventory.yml", "inventory.yml 경로")
 	varsPath := flag.String("vars", "group_vars/all/vars.yml", "vars.yml 경로")
 	showVersion := flag.Bool("version", false, "버전 출력")

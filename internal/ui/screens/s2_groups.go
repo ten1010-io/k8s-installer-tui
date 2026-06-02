@@ -187,27 +187,7 @@ func (s *S2Groups) View() string {
 
 	for rowIdx, r := range s.rows {
 		isSelectedRow := !s.focusNav && rowIdx == s.curRow
-		cursor := "  "
-		if isSelectedRow {
-			cursor = "▶ "
-		}
-		nameStyle := lipgloss.NewStyle().Width(colW[0] - 2)
-		row := cursor + nameStyle.Render(r.nodeName)
-		for colIdx, checked := range r.checks {
-			mark := styles.CheckOff
-			if checked {
-				mark = styles.CheckOn
-			}
-			cellStyle := lipgloss.NewStyle().Width(colW[colIdx+1]).Align(lipgloss.Center)
-			if isSelectedRow && colIdx == s.curCol {
-				cellStyle = cellStyle.Reverse(true).Bold(true)
-			}
-			if (colIdx == colK8sCp || colIdx == colGPU) && !r.checks[colK8s] {
-				mark = styles.StyleMuted.Render("-")
-			}
-			row += cellStyle.Render(mark)
-		}
-		b.WriteString(row + "\n")
+		b.WriteString(renderGroupRow(r, colW, isSelectedRow, s.curCol) + "\n")
 	}
 
 	b.WriteString("\n" + styles.StyleMuted.Render("* k8s_cp / nvidia_gpu는 k8s_node 체크 후 활성화") + "\n")
@@ -217,4 +197,43 @@ func (s *S2Groups) View() string {
 	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()
+}
+
+// renderGroupRow renders one row of the group table with per-cell background
+// when selected so ANSI reset codes between cells don't break the highlight.
+func renderGroupRow(r groupRow, colW []int, selected bool, curCol int) string {
+	if selected {
+		rs := lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("15")).Bold(true)
+		cs := lipgloss.NewStyle().Background(lipgloss.Color("69")).Foreground(lipgloss.Color("15")).Bold(true)
+
+		row := rs.Width(2).Render("▶") + rs.Width(colW[0]-2).Render(r.nodeName)
+		for colIdx, checked := range r.checks {
+			mark := styles.CheckOff
+			if checked {
+				mark = styles.CheckOn
+			}
+			if (colIdx == colK8sCp || colIdx == colGPU) && !r.checks[colK8s] {
+				mark = "-"
+			}
+			cellSt := rs
+			if colIdx == curCol {
+				cellSt = cs
+			}
+			row += cellSt.Width(colW[colIdx+1]).Align(lipgloss.Center).Render(mark)
+		}
+		return row
+	}
+
+	row := "  " + lipgloss.NewStyle().Width(colW[0]-2).Render(r.nodeName)
+	for colIdx, checked := range r.checks {
+		mark := styles.CheckOff
+		if checked {
+			mark = styles.CheckOn
+		}
+		if (colIdx == colK8sCp || colIdx == colGPU) && !r.checks[colK8s] {
+			mark = styles.StyleMuted.Render("-")
+		}
+		row += lipgloss.NewStyle().Width(colW[colIdx+1]).Align(lipgloss.Center).Render(mark)
+	}
+	return row
 }

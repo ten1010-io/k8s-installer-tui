@@ -64,11 +64,23 @@ func RenderRow(content string, focused bool, width int) string {
 }
 
 // RenderNavButtons renders the < 이전 > < 다음 > (or custom label) row
-// centered within the given width.
+// centered within the given width. The focused button gets a ▶ marker.
 func RenderNavButtons(prevLabel, nextLabel string, prevFocused, nextFocused bool, width int) string {
-	prev := RenderButton(prevLabel, prevFocused)
-	next := RenderButton(nextLabel, nextFocused)
-	buttons := prev + "  " + next
+	var prevDisplay, nextDisplay string
+
+	switch {
+	case prevFocused:
+		prevDisplay = "▶ " + RenderButton(prevLabel, true)
+		nextDisplay = "  " + RenderButton(nextLabel, false)
+	case nextFocused:
+		prevDisplay = "  " + RenderButton(prevLabel, false)
+		nextDisplay = "▶ " + RenderButton(nextLabel, true)
+	default:
+		prevDisplay = "  " + RenderButton(prevLabel, false)
+		nextDisplay = "  " + RenderButton(nextLabel, false)
+	}
+
+	buttons := prevDisplay + "  " + nextDisplay
 	btnWidth := lipgloss.Width(buttons)
 	pad := (width - btnWidth) / 2
 	if pad < 0 {

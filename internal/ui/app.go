@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/screens"
+	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 type App struct {
@@ -114,16 +115,16 @@ func (a *App) renderHeader() string {
 		t := titles[i]
 		switch {
 		case i == a.current:
-			steps[i] = StyleStepActive.Render("[ " + t + " ]")
+			steps[i] = styles.StyleStepActive.Render("[ " + t + " ]")
 		case i < a.current:
-			steps[i] = StyleStepDone.Render("✓ " + t)
+			steps[i] = styles.StyleStepDone.Render("✓ " + t)
 		default:
-			steps[i] = StyleStep.Render(t)
+			steps[i] = styles.StyleStep.Render(t)
 		}
 	}
-	bar := strings.Join(steps, StyleMuted.Render(" › "))
-	return StyleHeader.Width(a.width).Render("k8s-installer-tui") + "\n" +
-		StyleMuted.Render(bar) + "\n"
+	bar := strings.Join(steps, styles.StyleMuted.Render(" › "))
+	return styles.StyleHeader.Width(a.width).Render("k8s-installer-tui") + "\n" +
+		styles.StyleMuted.Render(bar) + "\n"
 }
 
 func (a *App) renderFooter() string {
@@ -135,7 +136,7 @@ func (a *App) renderFooter() string {
 		for i, e := range a.screenErrors {
 			msgs[i] = "✗ " + e
 		}
-		errs = "\n" + StyleError.Render(strings.Join(msgs, "\n"))
+		errs = "\n" + styles.StyleError.Render(strings.Join(msgs, "\n"))
 	}
 
 	nav := fmt.Sprintf("  %s | %s | %s",
@@ -144,5 +145,5 @@ func (a *App) renderFooter() string {
 		StyleMuted.Render("ctrl+c: 종료"),
 	)
 
-	return StyleFooter.Width(a.width).Render(hint+nav+errs)
+	return styles.StyleFooter.Width(a.width).Render(hint+nav+errs)
 }

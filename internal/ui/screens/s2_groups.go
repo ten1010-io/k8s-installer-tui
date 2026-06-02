@@ -6,7 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
-	"github.com/ten1010-io/k8s-installer-tui/internal/ui"
+	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 const (
@@ -147,8 +147,8 @@ func (s *S2Groups) toggle(row, col int) {
 func (s *S2Groups) View() string {
 	var b strings.Builder
 
-	b.WriteString(ui.StyleTitle.Render("그룹 할당") + "\n")
-	b.WriteString(ui.StyleMuted.Render("각 노드의 역할을 선택합니다.") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render("그룹 할당") + "\n")
+	b.WriteString(styles.StyleMuted.Render("각 노드의 역할을 선택합니다.") + "\n\n")
 
 	colLabels := []string{"ki_cp_node", "k8s_node", "k8s_cp", "nvidia_gpu"}
 	colW := []int{14, 12, 12, 12, 12}
@@ -170,9 +170,9 @@ func (s *S2Groups) View() string {
 		}
 		row := nameStyle.Render(r.nodeName)
 		for colIdx, checked := range r.checks {
-			mark := ui.CheckOff
+			mark := styles.CheckOff
 			if checked {
-				mark = ui.CheckOn
+				mark = styles.CheckOn
 			}
 			cellStyle := lipgloss.NewStyle().Width(colW[colIdx+1]).Align(lipgloss.Center)
 			if isSelectedRow && colIdx == s.curCol {
@@ -181,7 +181,7 @@ func (s *S2Groups) View() string {
 			}
 			// Dim k8s_cp/GPU cells when k8s_node not checked
 			if (colIdx == colK8sCp || colIdx == colGPU) && !r.checks[colK8s] {
-				mark = ui.StyleMuted.Render("-")
+				mark = styles.StyleMuted.Render("-")
 			}
 			row += cellStyle.Render(mark)
 		}
@@ -189,7 +189,7 @@ func (s *S2Groups) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(ui.StyleMuted.Render("참고: k8s_cp, nvidia_gpu는 k8s_node가 체크된 노드에서만 활성화됩니다") + "\n")
+	b.WriteString(styles.StyleMuted.Render("참고: k8s_cp, nvidia_gpu는 k8s_node가 체크된 노드에서만 활성화됩니다") + "\n")
 
 	return b.String()
 }

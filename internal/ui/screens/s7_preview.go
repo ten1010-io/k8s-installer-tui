@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
-	"github.com/ten1010-io/k8s-installer-tui/internal/ui"
+	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 	"github.com/ten1010-io/k8s-installer-tui/internal/validator"
 )
 
@@ -128,17 +128,17 @@ func (s *S7Preview) refreshViewport() {
 func (s *S7Preview) View() string {
 	var b strings.Builder
 
-	b.WriteString(ui.StyleTitle.Render("미리보기 & 저장") + "\n")
+	b.WriteString(styles.StyleTitle.Render("미리보기 & 저장") + "\n")
 
 	// Tabs
 	tab0 := "  inventory.yml  "
 	tab1 := "  vars.yml  "
 	if s.activeTab == 0 {
-		tab0 = ui.StyleSelected.Render("[ inventory.yml ]")
-		tab1 = ui.StyleMuted.Render("[ vars.yml ]")
+		tab0 = styles.StyleSelected.Render("[ inventory.yml ]")
+		tab1 = styles.StyleMuted.Render("[ vars.yml ]")
 	} else {
-		tab0 = ui.StyleMuted.Render("[ inventory.yml ]")
-		tab1 = ui.StyleSelected.Render("[ vars.yml ]")
+		tab0 = styles.StyleMuted.Render("[ inventory.yml ]")
+		tab1 = styles.StyleSelected.Render("[ vars.yml ]")
 	}
 	b.WriteString(tab0 + "  " + tab1 + "\n")
 	b.WriteString(strings.Repeat("─", s.width) + "\n")
@@ -149,21 +149,21 @@ func (s *S7Preview) View() string {
 
 	// Validation status
 	if len(s.errors) == 0 {
-		b.WriteString(ui.StyleSuccess.Render("✓ 검증 통과 — 저장 가능합니다") + "\n")
+		b.WriteString(styles.StyleSuccess.Render("✓ 검증 통과 — 저장 가능합니다") + "\n")
 	} else {
-		b.WriteString(ui.StyleError.Render(fmt.Sprintf("✗ 검증 오류 %d건:", len(s.errors))) + "\n")
+		b.WriteString(styles.StyleError.Render(fmt.Sprintf("✗ 검증 오류 %d건:", len(s.errors))) + "\n")
 		for _, e := range s.errors {
-			b.WriteString(ui.StyleError.Render("  • " + e.Error()) + "\n")
+			b.WriteString(styles.StyleError.Render("  • " + e.Error()) + "\n")
 		}
 	}
 
 	if s.saveErr != "" {
-		b.WriteString(ui.StyleError.Render("✗ " + s.saveErr) + "\n")
+		b.WriteString(styles.StyleError.Render("✗ " + s.saveErr) + "\n")
 	}
 	if s.saved {
-		b.WriteString("\n" + ui.StyleSuccess.Render("✓ 저장 완료!") + "\n")
-		b.WriteString(ui.StyleMuted.Render(fmt.Sprintf("  %s\n  %s", s.inventoryPath, s.varsPath)) + "\n")
-		b.WriteString(ui.StyleMuted.Render("  기존 파일은 .bak으로 백업되었습니다") + "\n")
+		b.WriteString("\n" + styles.StyleSuccess.Render("✓ 저장 완료!") + "\n")
+		b.WriteString(styles.StyleMuted.Render(fmt.Sprintf("  %s\n  %s", s.inventoryPath, s.varsPath)) + "\n")
+		b.WriteString(styles.StyleMuted.Render("  기존 파일은 .bak으로 백업되었습니다") + "\n")
 	}
 
 	return b.String()

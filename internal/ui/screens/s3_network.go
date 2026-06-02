@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
-	"github.com/ten1010-io/k8s-installer-tui/internal/ui"
+	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 type S3Network struct {
@@ -266,59 +266,59 @@ func (s *S3Network) updateNTPEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S3Network) View() string {
 	var b strings.Builder
-	b.WriteString(ui.StyleTitle.Render("네트워크 설정") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render("네트워크 설정") + "\n\n")
 
 	b.WriteString(s.sectionHeader("내부 서브넷 (CIDR)", s.focus == 0))
 	for _, sub := range s.subnets {
-		b.WriteString("  " + ui.StylePrimary.Render("•") + " " + sub + "\n")
+		b.WriteString("  " + styles.StylePrimary.Render("•") + " " + sub + "\n")
 	}
 	if s.editingSubnet {
 		b.WriteString("  " + s.subnetInput.View() + "\n")
 	} else if s.focus == 0 {
-		b.WriteString(ui.StyleMuted.Render("  [a] 추가  [d] 마지막 삭제") + "\n")
+		b.WriteString(styles.StyleMuted.Render("  [a] 추가  [d] 마지막 삭제") + "\n")
 	}
 	b.WriteString("\n")
 
 	b.WriteString(s.sectionHeader("Control Plane HA 모드", s.focus == 1))
-	haStr := ui.RadioOff + " 비활성"
+	haStr := styles.RadioOff + " 비활성"
 	if s.haMode {
-		haStr = ui.RadioOn + " 활성"
+		haStr = styles.RadioOn + " 활성"
 	}
-	b.WriteString("  " + haStr + ui.StyleMuted.Render("  (space로 토글)") + "\n\n")
+	b.WriteString("  " + haStr + styles.StyleMuted.Render("  (space로 토글)") + "\n\n")
 
 	b.WriteString(s.sectionHeader("HA VIP", s.focus == 2))
 	vipView := s.vip.View()
 	if !s.haMode {
-		vipView = ui.StyleMuted.Render("(HA 모드 비활성 — 설정 불필요)")
+		vipView = styles.StyleMuted.Render("(HA 모드 비활성 — 설정 불필요)")
 	}
 	b.WriteString("  " + vipView + "\n\n")
 
 	b.WriteString(s.sectionHeader("DNSSEC 검증", s.focus == 3))
-	dnssecStr := ui.RadioOff + " 비활성"
+	dnssecStr := styles.RadioOff + " 비활성"
 	if s.dnssec {
-		dnssecStr = ui.RadioOn + " 활성"
+		dnssecStr = styles.RadioOn + " 활성"
 	}
 	b.WriteString("  " + dnssecStr + "\n\n")
 
 	b.WriteString(s.sectionHeader("DNS upstream 서버", s.focus == 4))
 	for _, srv := range s.dnsServers {
-		b.WriteString("  " + ui.StylePrimary.Render("•") + " " + srv + "\n")
+		b.WriteString("  " + styles.StylePrimary.Render("•") + " " + srv + "\n")
 	}
 	if s.editingDNS {
 		b.WriteString("  " + s.dnsInput.View() + "\n")
 	} else if s.focus == 4 {
-		b.WriteString(ui.StyleMuted.Render("  [a] 추가  [d] 마지막 삭제") + "\n")
+		b.WriteString(styles.StyleMuted.Render("  [a] 추가  [d] 마지막 삭제") + "\n")
 	}
 	b.WriteString("\n")
 
 	b.WriteString(s.sectionHeader("NTP upstream 서버", s.focus == 5))
 	for _, srv := range s.ntpServers {
-		b.WriteString("  " + ui.StylePrimary.Render("•") + " " + srv + "\n")
+		b.WriteString("  " + styles.StylePrimary.Render("•") + " " + srv + "\n")
 	}
 	if s.editingNTP {
 		b.WriteString("  " + s.ntpInput.View() + "\n")
 	} else if s.focus == 5 {
-		b.WriteString(ui.StyleMuted.Render("  [a] 추가  [d] 마지막 삭제") + "\n")
+		b.WriteString(styles.StyleMuted.Render("  [a] 추가  [d] 마지막 삭제") + "\n")
 	}
 	b.WriteString("\n")
 
@@ -330,7 +330,7 @@ func (s *S3Network) View() string {
 
 func (s *S3Network) sectionHeader(label string, focused bool) string {
 	if focused {
-		return ui.StyleLabelFocused.Render("▶ " + label) + "\n"
+		return styles.StyleLabelFocused.Render("▶ " + label) + "\n"
 	}
-	return ui.StyleLabel.Render("  " + label) + "\n"
+	return styles.StyleLabel.Render("  " + label) + "\n"
 }

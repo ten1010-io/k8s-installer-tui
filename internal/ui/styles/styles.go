@@ -1,4 +1,4 @@
-package ui
+package styles
 
 import "github.com/charmbracelet/lipgloss"
 
@@ -89,10 +89,10 @@ var (
 				Foreground(lipgloss.Color("15")).
 				Bold(true)
 
+	StylePrimary = lipgloss.NewStyle().Foreground(colorPrimary)
+
 	CheckOn  = StyleSuccess.Render("✓")
 	CheckOff = StyleMuted.Render("✗")
 	RadioOn  = StylePrimary.Render("●")
 	RadioOff = StyleMuted.Render("○")
-
-	StylePrimary = lipgloss.NewStyle().Foreground(colorPrimary)
 )

@@ -22,7 +22,25 @@
 ### 요구 사항
 
 - Go 1.21 이상
+- `make`
 - 인터넷 연결 (첫 빌드 시 의존성 다운로드)
+
+### 빠른 시작 — `set-env.sh` (Ubuntu/Debian 서버)
+
+Go와 `make`가 설치되어 있지 않은 서버에서 한 번에 환경 세팅 + 빌드를 수행합니다.
+
+```bash
+bash set-env.sh
+```
+
+스크립트 동작 순서:
+
+1. `apt install -y make`
+2. Go 1.24.3 (linux-amd64) 다운로드 → `/usr/local/go`에 설치
+3. `PATH` 영구 등록 (`/etc/profile`)
+4. `make build` 실행
+
+> **참고:** `set-env.sh`는 Ubuntu/Debian 계열에서만 동작합니다. 다른 OS에서는 [Go 공식 사이트](https://go.dev/dl/)에서 직접 설치 후 아래 명령어를 사용하세요.
 
 ### 명령어
 
@@ -42,10 +60,11 @@ make clean
 
 빌드된 바이너리는 `dist/` 디렉터리에 생성됩니다.
 
-```
-dist/
-└── k8s-installer-tui-linux-amd64
-```
+| 명령어 | 출력 파일 |
+|--------|-----------|
+| `make build` | `dist/k8s-installer-tui` |
+| `make build-linux` | `dist/k8s-installer-tui-linux-amd64` |
+| `make build-linux-arm64` | `dist/k8s-installer-tui-linux-arm64` |
 
 ## 실행
 
@@ -188,8 +207,9 @@ k8s-installer-tui/
     │   └── rules.go                 # R1~R6 검증
     └── ui/
         ├── app.go                   # Bubbletea App, 화면 라우팅
-        ├── styles.go                # Lipgloss 스타일
-        ├── keys.go                  # 키 바인딩
+        ├── styles/
+        │   ├── styles.go            # Lipgloss 스타일
+        │   └── keys.go              # 키 바인딩
         └── screens/
             ├── common.go            # Screen 인터페이스
             ├── s1_nodes.go

@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
-	"github.com/ten1010-io/k8s-installer-tui/internal/ui"
+	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 type S4Kubernetes struct {
@@ -272,27 +272,27 @@ func (s *S4Kubernetes) updateLBForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S4Kubernetes) View() string {
 	var b strings.Builder
-	b.WriteString(ui.StyleTitle.Render("Kubernetes 설정") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render("Kubernetes 설정") + "\n\n")
 
 	// Cert validity
 	b.WriteString(s.sectionHeader("인증서 유효기간", s.focus == 0))
-	b.WriteString("  " + s.certValidity.View() + ui.StyleMuted.Render("  (예: 26280h = 3년)") + "\n\n")
+	b.WriteString("  " + s.certValidity.View() + styles.StyleMuted.Render("  (예: 26280h = 3년)") + "\n\n")
 
 	// Load balancers
 	b.WriteString(s.sectionHeader("로드밸런서 목록", s.focus == 1))
 	if len(s.lbs) == 0 {
-		b.WriteString(ui.StyleMuted.Render("  없음 — [a]를 눌러 추가") + "\n")
+		b.WriteString(styles.StyleMuted.Render("  없음 — [a]를 눌러 추가") + "\n")
 	}
 	for i, lb := range s.lbs {
 		mark := "  "
 		if i == s.lbCursor && s.focus == 1 {
-			mark = ui.StyleSelected.Render("▶ ")
+			mark = styles.StyleSelected.Render("▶ ")
 		}
 		nodes := strings.Join(lb.Nodes, ", ")
 		if nodes == "" {
-			nodes = ui.StyleMuted.Render("(노드 없음)")
+			nodes = styles.StyleMuted.Render("(노드 없음)")
 		}
-		b.WriteString(fmt.Sprintf("%s%s  vip: %s  nodes: %s\n", mark, ui.StylePrimary.Render(lb.Name), lb.VIP, nodes))
+		b.WriteString(fmt.Sprintf("%s%s  vip: %s  nodes: %s\n", mark, styles.StylePrimary.Render(lb.Name), lb.VIP, nodes))
 	}
 	if s.editingLB {
 		b.WriteString("\n" + s.viewLBForm())
@@ -301,11 +301,11 @@ func (s *S4Kubernetes) View() string {
 
 	// Default ingress
 	b.WriteString(s.sectionHeader("기본 인그레스 클래스", s.focus == 2))
-	lbName := ui.StyleMuted.Render("(로드밸런서 없음)")
+	lbName := styles.StyleMuted.Render("(로드밸런서 없음)")
 	if s.ingressLBIdx >= 0 && s.ingressLBIdx < len(s.lbs) {
-		lbName = ui.StylePrimary.Render(s.lbs[s.ingressLBIdx].Name)
+		lbName = styles.StylePrimary.Render(s.lbs[s.ingressLBIdx].Name)
 	}
-	b.WriteString("  로드밸런서: " + lbName + ui.StyleMuted.Render("  (←/→ 로 선택)") + "\n")
+	b.WriteString("  로드밸런서: " + lbName + styles.StyleMuted.Render("  (←/→ 로 선택)") + "\n")
 	b.WriteString("  호스트 포트: " + s.ingressPort.View() + "\n")
 
 	return b.String()
@@ -317,8 +317,8 @@ func (s *S4Kubernetes) viewLBForm() string {
 	if s.lbEditIdx >= 0 {
 		title = "로드밸런서 편집"
 	}
-	b.WriteString(ui.StyleBox.Render(
-		ui.StyleSelected.Render(title) + "\n\n" +
+	b.WriteString(styles.StyleBox.Render(
+		styles.StyleSelected.Render(title) + "\n\n" +
 			renderField("이름", s.lbName.View(), s.lbFormField == 0) +
 			renderField("VIP", s.lbVIP.View(), s.lbFormField == 1) +
 			s.renderNodeChecks(),
@@ -328,25 +328,25 @@ func (s *S4Kubernetes) viewLBForm() string {
 
 func (s *S4Kubernetes) renderNodeChecks() string {
 	var b strings.Builder
-	label := ui.StyleLabel.Render("노드:")
+	label := styles.StyleLabel.Render("노드:")
 	if s.lbFormField == 2 {
-		label = ui.StyleLabelFocused.Render("노드:")
+		label = styles.StyleLabelFocused.Render("노드:")
 	}
 	b.WriteString(label + "\n")
 	for i, n := range s.lbNodes {
-		mark := ui.CheckOff
+		mark := styles.CheckOff
 		if s.lbChecks[i] {
-			mark = ui.CheckOn
+			mark = styles.CheckOn
 		}
 		b.WriteString(fmt.Sprintf("  [%d] %s %s\n", i+1, mark, n))
 	}
-	b.WriteString(ui.StyleMuted.Render("  숫자 키(1-9)로 토글, enter로 저장") + "\n")
+	b.WriteString(styles.StyleMuted.Render("  숫자 키(1-9)로 토글, enter로 저장") + "\n")
 	return b.String()
 }
 
 func (s *S4Kubernetes) sectionHeader(label string, focused bool) string {
 	if focused {
-		return ui.StyleLabelFocused.Render("▶ " + label) + "\n"
+		return styles.StyleLabelFocused.Render("▶ " + label) + "\n"
 	}
-	return ui.StyleLabel.Render("  " + label) + "\n"
+	return styles.StyleLabel.Render("  " + label) + "\n"
 }

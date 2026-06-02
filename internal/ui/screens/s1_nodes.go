@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
-	"github.com/ten1010-io/k8s-installer-tui/internal/ui"
+	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 const (
@@ -212,8 +212,8 @@ func (s *S1Nodes) saveForm() string {
 func (s *S1Nodes) View() string {
 	var b strings.Builder
 
-	b.WriteString(ui.StyleTitle.Render("노드 정의") + "\n")
-	b.WriteString(ui.StyleMuted.Render("inventory.yml의 all.hosts 섹션을 구성합니다.") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render("노드 정의") + "\n")
+	b.WriteString(styles.StyleMuted.Render("inventory.yml의 all.hosts 섹션을 구성합니다.") + "\n\n")
 
 	// Table header
 	colW := []int{14, 18, 8, 14}
@@ -226,16 +226,16 @@ func (s *S1Nodes) View() string {
 	b.WriteString(strings.Repeat("─", 56) + "\n")
 
 	if len(s.nodes) == 0 {
-		b.WriteString(ui.StyleMuted.Render("  노드가 없습니다. [a]를 눌러 추가하세요.") + "\n")
+		b.WriteString(styles.StyleMuted.Render("  노드가 없습니다. [a]를 눌러 추가하세요.") + "\n")
 	}
 	for i, n := range s.nodes {
 		port := n.AnsiblePort
 		if port == "" {
-			port = ui.StyleMuted.Render("22")
+			port = styles.StyleMuted.Render("22")
 		}
 		user := n.AnsibleUser
 		if user == "" {
-			user = ui.StyleMuted.Render("root")
+			user = styles.StyleMuted.Render("root")
 		}
 		row := ""
 		row += lipgloss.NewStyle().Width(colW[0]).Render(n.Name)
@@ -243,7 +243,7 @@ func (s *S1Nodes) View() string {
 		row += lipgloss.NewStyle().Width(colW[2]).Render(port)
 		row += lipgloss.NewStyle().Width(colW[3]).Render(user)
 		if i == s.cursor && !s.editing {
-			b.WriteString(ui.StyleTableRowSelected.Render(row) + "\n")
+			b.WriteString(styles.StyleTableRowSelected.Render(row) + "\n")
 		} else {
 			b.WriteString(row + "\n")
 		}
@@ -251,7 +251,7 @@ func (s *S1Nodes) View() string {
 	b.WriteString("\n")
 
 	if s.err != "" {
-		b.WriteString(ui.StyleError.Render("✗ "+s.err) + "\n\n")
+		b.WriteString(styles.StyleError.Render("✗ "+s.err) + "\n\n")
 	}
 
 	if s.editing {
@@ -267,23 +267,23 @@ func (s *S1Nodes) viewForm() string {
 		title = "노드 편집"
 	}
 	var b strings.Builder
-	b.WriteString(ui.StyleBox.Render(
-		ui.StyleSelected.Render(title) + "\n\n" +
+	b.WriteString(styles.StyleBox.Render(
+		styles.StyleSelected.Render(title) + "\n\n" +
 			renderField("이름", s.fields[s1FieldName].View(), s.focusField == s1FieldName) +
 			renderField("ansible_host", s.fields[s1FieldHost].View(), s.focusField == s1FieldHost) +
 			renderField("ansible_port", s.fields[s1FieldPort].View(), s.focusField == s1FieldPort) +
 			renderField("ansible_ssh_user", s.fields[s1FieldUser].View(), s.focusField == s1FieldUser),
 	))
 	if s.formErr != "" {
-		b.WriteString("\n" + ui.StyleError.Render("✗ "+s.formErr))
+		b.WriteString("\n" + styles.StyleError.Render("✗ "+s.formErr))
 	}
 	return b.String()
 }
 
 func renderField(label, input string, focused bool) string {
-	lStyle := ui.StyleLabel
+	lStyle := styles.StyleLabel
 	if focused {
-		lStyle = ui.StyleLabelFocused
+		lStyle = styles.StyleLabelFocused
 	}
 	return lStyle.Render(label+":") + "  " + input + "\n"
 }

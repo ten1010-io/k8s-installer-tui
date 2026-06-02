@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
-	"github.com/ten1010-io/k8s-installer-tui/internal/ui"
+	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 const (
@@ -199,7 +199,7 @@ func (s *S5Aipub) syncFocus() {
 
 func (s *S5Aipub) View() string {
 	var b strings.Builder
-	b.WriteString(ui.StyleTitle.Render("AIPub 설정") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render("AIPub 설정") + "\n\n")
 
 	rf := func(label string, f int, view string) string {
 		return renderField(label, view, s.focus == f)
@@ -208,38 +208,38 @@ func (s *S5Aipub) View() string {
 	b.WriteString(rf("인그레스 도메인", s5IngressZone, s.ingressZone.View()))
 
 	// HA Mode
-	haStr := ui.RadioOff + " 비활성"
+	haStr := styles.RadioOff + " 비활성"
 	if s.haMode {
-		haStr = ui.RadioOn + " 활성"
+		haStr = styles.RadioOn + " 활성"
 	}
-	haLabel := ui.StyleLabel.Render("AIPub HA 모드:")
+	haLabel := styles.StyleLabel.Render("AIPub HA 모드:")
 	if s.focus == s5HaMode {
-		haLabel = ui.StyleLabelFocused.Render("AIPub HA 모드:")
+		haLabel = styles.StyleLabelFocused.Render("AIPub HA 모드:")
 	}
 	b.WriteString(haLabel + "  " + haStr + "\n")
 
 	scView := s.storageClass.View()
 	if !s.haMode {
-		scView = ui.StyleMuted.Render("(HA 비활성 — 불필요)")
+		scView = styles.StyleMuted.Render("(HA 비활성 — 불필요)")
 	}
 	b.WriteString(rf("StorageClass", s5StorageClass, scView))
 
 	// CP Nodes checklist
-	cpLabel := ui.StyleLabel.Render("AIPub CP 노드:")
+	cpLabel := styles.StyleLabel.Render("AIPub CP 노드:")
 	if s.focus == s5CpNodes {
-		cpLabel = ui.StyleLabelFocused.Render("AIPub CP 노드:")
+		cpLabel = styles.StyleLabelFocused.Render("AIPub CP 노드:")
 	}
 	b.WriteString(cpLabel + "\n")
 	for i, n := range s.k8sNodeNames {
-		mark := ui.CheckOff
+		mark := styles.CheckOff
 		if s.cpNodeChecks[i] {
-			mark = ui.CheckOn
+			mark = styles.CheckOn
 		}
 		b.WriteString(fmt.Sprintf("  [%d] %s %s\n", i+1, mark, n))
 	}
-	b.WriteString(ui.StyleMuted.Render("  숫자 키로 토글") + "\n")
+	b.WriteString(styles.StyleMuted.Render("  숫자 키로 토글") + "\n")
 
-	b.WriteString("\n" + ui.StylePrimary.Render("Harbor 설정") + "\n")
+	b.WriteString("\n" + styles.StylePrimary.Render("Harbor 설정") + "\n")
 	b.WriteString(rf("서브도메인", s5HarborSubdomain, s.harborSubdomain.View()))
 	b.WriteString(rf("레플리카 수", s5HarborReplicas, s.harborReplicas.View()))
 	b.WriteString(rf("레지스트리 스토리지", s5HarborRegistry, s.harborRegistry.View()))

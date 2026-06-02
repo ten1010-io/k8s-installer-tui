@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
-	"github.com/ten1010-io/k8s-installer-tui/internal/ui"
+	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 var certModes = []struct {
@@ -85,18 +85,18 @@ func (s *S6CertMode) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S6CertMode) View() string {
 	var b strings.Builder
-	b.WriteString(ui.StyleTitle.Render("인증서 모드 선택") + "\n")
-	b.WriteString(ui.StyleMuted.Render("ki_cert_mode 값을 선택합니다.") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render("인증서 모드 선택") + "\n")
+	b.WriteString(styles.StyleMuted.Render("ki_cert_mode 값을 선택합니다.") + "\n\n")
 
 	for i, m := range certModes {
-		radio := ui.RadioOff
-		labelStyle := ui.StyleMuted
+		radio := styles.RadioOff
+		labelStyle := styles.StyleMuted
 		if i == s.selected {
-			radio = ui.RadioOn
-			labelStyle = ui.StylePrimary
+			radio = styles.RadioOn
+			labelStyle = styles.StylePrimary
 		}
 		b.WriteString(radio + " " + labelStyle.Render(m.label) + "\n")
-		b.WriteString(ui.StyleMuted.Render("  "+m.description) + "\n\n")
+		b.WriteString(styles.StyleMuted.Render("  "+m.description) + "\n\n")
 	}
 
 	return b.String()

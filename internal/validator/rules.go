@@ -12,7 +12,7 @@ import (
 var (
 	reStorage   = regexp.MustCompile(`^[0-9]+[EPTGMK]i$`)
 	reValidity  = regexp.MustCompile(`^[0-9]+h$`)
-	reFQDN      = regexp.MustCompile(`^((?!-)[A-Za-z0-9-]{1,63}(?<!-)\.)+[A-Za-z]{2,}$`)
+	reFQDN      = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`)
 	reSubdomain = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-.]*[a-z0-9])?$`)
 	reK8sName   = reSubdomain
 )

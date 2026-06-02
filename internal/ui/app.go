@@ -140,9 +140,9 @@ func (a *App) renderFooter() string {
 	}
 
 	nav := fmt.Sprintf("  %s | %s | %s",
-		StyleMuted.Render("ctrl+n: 다음"),
-		StyleMuted.Render("ctrl+p: 이전"),
-		StyleMuted.Render("ctrl+c: 종료"),
+		styles.StyleMuted.Render("ctrl+n: 다음"),
+		styles.StyleMuted.Render("ctrl+p: 이전"),
+		styles.StyleMuted.Render("ctrl+c: 종료"),
 	)
 
 	return styles.StyleFooter.Width(a.width).Render(hint+nav+errs)

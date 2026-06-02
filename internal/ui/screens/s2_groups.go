@@ -187,11 +187,12 @@ func (s *S2Groups) View() string {
 
 	for rowIdx, r := range s.rows {
 		isSelectedRow := !s.focusNav && rowIdx == s.curRow
-		nameStyle := lipgloss.NewStyle().Width(colW[0])
+		cursor := "  "
 		if isSelectedRow {
-			nameStyle = nameStyle.Foreground(styles.ColorPrimary).Bold(true)
+			cursor = "▶ "
 		}
-		row := nameStyle.Render(r.nodeName)
+		nameStyle := lipgloss.NewStyle().Width(colW[0] - 2)
+		row := cursor + nameStyle.Render(r.nodeName)
 		for colIdx, checked := range r.checks {
 			mark := styles.CheckOff
 			if checked {

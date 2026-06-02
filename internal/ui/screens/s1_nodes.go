@@ -319,7 +319,12 @@ func (s *S1Nodes) viewList() string {
 		if user == "" {
 			user = "root"
 		}
-		row := lipgloss.NewStyle().Width(colW[0]).Render(n.Name) +
+		cursor := "  "
+		if s.focusIdx == i {
+			cursor = "▶ "
+		}
+		row := cursor +
+			lipgloss.NewStyle().Width(colW[0]).Render(n.Name) +
 			lipgloss.NewStyle().Width(colW[1]).Render(n.AnsibleHost) +
 			lipgloss.NewStyle().Width(colW[2]).Render(port) +
 			lipgloss.NewStyle().Width(colW[3]).Render(user)

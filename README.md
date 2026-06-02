@@ -163,8 +163,8 @@ inventory.yml      ←  새 내용으로 저장
 
 | # | 규칙 |
 |---|------|
-| R1 | `ki_cp_ha_mode=true`이면 `ki_cp_ha_mode_vip` 필수이며 CP 노드 서브넷 내에 있어야 함 |
-| R2 | 모든 `ki_cp_node`는 `internal_network_subnets` 중 하나에 속해야 함 |
+| R1 | `ki_cp_ha_mode=true`이면 `ki_cp_ha_mode_vip` 필수이며 VIP는 CP 노드 서브넷 내에 있어야 함 |
+| R2 | 모든 `ki_cp_node`는 `internal_network_subnets` 에 속해야 함 |
 | R3 | `k8s_load_balancers[].nodes`는 `k8s_node` 그룹의 부분집합이어야 함 |
 | R4 | `k8s_default_ingress_class.load_balancer`는 정의된 LB 이름 중 하나여야 함 |
 | R5 | `aipub_ha_mode=true`이면 `aipub_ha_mode_storage_class` 필수 |

@@ -2,3 +2,4 @@ dist/
 *.exe
 go.sum
 .DS_Store
+go1.24.3.linux-amd64.tar.gz

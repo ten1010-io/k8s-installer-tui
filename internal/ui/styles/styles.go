@@ -5,10 +5,12 @@ import "github.com/charmbracelet/lipgloss"
 // FocusBg/FocusFg provide background highlighting that works across all
 // terminal color profiles (TrueColor → ANSI256 → ANSI-16 fallback).
 var (
-	FocusBg = lipgloss.CompleteColor{TrueColor: "#0000af", ANSI256: "19", ANSI: "4"}
-	FocusFg = lipgloss.CompleteColor{TrueColor: "#ffffff", ANSI256: "15", ANSI: "15"}
-	// Accent used for the active column in group table
-	AccentBg = lipgloss.CompleteColor{TrueColor: "#005fd7", ANSI256: "26", ANSI: "12"}
+	// FocusBg: bright blue visible on any dark terminal.
+	// ANSI256 "27" = #005fff, ANSI "12" = bright-blue background (\033[104m).
+	FocusBg = lipgloss.CompleteColor{TrueColor: "#005fd7", ANSI256: "27", ANSI: "12"}
+	FocusFg = lipgloss.CompleteColor{TrueColor: "#ffffff", ANSI256: "231", ANSI: "15"}
+	// AccentBg: slightly brighter blue for the active cell within a focused row.
+	AccentBg = lipgloss.CompleteColor{TrueColor: "#0087ff", ANSI256: "33", ANSI: "12"}
 
 	ColorPrimary = lipgloss.Color("69")
 	ColorBorder  = lipgloss.Color("238")

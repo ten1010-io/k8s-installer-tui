@@ -27,14 +27,26 @@ func Next() tea.Cmd { return func() tea.Msg { return NavigateNextMsg{} } }
 func Prev() tea.Cmd { return func() tea.Msg { return NavigatePrevMsg{} } }
 func Save() tea.Cmd { return func() tea.Msg { return SaveMsg{} } }
 
-// RenderButton renders an nmtui-style button.
-// Focused buttons are shown with blue background.
+// focusedStyle returns a style that applies the focus background/foreground.
+// Using CompleteColor ensures the highlight works in TrueColor, ANSI256, and ANSI-16.
+func focusedStyle(width int) lipgloss.Style {
+	s := lipgloss.NewStyle().
+		Background(styles.FocusBg).
+		Foreground(styles.FocusFg).
+		Bold(true)
+	if width > 0 {
+		s = s.Width(width)
+	}
+	return s
+}
+
+// RenderButton renders an nmtui-style < label > button.
 func RenderButton(label string, focused bool) string {
 	text := "< " + label + " >"
 	if focused {
 		return lipgloss.NewStyle().
-			Background(lipgloss.Color("69")).
-			Foreground(lipgloss.Color("15")).
+			Background(styles.FocusBg).
+			Foreground(styles.FocusFg).
 			Bold(true).
 			Padding(0, 1).
 			Render(text)
@@ -45,17 +57,11 @@ func RenderButton(label string, focused bool) string {
 		Render(text)
 }
 
-// RenderRow renders a list row. Focused rows use full-width blue highlight.
+// RenderRow renders a full-width row with highlight when focused.
+// content must be PLAIN (unrendered) text; pre-rendered ANSI strings break background.
 func RenderRow(content string, focused bool, width int) string {
 	if focused {
-		s := lipgloss.NewStyle().
-			Background(lipgloss.Color("62")).
-			Foreground(lipgloss.Color("15")).
-			Bold(true)
-		if width > 0 {
-			s = s.Width(width)
-		}
-		return s.Render(content)
+		return focusedStyle(width).Render(content)
 	}
 	if width > 0 {
 		return lipgloss.NewStyle().Width(width).Render(content)
@@ -63,11 +69,10 @@ func RenderRow(content string, focused bool, width int) string {
 	return content
 }
 
-// RenderNavButtons renders the < 이전 > < 다음 > (or custom label) row
-// centered within the given width. The focused button gets a ▶ marker.
+// RenderNavButtons renders the ← 이전 → ← 다음 → bar centered in width.
+// ▶ marks the focused button. ←/→ arrows switch between them within the nav area.
 func RenderNavButtons(prevLabel, nextLabel string, prevFocused, nextFocused bool, width int) string {
 	var prevDisplay, nextDisplay string
-
 	switch {
 	case prevFocused:
 		prevDisplay = "▶ " + RenderButton(prevLabel, true)
@@ -79,8 +84,7 @@ func RenderNavButtons(prevLabel, nextLabel string, prevFocused, nextFocused bool
 		prevDisplay = "  " + RenderButton(prevLabel, false)
 		nextDisplay = "  " + RenderButton(nextLabel, false)
 	}
-
-	buttons := prevDisplay + "  " + nextDisplay
+	buttons := prevDisplay + "   " + nextDisplay
 	btnWidth := lipgloss.Width(buttons)
 	pad := (width - btnWidth) / 2
 	if pad < 0 {
@@ -89,11 +93,11 @@ func RenderNavButtons(prevLabel, nextLabel string, prevFocused, nextFocused bool
 	return strings.Repeat(" ", pad) + buttons
 }
 
-// RenderSectionHeader renders a section title, highlighted when focused.
+// RenderSectionHeader renders a section label, highlighted when focused.
 func RenderSectionHeader(label string, focused bool) string {
 	if focused {
 		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color("69")).
+			Foreground(styles.ColorPrimary).
 			Bold(true).
 			Width(28).
 			Render("▶ " + label)

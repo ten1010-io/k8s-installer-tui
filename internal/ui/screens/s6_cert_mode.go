@@ -20,12 +20,12 @@ var certModes = []struct {
 
 // Focus layout:
 //   0..2  : cert mode options
-//   3     : < 이전 >
-//   4     : < 다음 >
+//   3     : nav slot (←/→: 이전/다음)
 
 type S6CertMode struct {
 	selected int
 	focusIdx int
+	navIdx   int
 	width    int
 	height   int
 }
@@ -47,6 +47,7 @@ func (s *S6CertMode) SyncFromState(st *state.AppState) {
 		}
 	}
 	s.focusIdx = s.selected
+	s.navIdx = 0
 }
 
 func (s *S6CertMode) SyncToState(st *state.AppState) {
@@ -57,7 +58,10 @@ func (s *S6CertMode) Validate() []string { return nil }
 
 func (s *S6CertMode) Init() tea.Cmd { return nil }
 
-const s6MaxFocus = 4 // 3 options + 이전 + 다음
+const (
+	s6NavFocus = 3 // after 3 options, single nav slot
+	s6MaxFocus = s6NavFocus
+)
 
 func (s *S6CertMode) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -70,6 +74,14 @@ func (s *S6CertMode) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			if s.focusIdx < s6MaxFocus {
 				s.focusIdx++
+			}
+		case "left", "h":
+			if s.focusIdx == s6NavFocus && s.navIdx > 0 {
+				s.navIdx--
+			}
+		case "right", "l":
+			if s.focusIdx == s6NavFocus && s.navIdx < 1 {
+				s.navIdx++
 			}
 		case "enter", " ":
 			return s.activate()
@@ -84,9 +96,10 @@ func (s *S6CertMode) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S6CertMode) activate() (tea.Model, tea.Cmd) {
 	switch s.focusIdx {
-	case s6MaxFocus - 1: // < 이전 >
-		return s, Prev()
-	case s6MaxFocus: // < 다음 >
+	case s6NavFocus:
+		if s.navIdx == 0 {
+			return s, Prev()
+		}
 		return s, Next()
 	default: // option selection
 		s.selected = s.focusIdx
@@ -112,8 +125,8 @@ func (s *S6CertMode) View() string {
 		b.WriteString(styles.StyleMuted.Render("  "+m.description) + "\n\n")
 	}
 
-	prevFocused := s.focusIdx == s6MaxFocus-1
-	nextFocused := s.focusIdx == s6MaxFocus
+	prevFocused := s.focusIdx == s6NavFocus && s.navIdx == 0
+	nextFocused := s.focusIdx == s6NavFocus && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()

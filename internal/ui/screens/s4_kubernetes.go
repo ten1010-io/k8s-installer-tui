@@ -17,8 +17,7 @@ import (
 //   N+1     : < LB 추가 >
 //   N+2     : ingress LB selector
 //   N+3     : ingress port input
-//   N+4     : < 이전 >
-//   N+5     : < 다음 >
+//   N+4     : nav slot (←/→: 이전/다음)
 
 // LB form focus:
 //   0: name, 1: vip, 2..M+1: node checkboxes, M+2: < 저장 >, M+3: < 취소 >
@@ -40,6 +39,7 @@ type S4Kubernetes struct {
 	ingressPort  textinput.Model
 
 	focusIdx int
+	navIdx   int
 	width    int
 	height   int
 }
@@ -71,11 +71,10 @@ func (s *S4Kubernetes) SetSize(w, h int) {
 	s.height = h
 }
 
-func (s *S4Kubernetes) lbAddFocus() int  { return len(s.lbs) + 1 }
+func (s *S4Kubernetes) lbAddFocus() int   { return len(s.lbs) + 1 }
 func (s *S4Kubernetes) ingressFocus() int { return len(s.lbs) + 2 }
-func (s *S4Kubernetes) portFocus() int   { return len(s.lbs) + 3 }
-func (s *S4Kubernetes) prevFocus() int   { return len(s.lbs) + 4 }
-func (s *S4Kubernetes) nextFocus() int   { return len(s.lbs) + 5 }
+func (s *S4Kubernetes) portFocus() int    { return len(s.lbs) + 3 }
+func (s *S4Kubernetes) navFocus() int     { return len(s.lbs) + 4 }
 
 func (s *S4Kubernetes) SyncFromState(st *state.AppState) {
 	s.certValidity.SetValue(st.K8sCertificateValidityPeriod)
@@ -93,6 +92,7 @@ func (s *S4Kubernetes) SyncFromState(st *state.AppState) {
 		}
 	}
 	s.focusIdx = 0
+	s.navIdx = 0
 	s.editingLB = false
 	s.syncFocusedInputs()
 }
@@ -152,17 +152,21 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.syncFocusedInputs()
 			}
 		case "down", "j":
-			if s.focusIdx < s.nextFocus() {
+			if s.focusIdx < s.navFocus() {
 				s.focusIdx++
 				s.syncFocusedInputs()
 			}
 		case "left", "h":
 			if s.focusIdx == s.ingressFocus() && s.ingressLBIdx > 0 {
 				s.ingressLBIdx--
+			} else if s.focusIdx == s.navFocus() && s.navIdx > 0 {
+				s.navIdx--
 			}
 		case "right", "l":
 			if s.focusIdx == s.ingressFocus() && s.ingressLBIdx < len(s.lbs)-1 {
 				s.ingressLBIdx++
+			} else if s.focusIdx == s.navFocus() && s.navIdx < 1 {
+				s.navIdx++
 			}
 		case "enter", " ":
 			return s.activate()
@@ -193,9 +197,10 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S4Kubernetes) activate() (tea.Model, tea.Cmd) {
 	switch {
-	case s.focusIdx == s.prevFocus():
-		return s, Prev()
-	case s.focusIdx == s.nextFocus():
+	case s.focusIdx == s.navFocus():
+		if s.navIdx == 0 {
+			return s, Prev()
+		}
 		return s, Next()
 	case s.focusIdx == s.lbAddFocus():
 		s.openLBForm(-1, state.LBConfig{})
@@ -346,8 +351,8 @@ func (s *S4Kubernetes) View() string {
 	portFocused := s.focusIdx == s.portFocus()
 	b.WriteString(RenderSectionHeader("인그레스 포트", portFocused) + "  " + s.ingressPort.View() + "\n")
 
-	prevFocused := s.focusIdx == s.prevFocus()
-	nextFocused := s.focusIdx == s.nextFocus()
+	prevFocused := s.focusIdx == s.navFocus() && s.navIdx == 0
+	nextFocused := s.focusIdx == s.navFocus() && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()

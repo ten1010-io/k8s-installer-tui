@@ -11,19 +11,15 @@ import (
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
-// List mode focus layout:
+// List mode focus:
 //   0..N-1  : node rows
 //   N       : < 추가 >
-//   N+1     : < 이전 >
-//   N+2     : < 다음 >
+//   N+1     : nav area  (←/→ switches navIdx: 0=이전, 1=다음)
 //
-// Form mode focus layout:
-//   0  : name field
-//   1  : host field
-//   2  : port field
-//   3  : user field
-//   4  : < 저장 >
-//   5  : < 취소 >
+// Form mode focus:
+//   0..3    : fields (name, host, port, user)
+//   4       : < 저장 >
+//   5       : < 취소 >
 
 const (
 	s1FieldName = iota
@@ -38,15 +34,16 @@ const (
 )
 
 type S1Nodes struct {
-	nodes    []state.NodeConfig
-	focusIdx int // list mode focus
-	editing  bool
-	editIdx  int // -1 = new node
+	nodes     []state.NodeConfig
+	focusIdx  int
+	navIdx    int // 0=이전, 1=다음
+	editing   bool
+	editIdx   int
 	formFocus int
-	fields   [s1FieldCount]textinput.Model
-	formErr  string
-	width    int
-	height   int
+	fields    [s1FieldCount]textinput.Model
+	formErr   string
+	width     int
+	height    int
 }
 
 func NewS1Nodes() *S1Nodes {
@@ -102,10 +99,11 @@ func (s *S1Nodes) Validate() []string {
 
 func (s *S1Nodes) Init() tea.Cmd { return nil }
 
-func (s *S1Nodes) listMax() int { return len(s.nodes) + 2 }
+// navFocus is the focusIdx value for the nav area.
+func (s *S1Nodes) navFocus() int { return len(s.nodes) + 1 }
 
 func (s *S1Nodes) clampFocus() {
-	max := s.listMax()
+	max := s.navFocus()
 	if s.focusIdx > max {
 		s.focusIdx = max
 	}
@@ -130,13 +128,22 @@ func (s *S1Nodes) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.focusIdx--
 			}
 		case "down", "j":
-			if s.focusIdx < s.listMax() {
+			if s.focusIdx < s.navFocus() {
 				s.focusIdx++
+			}
+		case "left", "h":
+			if s.focusIdx == s.navFocus() && s.navIdx > 0 {
+				s.navIdx--
+			}
+		case "right", "l":
+			if s.focusIdx == s.navFocus() && s.navIdx < 1 {
+				s.navIdx++
 			}
 		case "enter", " ":
 			return s.activateList()
 		case "a":
 			s.openForm(-1, state.NodeConfig{})
+			return s, textinput.Blink
 		case "d", "delete":
 			if s.focusIdx < len(s.nodes) && len(s.nodes) > 0 {
 				s.nodes = append(s.nodes[:s.focusIdx], s.nodes[s.focusIdx+1:]...)
@@ -152,16 +159,16 @@ func (s *S1Nodes) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *S1Nodes) activateList() (tea.Model, tea.Cmd) {
-	max := s.listMax()
-	switch s.focusIdx {
-	case max - 1: // < 이전 >
-		return s, Prev()
-	case max: // < 다음 >
+	switch {
+	case s.focusIdx == s.navFocus(): // nav area
+		if s.navIdx == 0 {
+			return s, Prev()
+		}
 		return s, Next()
-	case len(s.nodes): // < 추가 >
+	case s.focusIdx == len(s.nodes): // 추가
 		s.openForm(-1, state.NodeConfig{})
 		return s, textinput.Blink
-	default:
+	default: // node row
 		if s.focusIdx < len(s.nodes) {
 			s.openForm(s.focusIdx, s.nodes[s.focusIdx])
 			return s, textinput.Blink
@@ -224,7 +231,6 @@ func (s *S1Nodes) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.editing = false
 				s.formErr = ""
 			default:
-				// Enter on field: move to next
 				if s.formFocus < s1FieldCount {
 					s.fields[s.formFocus].Blur()
 				}
@@ -306,8 +312,8 @@ func (s *S1Nodes) viewList() string {
 	for i, h := range []string{"이름", "ansible_host", "포트", "SSH 유저"} {
 		header += lipgloss.NewStyle().Width(colW[i]).Bold(true).Foreground(styles.ColorPrimary).Render(h)
 	}
-	b.WriteString(header + "\n")
-	b.WriteString(strings.Repeat("─", s.width) + "\n")
+	b.WriteString("  " + header + "\n")
+	b.WriteString("  " + strings.Repeat("─", 54) + "\n")
 
 	if len(s.nodes) == 0 {
 		b.WriteString(styles.StyleMuted.Render("  (노드 없음)") + "\n")
@@ -321,8 +327,7 @@ func (s *S1Nodes) viewList() string {
 		if user == "" {
 			user = "root"
 		}
-		focused := s.focusIdx == i
-		b.WriteString(renderNodeRow(n.Name, n.AnsibleHost, port, user, colW, focused) + "\n")
+		b.WriteString(renderNodeRow(n.Name, n.AnsibleHost, port, user, colW, s.focusIdx == i) + "\n")
 	}
 
 	b.WriteString("\n")
@@ -330,8 +335,8 @@ func (s *S1Nodes) viewList() string {
 	b.WriteString("  " + RenderButton("추가", addFocused) +
 		styles.StyleMuted.Render("  (a: 추가  d: 삭제  Enter: 편집)") + "\n")
 
-	prevFocused := s.focusIdx == s.listMax()-1
-	nextFocused := s.focusIdx == s.listMax()
+	prevFocused := s.focusIdx == s.navFocus() && s.navIdx == 0
+	nextFocused := s.focusIdx == s.navFocus() && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()
@@ -368,14 +373,11 @@ func (s *S1Nodes) viewForm() string {
 	return b.String()
 }
 
-// renderNodeRow renders a single node row, applying background to each cell
-// individually so ANSI reset codes between cells don't break the highlight.
+// renderNodeRow renders a node row with per-cell focus background so that
+// ANSI reset codes between cells do not break the highlight.
 func renderNodeRow(name, host, port, user string, colW []int, focused bool) string {
 	if focused {
-		cs := lipgloss.NewStyle().
-			Background(lipgloss.Color("62")).
-			Foreground(lipgloss.Color("15")).
-			Bold(true)
+		cs := focusedStyle(0)
 		return cs.Width(2).Render("▶") +
 			cs.Width(colW[0]).Render(name) +
 			cs.Width(colW[1]).Render(host) +
@@ -388,4 +390,3 @@ func renderNodeRow(name, host, port, user string, colW []int, focused bool) stri
 		lipgloss.NewStyle().Width(colW[2]).Render(port) +
 		lipgloss.NewStyle().Width(colW[3]).Render(user)
 }
-

@@ -203,8 +203,8 @@ func (s *S2Groups) View() string {
 // when selected so ANSI reset codes between cells don't break the highlight.
 func renderGroupRow(r groupRow, colW []int, selected bool, curCol int) string {
 	if selected {
-		rs := lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("15")).Bold(true)
-		cs := lipgloss.NewStyle().Background(lipgloss.Color("69")).Foreground(lipgloss.Color("15")).Bold(true)
+		rs := focusedStyle(0)
+		cs := lipgloss.NewStyle().Background(styles.AccentBg).Foreground(styles.FocusFg).Bold(true)
 
 		row := rs.Width(2).Render("▶") + rs.Width(colW[0]-2).Render(r.nodeName)
 		for colIdx, checked := range r.checks {

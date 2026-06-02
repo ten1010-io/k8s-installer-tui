@@ -22,8 +22,7 @@ import (
 //   7  : harbor postgresql storage
 //   8  : harbor redis storage
 //   9  : harbor trivy storage
-//   10 : < 이전 >
-//   11 : < 다음 >
+//   10 : nav slot (←/→: 이전/다음)
 
 const (
 	s5FocusIngressZone = iota
@@ -36,9 +35,8 @@ const (
 	s5FocusHarborPg
 	s5FocusHarborRedis
 	s5FocusHarborTrivy
-	s5FocusPrev
-	s5FocusNext
-	s5FocusMax = s5FocusNext
+	s5FocusNav
+	s5FocusMax = s5FocusNav
 )
 
 type S5Aipub struct {
@@ -56,6 +54,7 @@ type S5Aipub struct {
 	harborTrivy     textinput.Model
 
 	focusIdx int
+	navIdx   int
 	width    int
 	height   int
 }
@@ -101,6 +100,7 @@ func (s *S5Aipub) SyncFromState(st *state.AppState) {
 	s.harborRedis.SetValue(st.HarborRedisStorageSize)
 	s.harborTrivy.SetValue(st.HarborTrivyStorageSize)
 	s.focusIdx = 0
+	s.navIdx = 0
 	s.cpNodeCursor = 0
 	s.syncFocus()
 }
@@ -199,11 +199,20 @@ func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.cpNodeCursor = 0
 				s.syncFocus()
 			}
+		case "left", "h":
+			if s.focusIdx == s5FocusNav && s.navIdx > 0 {
+				s.navIdx--
+			}
+		case "right", "l":
+			if s.focusIdx == s5FocusNav && s.navIdx < 1 {
+				s.navIdx++
+			}
 		case "enter", " ":
 			switch s.focusIdx {
-			case s5FocusPrev:
-				return s, Prev()
-			case s5FocusNext:
+			case s5FocusNav:
+				if s.navIdx == 0 {
+					return s, Prev()
+				}
 				return s, Next()
 			case s5FocusHaMode:
 				s.haMode = !s.haMode
@@ -272,8 +281,8 @@ func (s *S5Aipub) View() string {
 	b.WriteString(RenderSectionHeader("Redis 스토리지", f == s5FocusHarborRedis) + "  " + s.harborRedis.View() + "\n")
 	b.WriteString(RenderSectionHeader("Trivy 스토리지", f == s5FocusHarborTrivy) + "  " + s.harborTrivy.View() + "\n")
 
-	prevFocused := f == s5FocusPrev
-	nextFocused := f == s5FocusNext
+	prevFocused := f == s5FocusNav && s.navIdx == 0
+	nextFocused := f == s5FocusNav && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()

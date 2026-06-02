@@ -17,8 +17,7 @@ import (
 //   4  : DNS servers section
 //   5  : NTP servers section
 //   6  : extra zone input
-//   7  : < 이전 >
-//   8  : < 다음 >
+//   7  : nav slot (←/→: 이전/다음)
 
 const (
 	s3FocusSubnets = iota
@@ -28,9 +27,8 @@ const (
 	s3FocusDNS
 	s3FocusNTP
 	s3FocusExtraZone
-	s3FocusPrev
-	s3FocusNext
-	s3FocusMax = s3FocusNext
+	s3FocusNav
+	s3FocusMax = s3FocusNav
 )
 
 type S3Network struct {
@@ -48,6 +46,7 @@ type S3Network struct {
 	listInput    textinput.Model
 
 	focusIdx int
+	navIdx   int
 	width    int
 	height   int
 }
@@ -85,6 +84,7 @@ func (s *S3Network) SyncFromState(st *state.AppState) {
 	s.ntpServers = append([]string{}, st.KiCpNtpUpstreamServers...)
 	s.extraZone.SetValue(st.InternalNetworkExtraZone)
 	s.focusIdx = 0
+	s.navIdx = 0
 	s.editingList = false
 	s.syncFocusedInputs()
 }
@@ -146,6 +146,14 @@ func (s *S3Network) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.focusIdx++
 				s.syncFocusedInputs()
 			}
+		case "left", "h":
+			if s.focusIdx == s3FocusNav && s.navIdx > 0 {
+				s.navIdx--
+			}
+		case "right", "l":
+			if s.focusIdx == s3FocusNav && s.navIdx < 1 {
+				s.navIdx++
+			}
 		case "enter", " ":
 			return s.activate(msg.String())
 		case "d", "delete":
@@ -167,9 +175,10 @@ func (s *S3Network) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S3Network) activate(key string) (tea.Model, tea.Cmd) {
 	switch s.focusIdx {
-	case s3FocusPrev:
-		return s, Prev()
-	case s3FocusNext:
+	case s3FocusNav:
+		if s.navIdx == 0 {
+			return s, Prev()
+		}
 		return s, Next()
 	case s3FocusHaMode:
 		s.haMode = !s.haMode
@@ -311,8 +320,8 @@ func (s *S3Network) View() string {
 	extraFocused := s.focusIdx == s3FocusExtraZone
 	b.WriteString(RenderSectionHeader("추가 DNS 존 (선택)", extraFocused) + "  " + s.extraZone.View() + "\n")
 
-	prevFocused := s.focusIdx == s3FocusPrev
-	nextFocused := s.focusIdx == s3FocusNext
+	prevFocused := s.focusIdx == s3FocusNav && s.navIdx == 0
+	nextFocused := s.focusIdx == s3FocusNav && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()

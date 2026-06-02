@@ -16,16 +16,14 @@ import (
 //   0  : inventory.yml tab
 //   1  : vars.yml tab
 //   2  : viewport (scrollable)
-//   3  : < 저장 >
-//   4  : < 이전 >
+//   3  : nav slot (←/→: 이전/저장)
 
 const (
 	s7FocusTabInv = iota
 	s7FocusTabVars
 	s7FocusViewport
-	s7FocusSave
-	s7FocusPrev
-	s7FocusMax = s7FocusPrev
+	s7FocusNav
+	s7FocusMax = s7FocusNav
 )
 
 type S7Preview struct {
@@ -40,6 +38,7 @@ type S7Preview struct {
 	varsPath         string
 
 	focusIdx int
+	navIdx   int
 	width    int
 	height   int
 }
@@ -92,6 +91,7 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 	}
 
 	s.focusIdx = 0
+	s.navIdx = 0
 	s.refreshViewport()
 }
 
@@ -133,11 +133,20 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.focusIdx++
 				s.refreshViewport()
 			}
+		case "left", "h":
+			if s.focusIdx == s7FocusNav && s.navIdx > 0 {
+				s.navIdx--
+			}
+		case "right", "l":
+			if s.focusIdx == s7FocusNav && s.navIdx < 1 {
+				s.navIdx++
+			}
 		case "enter", " ":
 			switch s.focusIdx {
-			case s7FocusPrev:
-				return s, Prev()
-			case s7FocusSave:
+			case s7FocusNav:
+				if s.navIdx == 0 {
+					return s, Prev()
+				}
 				return s.doSave()
 			case s7FocusTabInv:
 				s.refreshViewport()
@@ -228,8 +237,8 @@ func (s *S7Preview) View() string {
 		b.WriteString(styles.StyleMuted.Render("  기존 파일은 .bak으로 백업되었습니다") + "\n")
 	}
 
-	saveFocused := s.focusIdx == s7FocusSave
-	prevFocused := s.focusIdx == s7FocusPrev
+	prevFocused := s.focusIdx == s7FocusNav && s.navIdx == 0
+	saveFocused := s.focusIdx == s7FocusNav && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "저장 (s)", prevFocused, saveFocused, s.width))
 
 	return b.String()

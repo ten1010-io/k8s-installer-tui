@@ -104,11 +104,11 @@ func (a *App) View() string {
 		body += "\n" + styles.StyleError.Render(strings.Join(msgs, "\n"))
 	}
 
-	// Bordered center panel
+	// Bordered center panel — thick border for nmtui-like panel separation
 	innerW := panelW - 4 // 2 border + 2 padding
 	panel := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(styles.ColorBorder).
+		Border(lipgloss.ThickBorder()).
+		BorderForeground(styles.ColorPrimary).
 		Padding(0, 1).
 		Width(innerW).
 		Render(body)

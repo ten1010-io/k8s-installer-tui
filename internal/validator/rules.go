@@ -157,38 +157,20 @@ func validateKubernetes(s *state.AppState) []Error {
 		errs = append(errs, Error{"k8s_certificate_validity_period", "형식이 올바르지 않습니다 (예: 26280h)"})
 	}
 
-	lbNames := map[string]bool{}
-	for i, lb := range s.K8sLoadBalancers {
-		prefix := fmt.Sprintf("k8s_load_balancers[%d]", i)
-		if lb.Name == "" {
-			errs = append(errs, Error{prefix + ".name", "로드밸런서 이름을 입력해주세요"})
-		} else if !reK8sName.MatchString(lb.Name) {
-			errs = append(errs, Error{prefix + ".name", "K8s 오브젝트 네이밍 규칙을 따라야 합니다 (소문자, 숫자, 하이픈)"})
-		} else if lbNames[lb.Name] {
-			errs = append(errs, Error{prefix + ".name", fmt.Sprintf("로드밸런서 이름 '%s'가 중복됩니다", lb.Name)})
-		} else {
-			lbNames[lb.Name] = true
-		}
-		if net.ParseIP(lb.VIP) == nil {
-			errs = append(errs, Error{prefix + ".vip", "유효한 IPv4 주소를 입력해주세요"})
-		}
-		// R3: LB nodes ⊆ k8s_node group
-		k8sNodeSet := map[string]bool{}
-		for _, n := range s.K8sNodes {
-			k8sNodeSet[n] = true
-		}
-		for _, n := range lb.Nodes {
-			if !k8sNodeSet[n] {
-				errs = append(errs, Error{prefix + ".nodes",
-					fmt.Sprintf("'%s'는 k8s_node 그룹에 속하지 않습니다", n)})
-			}
-		}
+	if s.K8sIngressClassName == "" || !reK8sName.MatchString(s.K8sIngressClassName) {
+		errs = append(errs, Error{"k8s_ingress_class.name", "K8s 네이밍 규칙을 따라야 합니다 (소문자, 숫자, 하이픈)"})
 	}
-
-	// R4: default ingress LB must reference an existing LB
-	if s.K8sDefaultIngressClass.LoadBalancer != "" && !lbNames[s.K8sDefaultIngressClass.LoadBalancer] {
-		errs = append(errs, Error{"k8s_default_ingress_class.load_balancer",
-			fmt.Sprintf("'%s'는 정의된 로드밸런서가 아닙니다", s.K8sDefaultIngressClass.LoadBalancer)})
+	if s.K8sIngressHaMode && s.K8sIngressHaModeVIP == "" {
+		errs = append(errs, Error{"k8s_ingress_class.ha_mode_vip", "HA 모드 활성화 시 VIP를 설정해야 합니다"})
+	}
+	if s.K8sIngressHaModeVIP != "" && net.ParseIP(s.K8sIngressHaModeVIP) == nil {
+		errs = append(errs, Error{"k8s_ingress_class.ha_mode_vip", "유효한 IPv4 주소를 입력해주세요"})
+	}
+	if s.K8sIngressHttpPort <= 0 || s.K8sIngressHttpPort > 65535 {
+		errs = append(errs, Error{"k8s_ingress_class.http_hostport", "포트는 1-65535 범위여야 합니다"})
+	}
+	if s.K8sIngressHttpsPort <= 0 || s.K8sIngressHttpsPort > 65535 {
+		errs = append(errs, Error{"k8s_ingress_class.https_hostport", "포트는 1-65535 범위여야 합니다"})
 	}
 
 	return errs

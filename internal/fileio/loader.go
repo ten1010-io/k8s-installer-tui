@@ -52,15 +52,13 @@ type varsYAML struct {
 	KiCpNtpServerUpstreamServers []string `yaml:"ki_cp_ntp_server_upstream_servers"`
 
 	K8sCertificateValidityPeriod string `yaml:"k8s_certificate_validity_period"`
-	K8sLoadBalancers []struct {
-		Name  string   `yaml:"name"`
-		VIP   string   `yaml:"vip"`
-		Nodes []string `yaml:"nodes"`
-	} `yaml:"k8s_load_balancers"`
-	K8sDefaultIngressClass struct {
-		LoadBalancer     string `yaml:"load_balancer"`
-		HostNetworkPort  int    `yaml:"host_network_port"`
-	} `yaml:"k8s_default_ingress_class"`
+	K8sIngressClasses []struct {
+		Name          string `yaml:"name"`
+		HaMode        bool   `yaml:"ha_mode"`
+		HaModeVIP     string `yaml:"ha_mode_vip"`
+		HttpHostport  int    `yaml:"http_hostport"`
+		HttpsHostport int    `yaml:"https_hostport"`
+	} `yaml:"k8s_ingress_classes"`
 
 	AipubIngressZone        string   `yaml:"aipub_ingress_zone"`
 	AipubHaMode             bool     `yaml:"aipub_ha_mode"`
@@ -170,16 +168,19 @@ func LoadVars(path string, s *state.AppState) error {
 	if v.K8sCertificateValidityPeriod != "" {
 		s.K8sCertificateValidityPeriod = v.K8sCertificateValidityPeriod
 	}
-	for _, lb := range v.K8sLoadBalancers {
-		s.K8sLoadBalancers = append(s.K8sLoadBalancers, state.LBConfig{
-			Name:  lb.Name,
-			VIP:   lb.VIP,
-			Nodes: lb.Nodes,
-		})
-	}
-	s.K8sDefaultIngressClass = state.IngressConfig{
-		LoadBalancer: v.K8sDefaultIngressClass.LoadBalancer,
-		Port:         v.K8sDefaultIngressClass.HostNetworkPort,
+	if len(v.K8sIngressClasses) > 0 {
+		ic := v.K8sIngressClasses[0]
+		if ic.Name != "" {
+			s.K8sIngressClassName = ic.Name
+		}
+		s.K8sIngressHaMode = ic.HaMode
+		s.K8sIngressHaModeVIP = ic.HaModeVIP
+		if ic.HttpHostport > 0 {
+			s.K8sIngressHttpPort = ic.HttpHostport
+		}
+		if ic.HttpsHostport > 0 {
+			s.K8sIngressHttpsPort = ic.HttpsHostport
+		}
 	}
 
 	if v.AipubIngressZone != "" {

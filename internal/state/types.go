@@ -7,17 +7,6 @@ type NodeConfig struct {
 	AnsibleUser string // empty = use constant-vars default (root)
 }
 
-type LBConfig struct {
-	Name  string
-	VIP   string
-	Nodes []string
-}
-
-type IngressConfig struct {
-	LoadBalancer string
-	Port         int
-}
-
 type ARecord struct {
 	Name string
 	IP   string

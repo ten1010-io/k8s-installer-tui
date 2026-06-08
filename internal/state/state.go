@@ -22,8 +22,11 @@ type AppState struct {
 
 	// S4: Kubernetes (vars.yml)
 	K8sCertificateValidityPeriod string
-	K8sLoadBalancers             []LBConfig
-	K8sDefaultIngressClass       IngressConfig
+	K8sIngressClassName          string
+	K8sIngressHaMode             bool
+	K8sIngressHaModeVIP          string
+	K8sIngressHttpPort           int
+	K8sIngressHttpsPort          int
 
 	// S5: AIPub (vars.yml)
 	AipubIngressZone            string
@@ -44,13 +47,14 @@ type AppState struct {
 func DefaultState() *AppState {
 	return &AppState{
 		KiCpHaMode:                   true,
-		KiCpDnsDnssecValidation:      true,
+		KiCpDnsDnssecValidation:      false,
 		KiCpDnsUpstreamServers:       []string{"8.8.8.8", "8.8.4.4"},
 		KiCpNtpUpstreamServers:       []string{"time1.google.com", "time2.google.com"},
 		InternalNetworkSubnets:       []string{"192.168.0.0/24"},
 		K8sCertificateValidityPeriod: "26280h",
-		K8sLoadBalancers:             []LBConfig{{Name: "lb1", Nodes: []string{}}},
-		K8sDefaultIngressClass:       IngressConfig{LoadBalancer: "lb1", Port: 443},
+		K8sIngressClassName:          "lb1",
+		K8sIngressHttpPort:           80,
+		K8sIngressHttpsPort:          443,
 		AipubIngressZone:             "example.com",
 		AipubHaMode:                  true,
 		HarborIngressSubdomain:       "aipub-harbor",
@@ -67,14 +71,6 @@ func (s *AppState) NodeNames() []string {
 	names := make([]string, len(s.Nodes))
 	for i, n := range s.Nodes {
 		names[i] = n.Name
-	}
-	return names
-}
-
-func (s *AppState) LBNames() []string {
-	names := make([]string, len(s.K8sLoadBalancers))
-	for i, lb := range s.K8sLoadBalancers {
-		names[i] = lb.Name
 	}
 	return names
 }

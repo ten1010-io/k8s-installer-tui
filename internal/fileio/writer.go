@@ -132,17 +132,6 @@ func renderInventory(s *state.AppState) ([]byte, error) {
 }
 
 func renderVars(s *state.AppState) ([]byte, error) {
-	// Use a plain map for vars.yml; field order matches original file.
-	type lbEntry struct {
-		Name  string   `yaml:"name"`
-		VIP   string   `yaml:"vip"`
-		Nodes []string `yaml:"nodes"`
-	}
-	type ingressEntry struct {
-		LoadBalancer    string `yaml:"load_balancer"`
-		HostNetworkPort int    `yaml:"host_network_port"`
-	}
-
 	out := map[string]interface{}{
 		"ki_var_root_path":      "/var/lib/k8s-installer",
 		"containerd_root_path":  "/var/lib/containerd",
@@ -157,9 +146,15 @@ func renderVars(s *state.AppState) ([]byte, error) {
 		"ki_cp_ntp_server_upstream_servers": s.KiCpNtpUpstreamServers,
 
 		"k8s_certificate_validity_period": s.K8sCertificateValidityPeriod,
-		"k8s_default_ingress_class": ingressEntry{
-			LoadBalancer:    s.K8sDefaultIngressClass.LoadBalancer,
-			HostNetworkPort: s.K8sDefaultIngressClass.Port,
+		"k8s_ingress_classes": []map[string]interface{}{
+			{
+				"name":           s.K8sIngressClassName,
+				"controller_nodes": s.KiCpNodes,
+				"ha_mode":        s.K8sIngressHaMode,
+				"ha_mode_vip":    nullIfEmpty(s.K8sIngressHaModeVIP),
+				"http_hostport":  s.K8sIngressHttpPort,
+				"https_hostport": s.K8sIngressHttpsPort,
+			},
 		},
 
 		"aipub_ingress_zone":             s.AipubIngressZone,
@@ -176,12 +171,6 @@ func renderVars(s *state.AppState) ([]byte, error) {
 
 		"ki_cert_mode": s.KiCertMode,
 	}
-
-	lbs := make([]lbEntry, len(s.K8sLoadBalancers))
-	for i, lb := range s.K8sLoadBalancers {
-		lbs[i] = lbEntry{Name: lb.Name, VIP: lb.VIP, Nodes: lb.Nodes}
-	}
-	out["k8s_load_balancers"] = lbs
 
 	if s.InternalNetworkExtraZone != "" {
 		out["internal_network_extra_zone"] = s.InternalNetworkExtraZone

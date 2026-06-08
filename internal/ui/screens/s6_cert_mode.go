@@ -58,12 +58,8 @@ func (s *S6CertMode) Validate() []string { return nil }
 
 func (s *S6CertMode) Init() tea.Cmd { return nil }
 
-const (
-	s6NavFocus = 3 // after 3 options, single nav slot
-	s6MaxFocus = s6NavFocus
-)
-
 func (s *S6CertMode) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	navFocus := len(certModes)
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -72,15 +68,15 @@ func (s *S6CertMode) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.focusIdx--
 			}
 		case "down", "j":
-			if s.focusIdx < s6MaxFocus {
+			if s.focusIdx < navFocus {
 				s.focusIdx++
 			}
 		case "left", "h":
-			if s.focusIdx == s6NavFocus && s.navIdx > 0 {
+			if s.focusIdx == navFocus && s.navIdx > 0 {
 				s.navIdx--
 			}
 		case "right", "l":
-			if s.focusIdx == s6NavFocus && s.navIdx < 1 {
+			if s.focusIdx == navFocus && s.navIdx < 1 {
 				s.navIdx++
 			}
 		case "enter", " ":
@@ -95,15 +91,13 @@ func (s *S6CertMode) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *S6CertMode) activate() (tea.Model, tea.Cmd) {
-	switch s.focusIdx {
-	case s6NavFocus:
+	if s.focusIdx == len(certModes) {
 		if s.navIdx == 0 {
 			return s, Prev()
 		}
 		return s, Next()
-	default: // option selection
-		s.selected = s.focusIdx
 	}
+	s.selected = s.focusIdx
 	return s, nil
 }
 
@@ -125,8 +119,8 @@ func (s *S6CertMode) View() string {
 		b.WriteString(styles.StyleMuted.Render("  "+m.description) + "\n\n")
 	}
 
-	prevFocused := s.focusIdx == s6NavFocus && s.navIdx == 0
-	nextFocused := s.focusIdx == s6NavFocus && s.navIdx == 1
+	prevFocused := s.focusIdx == len(certModes) && s.navIdx == 0
+	nextFocused := s.focusIdx == len(certModes) && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()

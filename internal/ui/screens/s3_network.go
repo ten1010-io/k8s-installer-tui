@@ -10,12 +10,12 @@ import (
 )
 
 // Focus layout:
-//   0  : subnet input (단일 CIDR)
+//   0  : subnet list
 //   1  : HA mode toggle
 //   2  : VIP input
 //   3  : DNSSEC toggle
-//   4  : DNS servers section
-//   5  : NTP servers section
+//   4  : DNS servers list
+//   5  : NTP servers list
 //   6  : extra zone input
 //   7  : nav slot (←/→: 이전/다음)
 
@@ -31,21 +31,27 @@ const (
 	s3FocusMax = s3FocusNav
 )
 
+type editKind int
+
+const (
+	editNone   editKind = iota
+	editSubnet          // adding to s.subnets
+	editDNS             // adding to s.dnsServers
+	editNTP             // adding to s.ntpServers
+)
+
 type S3Network struct {
-	subnets       []string
-	editingSubnet bool
-	subnetInput   textinput.Model
-	haMode        bool
+	subnets    []string
+	haMode     bool
 	vip        textinput.Model
 	dnssec     bool
 	dnsServers []string
 	ntpServers []string
 	extraZone  textinput.Model
 
-	// inline editing
-	editingList bool
-	editListFor int
-	listInput   textinput.Model
+	// shared inline input for subnet / DNS / NTP entry
+	editMode  editKind
+	listInput textinput.Model
 
 	focusIdx int
 	navIdx   int
@@ -54,11 +60,7 @@ type S3Network struct {
 }
 
 func NewS3Network() *S3Network {
-	s := &S3Network{dnssec: false}
-
-	s.subnetInput = textinput.New()
-	s.subnetInput.Placeholder = "예: 192.168.0.0/24"
-	s.subnetInput.CharLimit = 64
+	s := &S3Network{}
 
 	s.vip = textinput.New()
 	s.vip.Placeholder = "예: 192.168.0.100"
@@ -71,7 +73,6 @@ func NewS3Network() *S3Network {
 	s.listInput = textinput.New()
 	s.listInput.CharLimit = 253
 
-	s.syncFocusedInputs()
 	return s
 }
 
@@ -91,7 +92,7 @@ func (s *S3Network) SyncFromState(st *state.AppState) {
 	s.extraZone.SetValue(st.InternalNetworkExtraZone)
 	s.focusIdx = 0
 	s.navIdx = 0
-	s.editingList = false
+	s.editMode = editNone
 	s.syncFocusedInputs()
 }
 
@@ -126,7 +127,7 @@ func (s *S3Network) Init() tea.Cmd { return nil }
 func (s *S3Network) syncFocusedInputs() {
 	s.vip.Blur()
 	s.extraZone.Blur()
-	if s.editingList || s.editingSubnet {
+	if s.editMode != editNone {
 		return
 	}
 	switch s.focusIdx {
@@ -138,11 +139,8 @@ func (s *S3Network) syncFocusedInputs() {
 }
 
 func (s *S3Network) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if s.editingSubnet {
-		return s.updateSubnetEdit(msg)
-	}
-	if s.editingList {
-		return s.updateListEdit(msg)
+	if s.editMode != editNone {
+		return s.updateEdit(msg)
 	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -168,7 +166,7 @@ func (s *S3Network) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter", " ":
 			return s.activate()
 		case "d", "delete":
-			s.deleteLastItem(s.focusIdx)
+			s.deleteLastItem()
 		case "ctrl+n":
 			return s, Next()
 		case "ctrl+p":
@@ -193,70 +191,52 @@ func (s *S3Network) activate() (tea.Model, tea.Cmd) {
 		}
 		return s, Next()
 	case s3FocusSubnet:
-		s.editingSubnet = true
-		s.subnetInput.SetValue("")
-		s.subnetInput.Focus()
+		s.startEdit(editSubnet, "예: 192.168.0.0/24")
 		return s, textinput.Blink
 	case s3FocusHaMode:
 		s.haMode = !s.haMode
 	case s3FocusDNSSEC:
 		s.dnssec = !s.dnssec
-	case s3FocusDNS, s3FocusNTP:
-		s.editingList = true
-		s.editListFor = s.focusIdx
-		s.listInput.SetValue("")
-		if s.focusIdx == s3FocusDNS {
-			s.listInput.Placeholder = "8.8.8.8"
-		} else {
-			s.listInput.Placeholder = "time1.google.com"
-		}
-		s.listInput.Focus()
+	case s3FocusDNS:
+		s.startEdit(editDNS, "8.8.8.8")
+		return s, textinput.Blink
+	case s3FocusNTP:
+		s.startEdit(editNTP, "time1.google.com")
 		return s, textinput.Blink
 	}
 	return s, nil
 }
 
-func (s *S3Network) updateSubnetEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
-			s.editingSubnet = false
-			s.subnetInput.Blur()
-			return s, nil
-		case "enter":
-			if v := strings.TrimSpace(s.subnetInput.Value()); v != "" {
-				s.subnets = append(s.subnets, v)
-			}
-			s.editingSubnet = false
-			s.subnetInput.Blur()
-			return s, nil
-		}
-	}
-	var cmd tea.Cmd
-	s.subnetInput, cmd = s.subnetInput.Update(msg)
-	return s, cmd
+func (s *S3Network) startEdit(mode editKind, placeholder string) {
+	s.editMode = mode
+	s.listInput.SetValue("")
+	s.listInput.Placeholder = placeholder
+	s.listInput.Focus()
 }
 
-func (s *S3Network) updateListEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (s *S3Network) updateEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
-			s.editingList = false
+			s.editMode = editNone
 			s.listInput.Blur()
+			s.syncFocusedInputs()
 			return s, nil
 		case "enter":
-			v := strings.TrimSpace(s.listInput.Value())
-			if v != "" {
-				if s.editListFor == s3FocusDNS {
+			if v := strings.TrimSpace(s.listInput.Value()); v != "" {
+				switch s.editMode {
+				case editSubnet:
+					s.subnets = append(s.subnets, v)
+				case editDNS:
 					s.dnsServers = append(s.dnsServers, v)
-				} else {
+				case editNTP:
 					s.ntpServers = append(s.ntpServers, v)
 				}
 			}
-			s.editingList = false
+			s.editMode = editNone
 			s.listInput.Blur()
+			s.syncFocusedInputs()
 			return s, nil
 		}
 	}
@@ -265,8 +245,8 @@ func (s *S3Network) updateListEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *S3Network) deleteLastItem(section int) {
-	switch section {
+func (s *S3Network) deleteLastItem() {
+	switch s.focusIdx {
 	case s3FocusSubnet:
 		if len(s.subnets) > 0 {
 			s.subnets = s.subnets[:len(s.subnets)-1]
@@ -282,31 +262,31 @@ func (s *S3Network) deleteLastItem(section int) {
 	}
 }
 
+func (s *S3Network) renderListSection(b *strings.Builder, label string, items []string, focused bool, mode editKind) {
+	b.WriteString(RenderSectionHeader(label, focused) + "\n")
+	for _, item := range items {
+		b.WriteString("    " + styles.StylePrimary.Render("•") + " " + item + "\n")
+	}
+	if s.editMode == mode {
+		b.WriteString("    " + s.listInput.View() + "\n")
+	} else if focused {
+		b.WriteString(styles.StyleMuted.Render("    Enter: 추가  d: 마지막 삭제") + "\n")
+	}
+	b.WriteString("\n")
+}
+
 func (s *S3Network) View() string {
 	var b strings.Builder
 	b.WriteString(styles.StyleTitle.Render("네트워크 설정") + "\n\n")
 
-	// 내부 서브넷 (리스트)
-	subFocused := s.focusIdx == s3FocusSubnet
-	b.WriteString(RenderSectionHeader("내부 서브넷 (CIDR)", subFocused) + "\n")
-	for _, sub := range s.subnets {
-		b.WriteString("    " + styles.StylePrimary.Render("•") + " " + sub + "\n")
-	}
-	if s.editingSubnet {
-		b.WriteString("    " + s.subnetInput.View() + "\n")
-	} else if subFocused {
-		b.WriteString(styles.StyleMuted.Render("    Enter: 추가  d: 마지막 삭제") + "\n")
-	}
-	b.WriteString("\n")
+	s.renderListSection(&b, "내부 서브넷 (CIDR)", s.subnets, s.focusIdx == s3FocusSubnet, editSubnet)
 
-	// HA mode
 	haStr := styles.RadioOff() + " 비활성"
 	if s.haMode {
 		haStr = styles.RadioOn() + " 활성"
 	}
 	b.WriteString(RenderSectionHeader("Control Plane HA 모드", s.focusIdx == s3FocusHaMode) + "  " + haStr + "\n\n")
 
-	// VIP (항상 표시)
 	b.WriteString(RenderSectionHeader("HA VIP", s.focusIdx == s3FocusVIP) + "\n")
 	b.WriteString("    " + s.vip.View() + "\n")
 	if !s.haMode {
@@ -314,40 +294,15 @@ func (s *S3Network) View() string {
 	}
 	b.WriteString("\n")
 
-	// DNSSEC
 	dnssecStr := styles.RadioOff() + " 비활성"
 	if s.dnssec {
 		dnssecStr = styles.RadioOn() + " 활성"
 	}
 	b.WriteString(RenderSectionHeader("DNSSEC 검증", s.focusIdx == s3FocusDNSSEC) + "  " + dnssecStr + "\n\n")
 
-	// DNS upstream
-	dnsFocused := s.focusIdx == s3FocusDNS
-	b.WriteString(RenderSectionHeader("DNS upstream 서버", dnsFocused) + "\n")
-	for _, srv := range s.dnsServers {
-		b.WriteString("    " + styles.StylePrimary.Render("•") + " " + srv + "\n")
-	}
-	if s.editingList && s.editListFor == s3FocusDNS {
-		b.WriteString("    " + s.listInput.View() + "\n")
-	} else if dnsFocused {
-		b.WriteString(styles.StyleMuted.Render("    Enter: 추가  d: 마지막 삭제") + "\n")
-	}
-	b.WriteString("\n")
+	s.renderListSection(&b, "DNS upstream 서버", s.dnsServers, s.focusIdx == s3FocusDNS, editDNS)
+	s.renderListSection(&b, "NTP upstream 서버", s.ntpServers, s.focusIdx == s3FocusNTP, editNTP)
 
-	// NTP upstream
-	ntpFocused := s.focusIdx == s3FocusNTP
-	b.WriteString(RenderSectionHeader("NTP upstream 서버", ntpFocused) + "\n")
-	for _, srv := range s.ntpServers {
-		b.WriteString("    " + styles.StylePrimary.Render("•") + " " + srv + "\n")
-	}
-	if s.editingList && s.editListFor == s3FocusNTP {
-		b.WriteString("    " + s.listInput.View() + "\n")
-	} else if ntpFocused {
-		b.WriteString(styles.StyleMuted.Render("    Enter: 추가  d: 마지막 삭제") + "\n")
-	}
-	b.WriteString("\n")
-
-	// Extra zone
 	b.WriteString(RenderSectionHeader("추가 DNS 존 (선택)", s.focusIdx == s3FocusExtraZone) + "  " + s.extraZone.View() + "\n")
 
 	prevFocused := s.focusIdx == s3FocusNav && s.navIdx == 0

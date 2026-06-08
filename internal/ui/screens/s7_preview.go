@@ -156,6 +156,9 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.navIdx++
 			}
 		case "enter", " ":
+			if s.saved {
+				return s, tea.Quit
+			}
 			switch s.focusIdx {
 			case s7FocusNav:
 				if s.navIdx == 0 {
@@ -249,6 +252,8 @@ func (s *S7Preview) View() string {
 		b.WriteString("\n" + styles.StyleSuccess.Render("✓ 저장 완료!") + "\n")
 		b.WriteString(styles.StyleMuted.Render(fmt.Sprintf("  %s\n  %s", s.inventoryPath, s.varsPath)) + "\n")
 		b.WriteString(styles.StyleMuted.Render("  기존 파일은 .bak으로 백업되었습니다") + "\n")
+		b.WriteString("\n" + styles.StyleTitle.Render("종료하시겠습니까?") + "  " +
+			styles.StyleMuted.Render("Enter 확인") + "\n")
 	}
 
 	prevFocused := s.focusIdx == s7FocusNav && s.navIdx == 0

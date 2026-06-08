@@ -21,7 +21,6 @@ var (
 	StyleHeader = lipgloss.NewStyle().
 			Background(ColorPrimary).
 			Foreground(lipgloss.Color("15")).
-			Padding(0, 2).
 			Bold(true)
 
 	StyleStep = lipgloss.NewStyle().

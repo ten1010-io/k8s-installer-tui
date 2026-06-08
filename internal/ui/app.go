@@ -52,37 +52,50 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
+		switch msg.String() {
+		case "ctrl+c":
 			return a, tea.Quit
+		case "pgup":
+			return a.goPrev()
+		case "pgdown":
+			return a.goNext()
 		}
 
 	case screens.NavigateNextMsg:
-		errs := a.screenList[a.current].Validate()
-		if len(errs) > 0 {
-			a.screenErrors = errs
-			return a, nil
-		}
-		a.screenErrors = nil
-		a.screenList[a.current].SyncToState(a.appState)
-		if a.current < len(a.screenList)-1 {
-			a.current++
-			a.screenList[a.current].SyncFromState(a.appState)
-		}
-		return a, nil
+		return a.goNext()
 
 	case screens.NavigatePrevMsg:
-		a.screenErrors = nil
-		if a.current > 0 {
-			a.screenList[a.current].SyncToState(a.appState)
-			a.current--
-			a.screenList[a.current].SyncFromState(a.appState)
-		}
-		return a, nil
+		return a.goPrev()
 	}
 
 	newModel, cmd := a.screenList[a.current].Update(msg)
 	a.screenList[a.current] = newModel.(screens.Screen)
 	return a, cmd
+}
+
+func (a *App) goNext() (tea.Model, tea.Cmd) {
+	errs := a.screenList[a.current].Validate()
+	if len(errs) > 0 {
+		a.screenErrors = errs
+		return a, nil
+	}
+	a.screenErrors = nil
+	a.screenList[a.current].SyncToState(a.appState)
+	if a.current < len(a.screenList)-1 {
+		a.current++
+		a.screenList[a.current].SyncFromState(a.appState)
+	}
+	return a, nil
+}
+
+func (a *App) goPrev() (tea.Model, tea.Cmd) {
+	a.screenErrors = nil
+	if a.current > 0 {
+		a.screenList[a.current].SyncToState(a.appState)
+		a.current--
+		a.screenList[a.current].SyncFromState(a.appState)
+	}
+	return a, nil
 }
 
 func (a *App) View() string {
@@ -118,7 +131,7 @@ func (a *App) View() string {
 	ob.WriteString("\n\n")
 	ob.WriteString(innerPanel)
 	ob.WriteString("\n\n")
-	ob.WriteString(styles.StyleMuted.Render("  ↑/↓: 이동   Enter: 선택   Ctrl+C: 종료"))
+	ob.WriteString(styles.StyleMuted.Render("  ↑/↓: 이동   Enter: 선택   PgUp/PgDn: 페이지   Ctrl+C: 종료"))
 	ob.WriteString("\n")
 
 	// Outer box (thin rounded border — wraps everything)
@@ -161,7 +174,7 @@ func (a *App) View() string {
 }
 
 func (a *App) renderHeader(width int) string {
-	title := styles.StyleHeader.Width(width).Render(" k8s-installer-tui ")
+	title := styles.StyleHeader.Width(width).Render("  k8s-installer-tui  ")
 
 	stepTitles := []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "5.AIPub", "6.인증서", "7.저장"}
 	parts := make([]string, len(a.screenList))

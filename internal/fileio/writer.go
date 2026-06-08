@@ -89,7 +89,7 @@ func renderInventory(s *state.AppState) ([]byte, error) {
 	}
 	root.Content = append(root.Content,
 		strNode("all"),
-		mappingNode2("hosts", allHosts),
+		mappingNode("hosts", allHosts),
 	)
 
 	// ki_cp_node
@@ -102,7 +102,7 @@ func renderInventory(s *state.AppState) ([]byte, error) {
 	}
 	root.Content = append(root.Content,
 		strNode("ki_cp_node"),
-		mappingNode2("hosts", kiCpHosts),
+		mappingNode("hosts", kiCpHosts),
 	)
 
 	// k8s_node
@@ -119,7 +119,7 @@ func renderInventory(s *state.AppState) ([]byte, error) {
 	}
 	root.Content = append(root.Content,
 		strNode("k8s_node"),
-		mappingNode2("hosts", k8sHosts),
+		mappingNode("hosts", k8sHosts),
 	)
 
 	var buf bytes.Buffer
@@ -210,12 +210,6 @@ func strNode(s string) *yaml.Node {
 }
 
 func mappingNode(key string, val *yaml.Node) *yaml.Node {
-	m := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	m.Content = append(m.Content, strNode(key), val)
-	return m
-}
-
-func mappingNode2(key string, val *yaml.Node) *yaml.Node {
 	m := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	m.Content = append(m.Content, strNode(key), val)
 	return m

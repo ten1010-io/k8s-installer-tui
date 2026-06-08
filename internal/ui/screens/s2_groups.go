@@ -186,8 +186,6 @@ func (s *S2Groups) View() string {
 		b.WriteString(renderGroupRow(r, colW, isSelectedRow, s.curCol) + "\n")
 	}
 
-	b.WriteString("\n" + styles.StyleMuted.Render("* Master / GPU Worker / CPU Worker는 상호 배타적입니다") + "\n")
-
 	prevFocused := s.focusNav && s.navIdx == 0
 	nextFocused := s.focusNav && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))

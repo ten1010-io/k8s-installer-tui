@@ -185,7 +185,7 @@ func (s *S1Nodes) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.editing = false
 			s.formErr = ""
 			return s, nil
-		case "up":
+		case "up", "shift+tab":
 			if s.formFocus > 0 {
 				if s.formFocus < s1FieldCount {
 					s.fields[s.formFocus].Blur()
@@ -202,17 +202,6 @@ func (s *S1Nodes) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 					s.fields[s.formFocus].Blur()
 				}
 				s.formFocus++
-				if s.formFocus < s1FieldCount {
-					s.fields[s.formFocus].Focus()
-					return s, textinput.Blink
-				}
-			}
-		case "shift+tab":
-			if s.formFocus > 0 {
-				if s.formFocus < s1FieldCount {
-					s.fields[s.formFocus].Blur()
-				}
-				s.formFocus--
 				if s.formFocus < s1FieldCount {
 					s.fields[s.formFocus].Focus()
 					return s, textinput.Blink

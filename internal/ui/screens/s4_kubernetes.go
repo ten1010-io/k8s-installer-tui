@@ -212,7 +212,7 @@ func (s *S4Kubernetes) View() string {
 	}
 	b.WriteString(RenderSectionHeader("HA 모드", f == s4FocusHaMode) + "  " + haStr + "\n\n")
 
-	b.WriteString(RenderSectionHeader("HA VIP", f == s4FocusVIP) + "\n")
+	b.WriteString(RenderSectionHeader("Ingress VIP", f == s4FocusVIP) + "\n")
 	b.WriteString("    " + s.vip.View() + "\n")
 	if !s.haMode {
 		b.WriteString("    " + styles.StyleMuted.Render("HA 활성 시 필수 — 예: 192.168.0.100") + "\n")
@@ -224,8 +224,6 @@ func (s *S4Kubernetes) View() string {
 
 	b.WriteString(RenderSectionHeader("HTTPS 포트", f == s4FocusHTTPS) +
 		"  " + s.httpsPort.View() + "\n\n")
-
-	b.WriteString(styles.StyleMuted.Render("  ※ controller_nodes는 2단계 ki_cp_node 선택과 동일하게 적용됩니다") + "\n")
 
 	prevFocused := f == s4FocusNav && s.navIdx == 0
 	nextFocused := f == s4FocusNav && s.navIdx == 1

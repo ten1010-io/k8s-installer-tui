@@ -9,19 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// inventoryYAML mirrors the structure of inventory.yml for parsing.
-type inventoryYAML struct {
-	All struct {
-		Hosts map[string]allHostEntry `yaml:"hosts"`
-	} `yaml:"all"`
-	KiCpNode struct {
-		Hosts map[string]interface{} `yaml:"hosts"`
-	} `yaml:"ki_cp_node"`
-	K8sNode struct {
-		Hosts map[string]k8sNodeEntry `yaml:"hosts"`
-	} `yaml:"k8s_node"`
-}
-
+// allHostEntry and k8sNodeEntry are used for decoding individual host entries.
 type allHostEntry struct {
 	AnsibleHost    string `yaml:"ansible_host"`
 	AnsiblePort    int    `yaml:"ansible_port"`
@@ -31,6 +19,20 @@ type allHostEntry struct {
 type k8sNodeEntry struct {
 	K8sCp     bool `yaml:"k8s_cp"`
 	NvidiaGPU bool `yaml:"nvidia_gpu"`
+}
+
+// mappingGet returns the value node for the given key in a YAML mapping node,
+// or nil if not found. Mapping node Content is [key0, val0, key1, val1, ...].
+func mappingGet(m *yaml.Node, key string) *yaml.Node {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // varsYAML mirrors the structure of group_vars/all/vars.yml for parsing.
@@ -76,6 +78,7 @@ type varsYAML struct {
 }
 
 // LoadInventory reads inventory.yml and populates the node/group fields of AppState.
+// Nodes are added in the exact order they appear in the YAML file.
 // Returns nil error and leaves state unchanged if the file does not exist.
 func LoadInventory(path string, s *state.AppState) error {
 	data, err := os.ReadFile(path)
@@ -86,43 +89,58 @@ func LoadInventory(path string, s *state.AppState) error {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
 
-	var inv inventoryYAML
-	if err := yaml.Unmarshal(data, &inv); err != nil {
+	// Decode into yaml.Node to preserve mapping key order.
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
+	if len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0] // DocumentNode → MappingNode
 
-	// Nodes — preserve order by iterating map (order may vary, acceptable)
-	s.Nodes = nil
-	for name, h := range inv.All.Hosts {
-		nc := state.NodeConfig{
-			Name:        name,
-			AnsibleHost: h.AnsibleHost,
+	// all.hosts — iterate Content in YAML file order to preserve node sequence.
+	if hostsNode := mappingGet(mappingGet(root, "all"), "hosts"); hostsNode != nil {
+		s.Nodes = nil
+		for i := 0; i+1 < len(hostsNode.Content); i += 2 {
+			name := hostsNode.Content[i].Value
+			var h allHostEntry
+			_ = hostsNode.Content[i+1].Decode(&h)
+			nc := state.NodeConfig{Name: name, AnsibleHost: h.AnsibleHost}
+			if h.AnsiblePort != 0 {
+				nc.AnsiblePort = strconv.Itoa(h.AnsiblePort)
+			}
+			if h.AnsibleSSHUser != "" {
+				nc.AnsibleUser = h.AnsibleSSHUser
+			}
+			s.Nodes = append(s.Nodes, nc)
 		}
-		if h.AnsiblePort != 0 {
-			nc.AnsiblePort = strconv.Itoa(h.AnsiblePort)
-		}
-		if h.AnsibleSSHUser != "" {
-			nc.AnsibleUser = h.AnsibleSSHUser
-		}
-		s.Nodes = append(s.Nodes, nc)
 	}
 
-	// Groups
-	s.KiCpNodes = nil
-	for name := range inv.KiCpNode.Hosts {
-		s.KiCpNodes = append(s.KiCpNodes, name)
+	// ki_cp_node.hosts — names only, order preserved.
+	if hostsNode := mappingGet(mappingGet(root, "ki_cp_node"), "hosts"); hostsNode != nil {
+		s.KiCpNodes = nil
+		for i := 0; i+1 < len(hostsNode.Content); i += 2 {
+			s.KiCpNodes = append(s.KiCpNodes, hostsNode.Content[i].Value)
+		}
 	}
 
-	s.K8sNodes = nil
-	s.K8sCpNodes = nil
-	s.NvidiaGPUNodes = nil
-	for name, entry := range inv.K8sNode.Hosts {
-		s.K8sNodes = append(s.K8sNodes, name)
-		if entry.K8sCp {
-			s.K8sCpNodes = append(s.K8sCpNodes, name)
-		}
-		if entry.NvidiaGPU {
-			s.NvidiaGPUNodes = append(s.NvidiaGPUNodes, name)
+	// k8s_node.hosts — names and role flags, order preserved.
+	if hostsNode := mappingGet(mappingGet(root, "k8s_node"), "hosts"); hostsNode != nil {
+		s.K8sNodes = nil
+		s.K8sCpNodes = nil
+		s.NvidiaGPUNodes = nil
+		for i := 0; i+1 < len(hostsNode.Content); i += 2 {
+			name := hostsNode.Content[i].Value
+			s.K8sNodes = append(s.K8sNodes, name)
+			var entry k8sNodeEntry
+			_ = hostsNode.Content[i+1].Decode(&entry)
+			if entry.K8sCp {
+				s.K8sCpNodes = append(s.K8sCpNodes, name)
+			}
+			if entry.NvidiaGPU {
+				s.NvidiaGPUNodes = append(s.NvidiaGPUNodes, name)
+			}
 		}
 	}
 

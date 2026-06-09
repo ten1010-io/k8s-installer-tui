@@ -34,21 +34,20 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: 'ten-infra', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
                     sh '''
                         VERSION=v$(cat VERSION)
-                        # 이미 같은 태그가 있으면 스킵
-                        if git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
+                        REMOTE_URL=https://x-access-token:${GH_TOKEN}@$(git remote get-url origin | sed 's|https://||')
+                        if git ls-remote --tags "${REMOTE_URL}" | grep -q "refs/tags/${VERSION}$"; then
                             echo "Tag ${VERSION} already exists, skipping."
                             exit 0
                         fi
                         git config user.email "jenkins@ci"
                         git config user.name "Jenkins"
                         git tag -a "${VERSION}" -m "Release ${VERSION}"
-                        git push https://x-access-token:${GH_TOKEN}@$(git remote get-url origin | sed 's|https://||') "refs/tags/${VERSION}"
-                        echo "TAG_CREATED=${VERSION}" > tag.env
+                        git push "${REMOTE_URL}" "refs/tags/${VERSION}"
+                        echo "${VERSION}" > tag.env
                     '''
                     script {
                         if (fileExists('tag.env')) {
-                            def props = readProperties file: 'tag.env'
-                            env.TAG_NAME = props.TAG_CREATED
+                            env.TAG_NAME = readFile('tag.env').trim()
                         }
                     }
                 }

@@ -25,8 +25,9 @@ pipeline {
 
         stage('Tag') {
             // main 브랜치 push 시 VERSION 파일 기준으로 자동 태깅
+            // GIT_BRANCH는 일반 파이프라인에서 "origin/main" 형태로 설정됨
             when {
-                branch 'main'
+                expression { return env.GIT_BRANCH ==~ /.*\/main|^main$/ }
                 not { buildingTag() }
             }
             steps {

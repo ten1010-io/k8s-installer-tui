@@ -94,15 +94,16 @@ pipeline {
                 withCredentials([string(credentialsId: 'github-token', variable: 'GH_TOKEN')]) {
                     sh '''
                         REPO=$(git remote get-url origin | sed 's|https://github.com/||;s|\\.git$||')
+
                         curl -fsSL \
                             -X POST \
                             -H "Authorization: Bearer ${GH_TOKEN}" \
                             -H "Content-Type: application/json" \
                             "https://api.github.com/repos/${REPO}/releases" \
                             -d "{\\"tag_name\\":\\"${TAG_NAME}\\",\\"name\\":\\"${TAG_NAME}\\",\\"body\\":\\"Release ${TAG_NAME}\\"}" \
-                            > release.json
+                            -o release.json
 
-                        UPLOAD_URL=$(cat release.json | grep upload_url | cut -d'"' -f4 | cut -d'{' -f1)
+                        UPLOAD_URL=$(python3 -c "import json; print(json.load(open('release.json'))['upload_url'].split('{')[0])")
 
                         for FILE in dist/${BINARY}-linux-amd64 dist/${BINARY}-linux-arm64; do
                             curl -fsSL \

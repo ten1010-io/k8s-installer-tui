@@ -36,19 +36,17 @@ pipeline {
                         VERSION=v$(cat VERSION)
                         REMOTE_URL=https://x-access-token:${GH_TOKEN}@$(git remote get-url origin | sed 's|https://||')
                         if git ls-remote --tags "${REMOTE_URL}" | grep -q "refs/tags/${VERSION}$"; then
-                            echo "Tag ${VERSION} already exists, skipping."
-                            exit 0
+                            echo "Tag ${VERSION} already exists, skipping tag creation."
+                        else
+                            git config user.email "jenkins@ci"
+                            git config user.name "Jenkins"
+                            git tag -a "${VERSION}" -m "Release ${VERSION}"
+                            git push "${REMOTE_URL}" "refs/tags/${VERSION}"
                         fi
-                        git config user.email "jenkins@ci"
-                        git config user.name "Jenkins"
-                        git tag -a "${VERSION}" -m "Release ${VERSION}"
-                        git push "${REMOTE_URL}" "refs/tags/${VERSION}"
                         echo "${VERSION}" > tag.env
                     '''
                     script {
-                        if (fileExists('tag.env')) {
-                            env.TAG_NAME = readFile('tag.env').trim()
-                        }
+                        env.TAG_NAME = readFile('tag.env').trim()
                     }
                 }
             }
@@ -94,20 +92,29 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: 'ten-infra', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
                     sh '''
                         REPO=$(git remote get-url origin | sed 's|https://github.com/||;s|\\.git$||')
+                        AUTH="-H \\"Authorization: Bearer ${GH_TOKEN}\\""
 
-                        curl -fsSL \
-                            -X POST \
+                        # 기존 릴리즈 확인
+                        STATUS=$(curl -sL -o release.json -w "%{http_code}" \
                             -H "Authorization: Bearer ${GH_TOKEN}" \
-                            -H "Content-Type: application/json" \
-                            "https://api.github.com/repos/${REPO}/releases" \
-                            -d "{\\"tag_name\\":\\"${TAG_NAME}\\",\\"name\\":\\"${TAG_NAME}\\",\\"body\\":\\"Release ${TAG_NAME}\\"}" \
-                            -o release.json
+                            "https://api.github.com/repos/${REPO}/releases/tags/${TAG_NAME}")
+
+                        if [ "${STATUS}" != "200" ]; then
+                            echo "Creating release ${TAG_NAME}..."
+                            curl -fsSL -X POST \
+                                -H "Authorization: Bearer ${GH_TOKEN}" \
+                                -H "Content-Type: application/json" \
+                                "https://api.github.com/repos/${REPO}/releases" \
+                                -d "{\\"tag_name\\":\\"${TAG_NAME}\\",\\"name\\":\\"${TAG_NAME}\\",\\"body\\":\\"Release ${TAG_NAME}\\"}" \
+                                -o release.json
+                        else
+                            echo "Release ${TAG_NAME} already exists, uploading assets..."
+                        fi
 
                         UPLOAD_URL=$(python3 -c "import json; print(json.load(open('release.json'))['upload_url'].split('{')[0])")
 
                         for FILE in dist/${BINARY}-linux-amd64 dist/${BINARY}-linux-arm64; do
-                            curl -fsSL \
-                                -X POST \
+                            curl -fsSL -X POST \
                                 -H "Authorization: Bearer ${GH_TOKEN}" \
                                 -H "Content-Type: application/octet-stream" \
                                 "${UPLOAD_URL}?name=$(basename ${FILE})" \

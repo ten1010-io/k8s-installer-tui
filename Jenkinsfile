@@ -92,9 +92,7 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: 'ten-infra', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
                     sh '''
                         REPO=$(git remote get-url origin | sed 's|https://github.com/||;s|\\.git$||')
-                        AUTH="-H \\"Authorization: Bearer ${GH_TOKEN}\\""
 
-                        # 기존 릴리즈 확인
                         STATUS=$(curl -sL -o release.json -w "%{http_code}" \
                             -H "Authorization: Bearer ${GH_TOKEN}" \
                             "https://api.github.com/repos/${REPO}/releases/tags/${TAG_NAME}")
@@ -108,11 +106,14 @@ pipeline {
                                 -d "{\\"tag_name\\":\\"${TAG_NAME}\\",\\"name\\":\\"${TAG_NAME}\\",\\"body\\":\\"Release ${TAG_NAME}\\"}" \
                                 -o release.json
                         else
-                            echo "Release ${TAG_NAME} already exists, uploading assets..."
+                            echo "Release ${TAG_NAME} already exists."
                         fi
-
-                        UPLOAD_URL=$(python3 -c "import json; print(json.load(open('release.json'))['upload_url'].split('{')[0])")
-
+                    '''
+                    script {
+                        def release = new groovy.json.JsonSlurper().parseText(readFile('release.json'))
+                        env.UPLOAD_URL = release.upload_url.replaceAll(/\{[^}]*\}/, '')
+                    }
+                    sh '''
                         for FILE in dist/${BINARY}-linux-amd64 dist/${BINARY}-linux-arm64; do
                             curl -fsSL -X POST \
                                 -H "Authorization: Bearer ${GH_TOKEN}" \

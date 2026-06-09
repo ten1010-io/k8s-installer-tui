@@ -37,17 +37,14 @@ pipeline {
         }
 
         stage('Build') {
-            parallel {
-                stage('linux/amd64') {
-                    steps {
-                        sh 'make build-linux'
-                    }
-                }
-                stage('linux/arm64') {
-                    steps {
-                        sh 'make build-linux-arm64'
-                    }
-                }
+            steps {
+                sh '''
+                    VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+                    LDFLAGS="-X main.version=${VERSION} -s -w"
+                    mkdir -p dist
+                    GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/${BINARY}-linux-amd64 .
+                    GOOS=linux GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/${BINARY}-linux-arm64 .
+                '''
             }
         }
 

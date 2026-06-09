@@ -31,7 +31,7 @@ pipeline {
                 not { buildingTag() }
             }
             steps {
-                withCredentials([string(credentialsId: 'ten-infra', variable: 'GH_TOKEN')]) {
+                withCredentials([usernamePassword(credentialsId: 'ten-infra', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
                     sh '''
                         VERSION=v$(cat VERSION)
                         # 이미 같은 태그가 있으면 스킵
@@ -92,7 +92,7 @@ pipeline {
                 expression { return env.TAG_NAME?.startsWith('v') }
             }
             steps {
-                withCredentials([string(credentialsId: 'ten-infra', variable: 'GH_TOKEN')]) {
+                withCredentials([usernamePassword(credentialsId: 'ten-infra', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
                     sh '''
                         REPO=$(git remote get-url origin | sed 's|https://github.com/||;s|\\.git$||')
 

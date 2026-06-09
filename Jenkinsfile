@@ -23,6 +23,37 @@ pipeline {
             }
         }
 
+        stage('Tag') {
+            // main 브랜치 push 시 VERSION 파일 기준으로 자동 태깅
+            when {
+                branch 'main'
+                not { buildingTag() }
+            }
+            steps {
+                withCredentials([string(credentialsId: 'github-token', variable: 'GH_TOKEN')]) {
+                    sh '''
+                        VERSION=v$(cat VERSION)
+                        # 이미 같은 태그가 있으면 스킵
+                        if git ls-remote --tags origin | grep -q "refs/tags/${VERSION}$"; then
+                            echo "Tag ${VERSION} already exists, skipping."
+                            exit 0
+                        fi
+                        git config user.email "jenkins@ci"
+                        git config user.name "Jenkins"
+                        git tag -a "${VERSION}" -m "Release ${VERSION}"
+                        git push https://x-access-token:${GH_TOKEN}@$(git remote get-url origin | sed 's|https://||') "refs/tags/${VERSION}"
+                        echo "TAG_CREATED=${VERSION}" > tag.env
+                    '''
+                    script {
+                        if (fileExists('tag.env')) {
+                            def props = readProperties file: 'tag.env'
+                            env.TAG_NAME = props.TAG_CREATED
+                        }
+                    }
+                }
+            }
+        }
+
         stage('Deps') {
             steps {
                 sh 'go mod tidy'
@@ -54,11 +85,42 @@ pipeline {
                                  fingerprint: true
             }
         }
+
+        stage('Release') {
+            when {
+                expression { return env.TAG_NAME?.startsWith('v') }
+            }
+            steps {
+                withCredentials([string(credentialsId: 'github-token', variable: 'GH_TOKEN')]) {
+                    sh '''
+                        REPO=$(git remote get-url origin | sed 's|https://github.com/||;s|\\.git$||')
+                        curl -fsSL \
+                            -X POST \
+                            -H "Authorization: Bearer ${GH_TOKEN}" \
+                            -H "Content-Type: application/json" \
+                            "https://api.github.com/repos/${REPO}/releases" \
+                            -d "{\\"tag_name\\":\\"${TAG_NAME}\\",\\"name\\":\\"${TAG_NAME}\\",\\"body\\":\\"Release ${TAG_NAME}\\"}" \
+                            > release.json
+
+                        UPLOAD_URL=$(cat release.json | grep upload_url | cut -d'"' -f4 | cut -d'{' -f1)
+
+                        for FILE in dist/${BINARY}-linux-amd64 dist/${BINARY}-linux-arm64; do
+                            curl -fsSL \
+                                -X POST \
+                                -H "Authorization: Bearer ${GH_TOKEN}" \
+                                -H "Content-Type: application/octet-stream" \
+                                "${UPLOAD_URL}?name=$(basename ${FILE})" \
+                                --data-binary @${FILE}
+                        done
+                    '''
+                }
+            }
+        }
     }
 
     post {
         always {
-            sh "rm -rf ${DIST_DIR}"
+            sh "rm -rf ${DIST_DIR} tag.env release.json 2>/dev/null || true"
         }
         success {
             echo "Build ${env.BUILD_NUMBER} succeeded — ${env.GIT_COMMIT?.take(7)}"

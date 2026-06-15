@@ -73,6 +73,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
+// skipScreen returns true for screens that should be skipped in navigation.
+// S6 (index 5, 인증서) is skipped when AIPub is not being installed.
+func (a *App) skipScreen(idx int) bool {
+	return idx == 5 && !a.appState.AipubEnabled
+}
+
 func (a *App) goNext() (tea.Model, tea.Cmd) {
 	errs := a.screenList[a.current].Validate()
 	if len(errs) > 0 {
@@ -81,8 +87,12 @@ func (a *App) goNext() (tea.Model, tea.Cmd) {
 	}
 	a.screenErrors = nil
 	a.screenList[a.current].SyncToState(a.appState)
-	if a.current < len(a.screenList)-1 {
-		a.current++
+	next := a.current + 1
+	for next < len(a.screenList) && a.skipScreen(next) {
+		next++
+	}
+	if next < len(a.screenList) {
+		a.current = next
 		a.screenList[a.current].SyncFromState(a.appState)
 	}
 	return a, nil
@@ -92,7 +102,11 @@ func (a *App) goPrev() (tea.Model, tea.Cmd) {
 	a.screenErrors = nil
 	if a.current > 0 {
 		a.screenList[a.current].SyncToState(a.appState)
-		a.current--
+		prev := a.current - 1
+		for prev > 0 && a.skipScreen(prev) {
+			prev--
+		}
+		a.current = prev
 		a.screenList[a.current].SyncFromState(a.appState)
 	}
 	return a, nil
@@ -180,6 +194,8 @@ func (a *App) renderHeader(width int) string {
 	parts := make([]string, len(a.screenList))
 	for i, t := range stepTitles {
 		switch {
+		case a.skipScreen(i):
+			parts[i] = styles.StyleMuted.Render("(" + t + ")")
 		case i == a.current:
 			parts[i] = styles.StyleStepActive.Render("[ " + t + " ]")
 		case i < a.current:

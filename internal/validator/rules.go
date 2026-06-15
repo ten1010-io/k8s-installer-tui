@@ -157,20 +157,28 @@ func validateKubernetes(s *state.AppState) []Error {
 		errs = append(errs, Error{"k8s_certificate_validity_period", "형식이 올바르지 않습니다 (예: 26280h)"})
 	}
 
-	if s.K8sIngressClassName == "" || !reK8sName.MatchString(s.K8sIngressClassName) {
-		errs = append(errs, Error{"k8s_ingress_class.name", "K8s 네이밍 규칙을 따라야 합니다 (소문자, 숫자, 하이픈)"})
+	if s.K8sIngressMode != 1 && s.K8sIngressMode != 2 {
+		errs = append(errs, Error{"k8s_ingress_mode", "인그레스 모드는 1 또는 2여야 합니다"})
 	}
-	if s.K8sIngressHaMode && s.K8sIngressHaModeVIP == "" {
-		errs = append(errs, Error{"k8s_ingress_class.ha_mode_vip", "HA 모드 활성화 시 VIP를 설정해야 합니다"})
+
+	if s.K8sIngressVIP == "" {
+		errs = append(errs, Error{"k8s_ingress_vip", "Ingress VIP를 입력해주세요"})
+	} else if net.ParseIP(s.K8sIngressVIP) == nil {
+		errs = append(errs, Error{"k8s_ingress_vip", "유효한 IPv4 주소를 입력해주세요"})
 	}
-	if s.K8sIngressHaModeVIP != "" && net.ParseIP(s.K8sIngressHaModeVIP) == nil {
-		errs = append(errs, Error{"k8s_ingress_class.ha_mode_vip", "유효한 IPv4 주소를 입력해주세요"})
+
+	if s.K8sIngressMode == 1 {
+		if s.K8sGatewayVIP == "" {
+			errs = append(errs, Error{"k8s_gateway_vip", "별도 IP 모드에서는 Gateway VIP를 입력해주세요"})
+		} else if net.ParseIP(s.K8sGatewayVIP) == nil {
+			errs = append(errs, Error{"k8s_gateway_vip", "유효한 IPv4 주소를 입력해주세요"})
+		} else if s.K8sGatewayVIP == s.K8sIngressVIP {
+			errs = append(errs, Error{"k8s_gateway_vip", "별도 IP 모드에서는 Ingress VIP와 Gateway VIP가 달라야 합니다"})
+		}
 	}
-	if s.K8sIngressHttpPort <= 0 || s.K8sIngressHttpPort > 65535 {
-		errs = append(errs, Error{"k8s_ingress_class.http_hostport", "포트는 1-65535 범위여야 합니다"})
-	}
-	if s.K8sIngressHttpsPort <= 0 || s.K8sIngressHttpsPort > 65535 {
-		errs = append(errs, Error{"k8s_ingress_class.https_hostport", "포트는 1-65535 범위여야 합니다"})
+
+	if s.K8sIngressHostNetworkPort <= 0 || s.K8sIngressHostNetworkPort > 65535 {
+		errs = append(errs, Error{"k8s_ingress_host_network_port", "포트는 1-65535 범위여야 합니다"})
 	}
 
 	return errs

@@ -146,16 +146,39 @@ func renderVars(s *state.AppState) ([]byte, error) {
 		"ki_cp_ntp_server_upstream_servers": s.KiCpNtpUpstreamServers,
 
 		"k8s_certificate_validity_period": s.K8sCertificateValidityPeriod,
-		"k8s_ingress_classes": []map[string]interface{}{
-			{
-				"name":           s.K8sIngressClassName,
-				"controller_nodes": s.KiCpNodes,
-				"ha_mode":        s.K8sIngressHaMode,
-				"ha_mode_vip":    nullIfEmpty(s.K8sIngressHaModeVIP),
-				"http_hostport":  s.K8sIngressHttpPort,
-				"https_hostport": s.K8sIngressHttpsPort,
-			},
+		"k8s_load_balancers": func() []map[string]interface{} {
+			lbs := []map[string]interface{}{{
+				"name":  "lb1",
+				"vip":   s.K8sIngressVIP,
+				"nodes": s.KiCpNodes,
+			}}
+			if s.K8sIngressMode == 1 {
+				lbs = append(lbs, map[string]interface{}{
+					"name":  "lb2",
+					"vip":   s.K8sGatewayVIP,
+					"nodes": s.KiCpNodes,
+				})
+			}
+			return lbs
+		}(),
+		"k8s_default_ingress_class": map[string]interface{}{
+			"load_balancer":     "lb1",
+			"host_network_port": s.K8sIngressHostNetworkPort,
 		},
+		"k8s_gateways": func() []map[string]interface{} {
+			if s.K8sIngressMode == 1 {
+				return []map[string]interface{}{{
+					"name":  "lb2",
+					"vip":   s.K8sGatewayVIP,
+					"nodes": s.KiCpNodes,
+				}}
+			}
+			return []map[string]interface{}{{
+				"name":  "lb1",
+				"vip":   s.K8sIngressVIP,
+				"nodes": s.KiCpNodes,
+			}}
+		}(),
 
 		"aipub_ingress_zone":             s.AipubIngressZone,
 		"aipub_ha_mode":                  s.AipubHaMode,

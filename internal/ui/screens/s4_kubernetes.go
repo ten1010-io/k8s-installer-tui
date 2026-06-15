@@ -12,34 +12,29 @@ import (
 
 // Focus layout:
 //   0  : 인증서 유효기간
-//   1  : ingress class 이름
-//   2  : HA 모드 토글
-//   3  : VIP 입력
-//   4  : HTTP 포트
-//   5  : HTTPS 포트
-//   6  : nav slot (←/→: 이전/다음)
-//
-// controller_nodes는 ki_cp_node 선택을 자동 사용 (UI 없음).
+//   1  : 인그레스 모드 (1=별도IP / 2=공유IP)
+//   2  : Ingress VIP
+//   3  : Gateway VIP  — mode 1 전용, mode 2 에서는 skip
+//   4  : Host Network Port
+//   5  : nav slot (←/→: 이전/다음)
 
 const (
 	s4FocusCert = iota
-	s4FocusName
-	s4FocusHaMode
-	s4FocusVIP
-	s4FocusHTTP
-	s4FocusHTTPS
+	s4FocusMode
+	s4FocusIngressVIP
+	s4FocusGatewayVIP
+	s4FocusHostPort
 	s4FocusNav
 	s4FocusMax = s4FocusNav
 )
 
 type S4Kubernetes struct {
 	certValidity textinput.Model
-	ingressName  textinput.Model
-	haMode       bool
-	vip          textinput.Model
-	httpPort     textinput.Model
-	httpsPort    textinput.Model
+	ingressVIP   textinput.Model
+	gatewayVIP   textinput.Model
+	hostPort     textinput.Model
 
+	mode     int // 1 or 2
 	focusIdx int
 	navIdx   int
 	width    int
@@ -55,10 +50,10 @@ func NewS4Kubernetes() *S4Kubernetes {
 	}
 	return &S4Kubernetes{
 		certValidity: newInput("26280h", 16),
-		ingressName:  newInput("lb1", 64),
-		vip:          newInput("예: 192.168.0.100", 64),
-		httpPort:     newInput("80", 8),
-		httpsPort:    newInput("443", 8),
+		ingressVIP:   newInput("예: 101.202.62.86", 64),
+		gatewayVIP:   newInput("예: 101.202.62.87", 64),
+		hostPort:     newInput("443", 8),
+		mode:         2,
 	}
 }
 
@@ -70,14 +65,14 @@ func (s *S4Kubernetes) SetSize(w, h int) {
 
 func (s *S4Kubernetes) SyncFromState(st *state.AppState) {
 	s.certValidity.SetValue(st.K8sCertificateValidityPeriod)
-	s.ingressName.SetValue(st.K8sIngressClassName)
-	s.haMode = st.K8sIngressHaMode
-	s.vip.SetValue(st.K8sIngressHaModeVIP)
-	if st.K8sIngressHttpPort > 0 {
-		s.httpPort.SetValue(strconv.Itoa(st.K8sIngressHttpPort))
+	s.mode = st.K8sIngressMode
+	if s.mode != 1 && s.mode != 2 {
+		s.mode = 2
 	}
-	if st.K8sIngressHttpsPort > 0 {
-		s.httpsPort.SetValue(strconv.Itoa(st.K8sIngressHttpsPort))
+	s.ingressVIP.SetValue(st.K8sIngressVIP)
+	s.gatewayVIP.SetValue(st.K8sGatewayVIP)
+	if st.K8sIngressHostNetworkPort > 0 {
+		s.hostPort.SetValue(strconv.Itoa(st.K8sIngressHostNetworkPort))
 	}
 	s.focusIdx = 0
 	s.navIdx = 0
@@ -86,14 +81,15 @@ func (s *S4Kubernetes) SyncFromState(st *state.AppState) {
 
 func (s *S4Kubernetes) SyncToState(st *state.AppState) {
 	st.K8sCertificateValidityPeriod = s.certValidity.Value()
-	st.K8sIngressClassName = strings.TrimSpace(s.ingressName.Value())
-	st.K8sIngressHaMode = s.haMode
-	st.K8sIngressHaModeVIP = strings.TrimSpace(s.vip.Value())
-	if p, err := strconv.Atoi(s.httpPort.Value()); err == nil {
-		st.K8sIngressHttpPort = p
+	st.K8sIngressMode = s.mode
+	st.K8sIngressVIP = strings.TrimSpace(s.ingressVIP.Value())
+	if s.mode == 1 {
+		st.K8sGatewayVIP = strings.TrimSpace(s.gatewayVIP.Value())
+	} else {
+		st.K8sGatewayVIP = ""
 	}
-	if p, err := strconv.Atoi(s.httpsPort.Value()); err == nil {
-		st.K8sIngressHttpsPort = p
+	if p, err := strconv.Atoi(s.hostPort.Value()); err == nil {
+		st.K8sIngressHostNetworkPort = p
 	}
 }
 
@@ -101,19 +97,21 @@ func (s *S4Kubernetes) Validate() []string {
 	if s.certValidity.Value() == "" {
 		return []string{"인증서 유효기간을 입력해주세요 (예: 26280h)"}
 	}
-	if strings.TrimSpace(s.ingressName.Value()) == "" {
-		return []string{"Ingress class 이름을 입력해주세요"}
+	if strings.TrimSpace(s.ingressVIP.Value()) == "" {
+		return []string{"Ingress VIP를 입력해주세요"}
 	}
-	if s.haMode && strings.TrimSpace(s.vip.Value()) == "" {
-		return []string{"HA 모드 활성화 시 VIP를 입력해주세요"}
+	if s.mode == 1 {
+		gw := strings.TrimSpace(s.gatewayVIP.Value())
+		if gw == "" {
+			return []string{"별도 IP 모드에서는 Gateway VIP를 입력해주세요"}
+		}
+		if gw == strings.TrimSpace(s.ingressVIP.Value()) {
+			return []string{"별도 IP 모드에서는 Ingress VIP와 Gateway VIP가 달라야 합니다"}
+		}
 	}
-	httpP, err1 := strconv.Atoi(s.httpPort.Value())
-	httpsP, err2 := strconv.Atoi(s.httpsPort.Value())
-	if err1 != nil || httpP < 1 || httpP > 65535 {
-		return []string{"HTTP 포트는 1-65535 범위여야 합니다"}
-	}
-	if err2 != nil || httpsP < 1 || httpsP > 65535 {
-		return []string{"HTTPS 포트는 1-65535 범위여야 합니다"}
+	p, err := strconv.Atoi(s.hostPort.Value())
+	if err != nil || p < 1 || p > 65535 {
+		return []string{"Host Network Port는 1-65535 범위여야 합니다"}
 	}
 	return nil
 }
@@ -122,22 +120,35 @@ func (s *S4Kubernetes) Init() tea.Cmd { return nil }
 
 func (s *S4Kubernetes) syncFocus() {
 	s.certValidity.Blur()
-	s.ingressName.Blur()
-	s.vip.Blur()
-	s.httpPort.Blur()
-	s.httpsPort.Blur()
+	s.ingressVIP.Blur()
+	s.gatewayVIP.Blur()
+	s.hostPort.Blur()
 	switch s.focusIdx {
 	case s4FocusCert:
 		s.certValidity.Focus()
-	case s4FocusName:
-		s.ingressName.Focus()
-	case s4FocusVIP:
-		s.vip.Focus()
-	case s4FocusHTTP:
-		s.httpPort.Focus()
-	case s4FocusHTTPS:
-		s.httpsPort.Focus()
+	case s4FocusIngressVIP:
+		s.ingressVIP.Focus()
+	case s4FocusGatewayVIP:
+		s.gatewayVIP.Focus()
+	case s4FocusHostPort:
+		s.hostPort.Focus()
 	}
+}
+
+func (s *S4Kubernetes) nextFocus() int {
+	next := s.focusIdx + 1
+	if next == s4FocusGatewayVIP && s.mode == 2 {
+		next++
+	}
+	return next
+}
+
+func (s *S4Kubernetes) prevFocus() int {
+	prev := s.focusIdx - 1
+	if prev == s4FocusGatewayVIP && s.mode == 2 {
+		prev--
+	}
+	return prev
 }
 
 func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -145,22 +156,36 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if s.focusIdx > 0 {
-				s.focusIdx--
+			if prev := s.prevFocus(); prev >= 0 {
+				s.focusIdx = prev
 				s.syncFocus()
 			}
 		case "down", "j":
-			if s.focusIdx < s4FocusMax {
-				s.focusIdx++
+			if next := s.nextFocus(); next <= s4FocusMax {
+				s.focusIdx = next
 				s.syncFocus()
 			}
 		case "left", "h":
-			if s.focusIdx == s4FocusNav && s.navIdx > 0 {
-				s.navIdx--
+			switch s.focusIdx {
+			case s4FocusMode:
+				if s.mode > 1 {
+					s.mode--
+				}
+			case s4FocusNav:
+				if s.navIdx > 0 {
+					s.navIdx--
+				}
 			}
 		case "right", "l":
-			if s.focusIdx == s4FocusNav && s.navIdx < 1 {
-				s.navIdx++
+			switch s.focusIdx {
+			case s4FocusMode:
+				if s.mode < 2 {
+					s.mode++
+				}
+			case s4FocusNav:
+				if s.navIdx < 1 {
+					s.navIdx++
+				}
 			}
 		case "enter", " ":
 			switch s.focusIdx {
@@ -169,8 +194,12 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return s, Prev()
 				}
 				return s, Next()
-			case s4FocusHaMode:
-				s.haMode = !s.haMode
+			case s4FocusMode:
+				if s.mode == 1 {
+					s.mode = 2
+				} else {
+					s.mode = 1
+				}
 			}
 		case "ctrl+n":
 			return s, Next()
@@ -182,14 +211,12 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch s.focusIdx {
 	case s4FocusCert:
 		s.certValidity, cmd = s.certValidity.Update(msg)
-	case s4FocusName:
-		s.ingressName, cmd = s.ingressName.Update(msg)
-	case s4FocusVIP:
-		s.vip, cmd = s.vip.Update(msg)
-	case s4FocusHTTP:
-		s.httpPort, cmd = s.httpPort.Update(msg)
-	case s4FocusHTTPS:
-		s.httpsPort, cmd = s.httpsPort.Update(msg)
+	case s4FocusIngressVIP:
+		s.ingressVIP, cmd = s.ingressVIP.Update(msg)
+	case s4FocusGatewayVIP:
+		s.gatewayVIP, cmd = s.gatewayVIP.Update(msg)
+	case s4FocusHostPort:
+		s.hostPort, cmd = s.hostPort.Update(msg)
 	}
 	return s, cmd
 }
@@ -200,30 +227,43 @@ func (s *S4Kubernetes) View() string {
 
 	f := s.focusIdx
 
+	// 인증서 유효기간
 	b.WriteString(RenderSectionHeader("인증서 유효기간", f == s4FocusCert) +
 		"  " + s.certValidity.View() + styles.StyleMuted.Render("  (예: 26280h = 3년)") + "\n\n")
 
-	b.WriteString(RenderSectionHeader("Ingress Class 이름", f == s4FocusName) +
-		"  " + s.ingressName.View() + "\n\n")
-
-	haStr := styles.RadioOff() + " 비활성"
-	if s.haMode {
-		haStr = styles.RadioOn() + " 활성"
+	// 인그레스 모드 선택
+	mode1Radio := styles.RadioOff() + " 1. 별도 IP"
+	mode2Radio := styles.RadioOff() + " 2. 공유 IP"
+	if s.mode == 1 {
+		mode1Radio = styles.RadioOn() + " 1. 별도 IP"
+	} else {
+		mode2Radio = styles.RadioOn() + " 2. 공유 IP"
 	}
-	b.WriteString(RenderSectionHeader("HA 모드", f == s4FocusHaMode) + "  " + haStr + "\n\n")
-
-	b.WriteString(RenderSectionHeader("Ingress VIP", f == s4FocusVIP) + "\n")
-	b.WriteString("    " + s.vip.View() + "\n")
-	if !s.haMode {
-		b.WriteString("    " + styles.StyleMuted.Render("HA 활성 시 필수 — 예: 192.168.0.100") + "\n")
+	modeHint := ""
+	if f == s4FocusMode {
+		modeHint = styles.StyleMuted.Render("  ← → 또는 Enter")
 	}
-	b.WriteString("\n")
+	b.WriteString(RenderSectionHeader("인그레스 모드", f == s4FocusMode) + modeHint + "\n")
+	b.WriteString("    " + mode1Radio + styles.StyleMuted.Render("  — Ingress/Gateway 개별 VIP") + "\n")
+	b.WriteString("    " + mode2Radio + styles.StyleMuted.Render("  — Ingress/Gateway 동일 VIP") + "\n\n")
 
-	b.WriteString(RenderSectionHeader("HTTP 포트", f == s4FocusHTTP) +
-		"  " + s.httpPort.View() + "\n\n")
+	// Ingress VIP
+	if s.mode == 2 {
+		b.WriteString(RenderSectionHeader("Ingress/Gateway 공유 VIP", f == s4FocusIngressVIP) + "\n")
+	} else {
+		b.WriteString(RenderSectionHeader("Ingress VIP", f == s4FocusIngressVIP) + "\n")
+	}
+	b.WriteString("    " + s.ingressVIP.View() + "\n\n")
 
-	b.WriteString(RenderSectionHeader("HTTPS 포트", f == s4FocusHTTPS) +
-		"  " + s.httpsPort.View() + "\n\n")
+	// Gateway VIP — mode 1 전용
+	if s.mode == 1 {
+		b.WriteString(RenderSectionHeader("Gateway VIP", f == s4FocusGatewayVIP) + "\n")
+		b.WriteString("    " + s.gatewayVIP.View() + "\n\n")
+	}
+
+	// Host Network Port
+	b.WriteString(RenderSectionHeader("Host Network Port", f == s4FocusHostPort) +
+		"  " + s.hostPort.View() + "\n\n")
 
 	prevFocused := f == s4FocusNav && s.navIdx == 0
 	nextFocused := f == s4FocusNav && s.navIdx == 1

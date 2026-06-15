@@ -54,7 +54,7 @@ func NewS1Nodes() *S1Nodes {
 		s.fields[i] = t
 	}
 	s.fields[s1FieldName].Placeholder = "node1"
-	s.fields[s1FieldHost].Placeholder = "192.168.0.1"
+	s.fields[s1FieldHost].Placeholder = "x.x.x.x"
 	s.fields[s1FieldPort].Placeholder = "22 (기본값)"
 	s.fields[s1FieldUser].Placeholder = "root (기본값)"
 	return s

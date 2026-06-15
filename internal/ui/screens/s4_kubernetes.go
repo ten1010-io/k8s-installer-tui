@@ -13,15 +13,19 @@ import (
 // Focus layout:
 //   0  : 인증서 유효기간
 //   1  : 인그레스 모드 (1=별도IP / 2=공유IP)
-//   2  : Ingress VIP
-//   3  : Gateway VIP  — mode 1 전용, mode 2 에서는 skip
-//   4  : Host Network Port
-//   5  : nav slot (←/→: 이전/다음)
+//   2  : Ingress LB명
+//   3  : Ingress VIP
+//   4  : Gateway LB명 — mode 1 전용
+//   5  : Gateway VIP  — mode 1 전용
+//   6  : Host Network Port
+//   7  : nav slot (←/→: 이전/다음)
 
 const (
 	s4FocusCert = iota
 	s4FocusMode
+	s4FocusIngressLBName
 	s4FocusIngressVIP
+	s4FocusGatewayLBName
 	s4FocusGatewayVIP
 	s4FocusHostPort
 	s4FocusNav
@@ -29,10 +33,12 @@ const (
 )
 
 type S4Kubernetes struct {
-	certValidity textinput.Model
-	ingressVIP   textinput.Model
-	gatewayVIP   textinput.Model
-	hostPort     textinput.Model
+	certValidity  textinput.Model
+	ingressLBName textinput.Model
+	ingressVIP    textinput.Model
+	gatewayLBName textinput.Model
+	gatewayVIP    textinput.Model
+	hostPort      textinput.Model
 
 	mode     int // 1 or 2
 	focusIdx int
@@ -49,11 +55,13 @@ func NewS4Kubernetes() *S4Kubernetes {
 		return t
 	}
 	return &S4Kubernetes{
-		certValidity: newInput("26280h", 16),
-		ingressVIP:   newInput("예: 101.202.62.86", 64),
-		gatewayVIP:   newInput("예: 101.202.62.87", 64),
-		hostPort:     newInput("443", 8),
-		mode:         2,
+		certValidity:  newInput("26280h", 16),
+		ingressLBName: newInput("예: lb1", 64),
+		ingressVIP:    newInput("x.x.x.x", 64),
+		gatewayLBName: newInput("예: lb2", 64),
+		gatewayVIP:    newInput("x.x.x.x", 64),
+		hostPort:      newInput("443", 8),
+		mode:          2,
 	}
 }
 
@@ -69,7 +77,9 @@ func (s *S4Kubernetes) SyncFromState(st *state.AppState) {
 	if s.mode != 1 && s.mode != 2 {
 		s.mode = 2
 	}
+	s.ingressLBName.SetValue(st.K8sIngressLBName)
 	s.ingressVIP.SetValue(st.K8sIngressVIP)
+	s.gatewayLBName.SetValue(st.K8sGatewayLBName)
 	s.gatewayVIP.SetValue(st.K8sGatewayVIP)
 	if st.K8sIngressHostNetworkPort > 0 {
 		s.hostPort.SetValue(strconv.Itoa(st.K8sIngressHostNetworkPort))
@@ -82,10 +92,13 @@ func (s *S4Kubernetes) SyncFromState(st *state.AppState) {
 func (s *S4Kubernetes) SyncToState(st *state.AppState) {
 	st.K8sCertificateValidityPeriod = s.certValidity.Value()
 	st.K8sIngressMode = s.mode
+	st.K8sIngressLBName = strings.TrimSpace(s.ingressLBName.Value())
 	st.K8sIngressVIP = strings.TrimSpace(s.ingressVIP.Value())
 	if s.mode == 1 {
+		st.K8sGatewayLBName = strings.TrimSpace(s.gatewayLBName.Value())
 		st.K8sGatewayVIP = strings.TrimSpace(s.gatewayVIP.Value())
 	} else {
+		st.K8sGatewayLBName = ""
 		st.K8sGatewayVIP = ""
 	}
 	if p, err := strconv.Atoi(s.hostPort.Value()); err == nil {
@@ -97,10 +110,19 @@ func (s *S4Kubernetes) Validate() []string {
 	if s.certValidity.Value() == "" {
 		return []string{"인증서 유효기간을 입력해주세요 (예: 26280h)"}
 	}
+	if strings.TrimSpace(s.ingressLBName.Value()) == "" {
+		return []string{"Ingress LB명을 입력해주세요"}
+	}
 	if strings.TrimSpace(s.ingressVIP.Value()) == "" {
 		return []string{"Ingress VIP를 입력해주세요"}
 	}
 	if s.mode == 1 {
+		if strings.TrimSpace(s.gatewayLBName.Value()) == "" {
+			return []string{"별도 IP 모드에서는 Gateway LB명을 입력해주세요"}
+		}
+		if strings.TrimSpace(s.gatewayLBName.Value()) == strings.TrimSpace(s.ingressLBName.Value()) {
+			return []string{"별도 IP 모드에서는 Ingress LB명과 Gateway LB명이 달라야 합니다"}
+		}
 		gw := strings.TrimSpace(s.gatewayVIP.Value())
 		if gw == "" {
 			return []string{"별도 IP 모드에서는 Gateway VIP를 입력해주세요"}
@@ -120,14 +142,20 @@ func (s *S4Kubernetes) Init() tea.Cmd { return nil }
 
 func (s *S4Kubernetes) syncFocus() {
 	s.certValidity.Blur()
+	s.ingressLBName.Blur()
 	s.ingressVIP.Blur()
+	s.gatewayLBName.Blur()
 	s.gatewayVIP.Blur()
 	s.hostPort.Blur()
 	switch s.focusIdx {
 	case s4FocusCert:
 		s.certValidity.Focus()
+	case s4FocusIngressLBName:
+		s.ingressLBName.Focus()
 	case s4FocusIngressVIP:
 		s.ingressVIP.Focus()
+	case s4FocusGatewayLBName:
+		s.gatewayLBName.Focus()
 	case s4FocusGatewayVIP:
 		s.gatewayVIP.Focus()
 	case s4FocusHostPort:
@@ -137,16 +165,16 @@ func (s *S4Kubernetes) syncFocus() {
 
 func (s *S4Kubernetes) nextFocus() int {
 	next := s.focusIdx + 1
-	if next == s4FocusGatewayVIP && s.mode == 2 {
-		next++
+	if s.mode == 2 && (next == s4FocusGatewayLBName || next == s4FocusGatewayVIP) {
+		next = s4FocusHostPort
 	}
 	return next
 }
 
 func (s *S4Kubernetes) prevFocus() int {
 	prev := s.focusIdx - 1
-	if prev == s4FocusGatewayVIP && s.mode == 2 {
-		prev--
+	if s.mode == 2 && (prev == s4FocusGatewayVIP || prev == s4FocusGatewayLBName) {
+		prev = s4FocusIngressVIP
 	}
 	return prev
 }
@@ -211,8 +239,12 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch s.focusIdx {
 	case s4FocusCert:
 		s.certValidity, cmd = s.certValidity.Update(msg)
+	case s4FocusIngressLBName:
+		s.ingressLBName, cmd = s.ingressLBName.Update(msg)
 	case s4FocusIngressVIP:
 		s.ingressVIP, cmd = s.ingressVIP.Update(msg)
+	case s4FocusGatewayLBName:
+		s.gatewayLBName, cmd = s.gatewayLBName.Update(msg)
 	case s4FocusGatewayVIP:
 		s.gatewayVIP, cmd = s.gatewayVIP.Update(msg)
 	case s4FocusHostPort:
@@ -247,6 +279,10 @@ func (s *S4Kubernetes) View() string {
 	b.WriteString("    " + mode1Radio + styles.StyleMuted.Render("  — Ingress/Gateway 개별 VIP") + "\n")
 	b.WriteString("    " + mode2Radio + styles.StyleMuted.Render("  — Ingress/Gateway 동일 VIP") + "\n\n")
 
+	// Ingress LB명
+	b.WriteString(RenderSectionHeader("Ingress LB명", f == s4FocusIngressLBName) + "\n")
+	b.WriteString("    " + s.ingressLBName.View() + "\n\n")
+
 	// Ingress VIP
 	if s.mode == 2 {
 		b.WriteString(RenderSectionHeader("Ingress/Gateway 공유 VIP", f == s4FocusIngressVIP) + "\n")
@@ -255,8 +291,11 @@ func (s *S4Kubernetes) View() string {
 	}
 	b.WriteString("    " + s.ingressVIP.View() + "\n\n")
 
-	// Gateway VIP — mode 1 전용
+	// Gateway LB명 / VIP — mode 1 전용
 	if s.mode == 1 {
+		b.WriteString(RenderSectionHeader("Gateway LB명", f == s4FocusGatewayLBName) + "\n")
+		b.WriteString("    " + s.gatewayLBName.View() + "\n\n")
+
 		b.WriteString(RenderSectionHeader("Gateway VIP", f == s4FocusGatewayVIP) + "\n")
 		b.WriteString("    " + s.gatewayVIP.View() + "\n\n")
 	}

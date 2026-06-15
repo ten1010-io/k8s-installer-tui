@@ -12,20 +12,23 @@ import (
 )
 
 // Focus layout:
-//   0  : ingress zone
-//   1  : HA mode toggle
-//   2  : storage class
-//   3  : CP nodes section header (→ inline list navigation)
-//   4  : harbor subdomain
-//   5  : harbor replicas
-//   6  : harbor registry storage
-//   7  : harbor postgresql storage
-//   8  : harbor redis storage
-//   9  : harbor trivy storage
-//   10 : nav slot (←/→: 이전/다음)
+//   0  : AIPub 설치 여부 (toggle)
+//   --- enabled일 때만 ---
+//   1  : ingress zone
+//   2  : HA mode toggle
+//   3  : storage class
+//   4  : CP nodes section
+//   5  : harbor subdomain
+//   6  : harbor replicas
+//   7  : harbor registry storage
+//   8  : harbor postgresql storage
+//   9  : harbor redis storage
+//   10 : harbor trivy storage
+//   11 : nav slot
 
 const (
-	s5FocusIngressZone = iota
+	s5FocusEnabled = iota
+	s5FocusIngressZone
 	s5FocusHaMode
 	s5FocusStorageClass
 	s5FocusCpNodes
@@ -40,12 +43,13 @@ const (
 )
 
 type S5Aipub struct {
+	enabled         bool
 	ingressZone     textinput.Model
 	haMode          bool
 	storageClass    textinput.Model
 	k8sNodeNames    []string
 	cpNodeChecks    []bool
-	cpNodeCursor    int // cursor within CP nodes list (when s5FocusCpNodes is active)
+	cpNodeCursor    int
 	harborSubdomain textinput.Model
 	harborReplicas  textinput.Model
 	harborRegistry  textinput.Model
@@ -67,6 +71,7 @@ func NewS5Aipub() *S5Aipub {
 		return t
 	}
 	return &S5Aipub{
+		enabled:         true,
 		ingressZone:     newInput("example.com"),
 		storageClass:    newInput("ontap-nas"),
 		harborSubdomain: newInput("aipub-harbor"),
@@ -85,13 +90,18 @@ func (s *S5Aipub) SetSize(w, h int) {
 }
 
 func (s *S5Aipub) SyncFromState(st *state.AppState) {
+	s.enabled = st.AipubEnabled
 	s.ingressZone.SetValue(st.AipubIngressZone)
 	s.haMode = st.AipubHaMode
 	s.storageClass.SetValue(st.AipubHaModeStorageClass)
-	s.k8sNodeNames = append([]string{}, st.K8sNodes...)
+	s.k8sNodeNames = append([]string{}, st.K8sCpNodes...)
 	s.cpNodeChecks = make([]bool, len(s.k8sNodeNames))
 	for i, n := range s.k8sNodeNames {
-		s.cpNodeChecks[i] = st.IsAipubCpNode(n)
+		if len(st.AipubCpNodes) > 0 {
+			s.cpNodeChecks[i] = st.IsAipubCpNode(n)
+		} else {
+			s.cpNodeChecks[i] = true
+		}
 	}
 	s.harborSubdomain.SetValue(st.HarborIngressSubdomain)
 	s.harborReplicas.SetValue(strconv.Itoa(st.HarborReplicaCount))
@@ -106,6 +116,10 @@ func (s *S5Aipub) SyncFromState(st *state.AppState) {
 }
 
 func (s *S5Aipub) SyncToState(st *state.AppState) {
+	st.AipubEnabled = s.enabled
+	if !s.enabled {
+		return
+	}
 	st.AipubIngressZone = s.ingressZone.Value()
 	st.AipubHaMode = s.haMode
 	st.AipubHaModeStorageClass = s.storageClass.Value()
@@ -125,6 +139,9 @@ func (s *S5Aipub) SyncToState(st *state.AppState) {
 }
 
 func (s *S5Aipub) Validate() []string {
+	if !s.enabled {
+		return nil
+	}
 	if s.ingressZone.Value() == "" {
 		return []string{"인그레스 도메인을 입력해주세요"}
 	}
@@ -145,6 +162,7 @@ func (s *S5Aipub) Init() tea.Cmd { return nil }
 
 func (s *S5Aipub) inputs() []*textinput.Model {
 	return []*textinput.Model{
+		s5FocusEnabled:         nil,
 		s5FocusIngressZone:     &s.ingressZone,
 		s5FocusHaMode:          nil,
 		s5FocusStorageClass:    &s.storageClass,
@@ -170,6 +188,20 @@ func (s *S5Aipub) syncFocus() {
 	}
 }
 
+func (s *S5Aipub) nextFocus() int {
+	if !s.enabled && s.focusIdx == s5FocusEnabled {
+		return s5FocusNav
+	}
+	return s.focusIdx + 1
+}
+
+func (s *S5Aipub) prevFocus() int {
+	if !s.enabled && s.focusIdx == s5FocusNav {
+		return s5FocusEnabled
+	}
+	return s.focusIdx - 1
+}
+
 func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -179,8 +211,8 @@ func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.cpNodeCursor--
 				return s, nil
 			}
-			if s.focusIdx > 0 {
-				s.focusIdx--
+			if prev := s.prevFocus(); prev >= 0 {
+				s.focusIdx = prev
 				if s.focusIdx == s5FocusCpNodes {
 					s.cpNodeCursor = len(s.cpNodeChecks) - 1
 					if s.cpNodeCursor < 0 {
@@ -194,8 +226,8 @@ func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.cpNodeCursor++
 				return s, nil
 			}
-			if s.focusIdx < s5FocusMax {
-				s.focusIdx++
+			if next := s.nextFocus(); next <= s5FocusMax {
+				s.focusIdx = next
 				s.cpNodeCursor = 0
 				s.syncFocus()
 			}
@@ -214,6 +246,8 @@ func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return s, Prev()
 				}
 				return s, Next()
+			case s5FocusEnabled:
+				s.enabled = !s.enabled
 			case s5FocusHaMode:
 				s.haMode = !s.haMode
 			case s5FocusCpNodes:
@@ -240,6 +274,25 @@ func (s *S5Aipub) View() string {
 	b.WriteString(styles.StyleTitle.Render("AIPub 설정") + "\n\n")
 
 	f := s.focusIdx
+
+	// AIPub 설치 여부
+	enabledStr := styles.RadioOff() + " 미설치"
+	if s.enabled {
+		enabledStr = styles.RadioOn() + " 설치"
+	}
+	hint := ""
+	if f == s5FocusEnabled {
+		hint = styles.StyleMuted.Render("  Enter")
+	}
+	b.WriteString(RenderSectionHeader("AIPub 설치", f == s5FocusEnabled) + hint + "\n")
+	b.WriteString("    " + enabledStr + "\n\n")
+
+	if !s.enabled {
+		prevFocused := f == s5FocusNav && s.navIdx == 0
+		nextFocused := f == s5FocusNav && s.navIdx == 1
+		b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+		return b.String()
+	}
 
 	b.WriteString(RenderSectionHeader("인그레스 도메인", f == s5FocusIngressZone) +
 		"  " + s.ingressZone.View() + "\n")
@@ -269,7 +322,7 @@ func (s *S5Aipub) View() string {
 		b.WriteString(RenderRow(row, nodeFocused, s.width) + "\n")
 	}
 	if len(s.k8sNodeNames) == 0 {
-		b.WriteString(styles.StyleMuted.Render("    (2단계에서 k8s_node 지정 후 표시)") + "\n")
+		b.WriteString(styles.StyleMuted.Render("    (2단계에서 마스터 노드 지정 후 표시)") + "\n")
 	}
 	b.WriteString("\n")
 

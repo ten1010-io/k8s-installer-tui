@@ -23,11 +23,14 @@ type AppState struct {
 	// S4: Kubernetes (vars.yml)
 	K8sCertificateValidityPeriod string
 	K8sIngressMode               int    // 1=별도IP, 2=공유IP
+	K8sIngressLBName             string
 	K8sIngressVIP                string
+	K8sGatewayLBName             string // mode 1 only
 	K8sGatewayVIP                string // mode 1 only
 	K8sIngressHostNetworkPort    int
 
 	// S5: AIPub (vars.yml)
+	AipubEnabled                bool
 	AipubIngressZone            string
 	AipubHaMode                 bool
 	AipubHaModeStorageClass     string
@@ -52,7 +55,10 @@ func DefaultState() *AppState {
 		InternalNetworkSubnets:       []string{"192.168.0.0/24"},
 		K8sCertificateValidityPeriod: "26280h",
 		K8sIngressMode:               2,
+		K8sIngressLBName:             "lb1",
+		K8sGatewayLBName:             "lb2",
 		K8sIngressHostNetworkPort:    443,
+		AipubEnabled:                 true,
 		AipubIngressZone:             "example.com",
 		AipubHaMode:                  true,
 		HarborIngressSubdomain:       "aipub-harbor",

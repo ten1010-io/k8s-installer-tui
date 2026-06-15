@@ -63,7 +63,7 @@ func NewS3Network() *S3Network {
 	s := &S3Network{}
 
 	s.vip = textinput.New()
-	s.vip.Placeholder = "예: 192.168.0.100"
+	s.vip.Placeholder = "x.x.x.x"
 	s.vip.CharLimit = 64
 
 	s.extraZone = textinput.New()
@@ -191,14 +191,14 @@ func (s *S3Network) activate() (tea.Model, tea.Cmd) {
 		}
 		return s, Next()
 	case s3FocusSubnet:
-		s.startEdit(editSubnet, "예: 192.168.0.0/24")
+		s.startEdit(editSubnet, "x.x.x.x/xx")
 		return s, textinput.Blink
 	case s3FocusHaMode:
 		s.haMode = !s.haMode
 	case s3FocusDNSSEC:
 		s.dnssec = !s.dnssec
 	case s3FocusDNS:
-		s.startEdit(editDNS, "8.8.8.8")
+		s.startEdit(editDNS, "x.x.x.x")
 		return s, textinput.Blink
 	case s3FocusNTP:
 		s.startEdit(editNTP, "time1.google.com")
@@ -290,7 +290,7 @@ func (s *S3Network) View() string {
 	b.WriteString(RenderSectionHeader("HA VIP", s.focusIdx == s3FocusVIP) + "\n")
 	b.WriteString("    " + s.vip.View() + "\n")
 	if !s.haMode {
-		b.WriteString("    " + styles.StyleMuted.Render("HA 활성 시 필수 — 예: 192.168.0.100") + "\n")
+		b.WriteString("    " + styles.StyleMuted.Render("HA 활성 시 필수") + "\n")
 	}
 	b.WriteString("\n")
 

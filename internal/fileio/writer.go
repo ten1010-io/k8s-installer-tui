@@ -148,13 +148,13 @@ func renderVars(s *state.AppState) ([]byte, error) {
 		"k8s_certificate_validity_period": s.K8sCertificateValidityPeriod,
 		"k8s_load_balancers": func() []map[string]interface{} {
 			lbs := []map[string]interface{}{{
-				"name":  "lb1",
+				"name":  s.K8sIngressLBName,
 				"vip":   s.K8sIngressVIP,
 				"nodes": s.KiCpNodes,
 			}}
 			if s.K8sIngressMode == 1 {
 				lbs = append(lbs, map[string]interface{}{
-					"name":  "lb2",
+					"name":  s.K8sGatewayLBName,
 					"vip":   s.K8sGatewayVIP,
 					"nodes": s.KiCpNodes,
 				})
@@ -162,37 +162,38 @@ func renderVars(s *state.AppState) ([]byte, error) {
 			return lbs
 		}(),
 		"k8s_default_ingress_class": map[string]interface{}{
-			"load_balancer":     "lb1",
+			"load_balancer":     s.K8sIngressLBName,
 			"host_network_port": s.K8sIngressHostNetworkPort,
 		},
 		"k8s_gateways": func() []map[string]interface{} {
 			if s.K8sIngressMode == 1 {
 				return []map[string]interface{}{{
-					"name":  "lb2",
+					"name":  s.K8sGatewayLBName,
 					"vip":   s.K8sGatewayVIP,
 					"nodes": s.KiCpNodes,
 				}}
 			}
 			return []map[string]interface{}{{
-				"name":  "lb1",
+				"name":  s.K8sIngressLBName,
 				"vip":   s.K8sIngressVIP,
 				"nodes": s.KiCpNodes,
 			}}
 		}(),
 
-		"aipub_ingress_zone":             s.AipubIngressZone,
-		"aipub_ha_mode":                  s.AipubHaMode,
-		"aipub_ha_mode_storage_class":    nullIfEmpty(s.AipubHaModeStorageClass),
-		"aipub_cp_nodes":                 s.AipubCpNodes,
-
-		"aipub_harbor_ingress_subdomain":       s.HarborIngressSubdomain,
-		"aipub_harbor_replica_count":           s.HarborReplicaCount,
-		"aipub_harbor_registry_storage_size":   s.HarborRegistryStorageSize,
-		"aipub_harbor_postgresql_storage_size": s.HarborPostgresqlStorageSize,
-		"aipub_harbor_redis_storage_size":      s.HarborRedisStorageSize,
-		"aipub_harbor_trivy_storage_size":      s.HarborTrivyStorageSize,
-
 		"ki_cert_mode": s.KiCertMode,
+	}
+
+	if s.AipubEnabled {
+		out["aipub_ingress_zone"] = s.AipubIngressZone
+		out["aipub_ha_mode"] = s.AipubHaMode
+		out["aipub_ha_mode_storage_class"] = nullIfEmpty(s.AipubHaModeStorageClass)
+		out["aipub_cp_nodes"] = s.AipubCpNodes
+		out["aipub_harbor_ingress_subdomain"] = s.HarborIngressSubdomain
+		out["aipub_harbor_replica_count"] = s.HarborReplicaCount
+		out["aipub_harbor_registry_storage_size"] = s.HarborRegistryStorageSize
+		out["aipub_harbor_postgresql_storage_size"] = s.HarborPostgresqlStorageSize
+		out["aipub_harbor_redis_storage_size"] = s.HarborRedisStorageSize
+		out["aipub_harbor_trivy_storage_size"] = s.HarborTrivyStorageSize
 	}
 
 	if s.InternalNetworkExtraZone != "" {

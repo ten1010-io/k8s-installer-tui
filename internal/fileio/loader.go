@@ -194,6 +194,7 @@ func LoadVars(path string, s *state.AppState) error {
 		s.K8sCertificateValidityPeriod = v.K8sCertificateValidityPeriod
 	}
 	if len(v.K8sLoadBalancers) > 0 {
+		s.K8sIngressLBName = v.K8sLoadBalancers[0].Name
 		s.K8sIngressVIP = v.K8sLoadBalancers[0].VIP
 	}
 	if v.K8sDefaultIngressClass.HostNetworkPort > 0 {
@@ -209,11 +210,13 @@ func LoadVars(path string, s *state.AppState) error {
 			s.K8sIngressMode = 2
 		} else {
 			s.K8sIngressMode = 1
+			s.K8sGatewayLBName = gw.Name
 			s.K8sGatewayVIP = gw.VIP
 		}
 	}
 
 	if v.AipubIngressZone != "" {
+		s.AipubEnabled = true
 		s.AipubIngressZone = v.AipubIngressZone
 	}
 	s.AipubHaMode = v.AipubHaMode

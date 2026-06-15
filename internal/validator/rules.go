@@ -122,7 +122,7 @@ func validateNetwork(s *state.AppState) []Error {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			errs = append(errs, Error{
 				fmt.Sprintf("internal_network_subnets[%d]", i),
-				fmt.Sprintf("'%s'는 유효한 CIDR 형식이 아닙니다 (예: 192.168.0.0/24)", cidr),
+				fmt.Sprintf("'%s'는 유효한 CIDR 형식이 아닙니다 (예: x.x.x.x/xx)", cidr),
 			})
 		}
 	}
@@ -161,6 +161,10 @@ func validateKubernetes(s *state.AppState) []Error {
 		errs = append(errs, Error{"k8s_ingress_mode", "인그레스 모드는 1 또는 2여야 합니다"})
 	}
 
+	if s.K8sIngressLBName == "" {
+		errs = append(errs, Error{"k8s_ingress_lb_name", "Ingress LB명을 입력해주세요"})
+	}
+
 	if s.K8sIngressVIP == "" {
 		errs = append(errs, Error{"k8s_ingress_vip", "Ingress VIP를 입력해주세요"})
 	} else if net.ParseIP(s.K8sIngressVIP) == nil {
@@ -168,6 +172,11 @@ func validateKubernetes(s *state.AppState) []Error {
 	}
 
 	if s.K8sIngressMode == 1 {
+		if s.K8sGatewayLBName == "" {
+			errs = append(errs, Error{"k8s_gateway_lb_name", "별도 IP 모드에서는 Gateway LB명을 입력해주세요"})
+		} else if s.K8sGatewayLBName == s.K8sIngressLBName {
+			errs = append(errs, Error{"k8s_gateway_lb_name", "별도 IP 모드에서는 Ingress LB명과 Gateway LB명이 달라야 합니다"})
+		}
 		if s.K8sGatewayVIP == "" {
 			errs = append(errs, Error{"k8s_gateway_vip", "별도 IP 모드에서는 Gateway VIP를 입력해주세요"})
 		} else if net.ParseIP(s.K8sGatewayVIP) == nil {
@@ -185,6 +194,9 @@ func validateKubernetes(s *state.AppState) []Error {
 }
 
 func validateAipub(s *state.AppState) []Error {
+	if !s.AipubEnabled {
+		return nil
+	}
 	var errs []Error
 
 	if !reFQDN.MatchString(s.AipubIngressZone) {
@@ -196,15 +208,15 @@ func validateAipub(s *state.AppState) []Error {
 		errs = append(errs, Error{"aipub_ha_mode_storage_class", "AIPub HA 모드에서는 StorageClass를 지정해야 합니다"})
 	}
 
-	// R6: aipub_cp_nodes ⊆ k8s_node
-	k8sNodeSet := map[string]bool{}
-	for _, n := range s.K8sNodes {
-		k8sNodeSet[n] = true
+	// R6: aipub_cp_nodes ⊆ k8s_cp_node
+	k8sCpNodeSet := map[string]bool{}
+	for _, n := range s.K8sCpNodes {
+		k8sCpNodeSet[n] = true
 	}
 	for _, n := range s.AipubCpNodes {
-		if !k8sNodeSet[n] {
+		if !k8sCpNodeSet[n] {
 			errs = append(errs, Error{"aipub_cp_nodes",
-				fmt.Sprintf("'%s'는 k8s_node 그룹에 속하지 않습니다", n)})
+				fmt.Sprintf("'%s'는 마스터 노드 그룹에 속하지 않습니다", n)})
 		}
 	}
 

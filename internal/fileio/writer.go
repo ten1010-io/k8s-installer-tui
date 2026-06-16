@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"gopkg.in/yaml.v3"
@@ -132,102 +133,133 @@ func renderInventory(s *state.AppState) ([]byte, error) {
 }
 
 func renderVars(s *state.AppState) ([]byte, error) {
-	out := map[string]interface{}{
-		"ki_var_root_path":      "/var/lib/k8s-installer",
-		"containerd_root_path":  "/var/lib/containerd",
-		"docker_root_path":      "/var/lib/docker",
+	var b strings.Builder
 
-		"internal_network_subnets": s.InternalNetworkSubnets,
+	// Static header
+	b.WriteString("ki_var_root_path: \"/var/lib/k8s-installer\"\n")
+	b.WriteString("containerd_root_path: \"/var/lib/containerd\"\n")
+	b.WriteString("docker_root_path: \"/var/lib/docker\"\n")
+	b.WriteString("\n")
 
-		"ki_cp_ha_mode":              s.KiCpHaMode,
-		"ki_cp_ha_mode_vip":          nullIfEmpty(s.KiCpHaModeVIP),
-		"ki_cp_dns_dnssec_validation": s.KiCpDnsDnssecValidation,
-		"ki_cp_dns_server_upstream_servers": s.KiCpDnsUpstreamServers,
-		"ki_cp_ntp_server_upstream_servers": s.KiCpNtpUpstreamServers,
-
-		"k8s_certificate_validity_period": s.K8sCertificateValidityPeriod,
-		"k8s_load_balancers": func() []map[string]interface{} {
-			lbs := []map[string]interface{}{{
-				"name":  s.K8sIngressLBName,
-				"vip":   s.K8sIngressVIP,
-				"nodes": s.KiCpNodes,
-			}}
-			if s.K8sIngressMode == 1 {
-				lbs = append(lbs, map[string]interface{}{
-					"name":  s.K8sGatewayLBName,
-					"vip":   s.K8sGatewayVIP,
-					"nodes": s.KiCpNodes,
-				})
-			}
-			return lbs
-		}(),
-		"k8s_default_ingress_class": map[string]interface{}{
-			"load_balancer":     s.K8sIngressLBName,
-			"host_network_port": s.K8sIngressHostNetworkPort,
-		},
-		"k8s_gateways": func() []map[string]interface{} {
-			if s.K8sIngressMode == 1 {
-				return []map[string]interface{}{{
-					"name":  s.K8sGatewayLBName,
-					"vip":   s.K8sGatewayVIP,
-					"nodes": s.KiCpNodes,
-				}}
-			}
-			return []map[string]interface{}{{
-				"name":  s.K8sIngressLBName,
-				"vip":   s.K8sIngressVIP,
-				"nodes": s.KiCpNodes,
-			}}
-		}(),
-
-		"ki_cert_mode": s.KiCertMode,
+	// internal_network_subnets
+	b.WriteString("internal_network_subnets:\n")
+	for _, subnet := range s.InternalNetworkSubnets {
+		fmt.Fprintf(&b, "  - %q\n", subnet)
 	}
+	b.WriteString("\n")
 
-	if s.AipubEnabled {
-		out["aipub_ingress_zone"] = s.AipubIngressZone
-		out["aipub_ha_mode"] = s.AipubHaMode
-		out["aipub_ha_mode_storage_class"] = nullIfEmpty(s.AipubHaModeStorageClass)
-		out["aipub_cp_nodes"] = s.AipubCpNodes
-		out["aipub_harbor_ingress_subdomain"] = s.HarborIngressSubdomain
-		out["aipub_harbor_replica_count"] = s.HarborReplicaCount
-		out["aipub_harbor_registry_storage_size"] = s.HarborRegistryStorageSize
-		out["aipub_harbor_postgresql_storage_size"] = s.HarborPostgresqlStorageSize
-		out["aipub_harbor_redis_storage_size"] = s.HarborRedisStorageSize
-		out["aipub_harbor_trivy_storage_size"] = s.HarborTrivyStorageSize
-	}
-
-	if s.InternalNetworkExtraZone != "" {
-		out["internal_network_extra_zone"] = s.InternalNetworkExtraZone
+	// internal_network_extra_zone: commented out when not set, active when set
+	if s.InternalNetworkExtraZone == "" {
+		b.WriteString("#internal_network_extra_zone: \"example.com\"\n")
+		b.WriteString("#internal_network_extra_zone_a_records:\n")
+		b.WriteString("#  - name: \"@\"\n")
+		b.WriteString("#    ip: \"172.16.0.254\"\n")
+		b.WriteString("#  - name: \"*\"\n")
+		b.WriteString("#    ip: \"172.16.0.254\"\n")
+	} else {
+		fmt.Fprintf(&b, "internal_network_extra_zone: %q\n", s.InternalNetworkExtraZone)
 		if len(s.InternalNetworkExtraZoneARecords) > 0 {
-			type aRec struct {
-				Name string `yaml:"name"`
-				IP   string `yaml:"ip"`
+			b.WriteString("internal_network_extra_zone_a_records:\n")
+			for _, r := range s.InternalNetworkExtraZoneARecords {
+				fmt.Fprintf(&b, "  - name: %q\n", r.Name)
+				fmt.Fprintf(&b, "    ip: %q\n", r.IP)
 			}
-			recs := make([]aRec, len(s.InternalNetworkExtraZoneARecords))
-			for i, r := range s.InternalNetworkExtraZoneARecords {
-				recs[i] = aRec{Name: r.Name, IP: r.IP}
-			}
-			out["internal_network_extra_zone_a_records"] = recs
 		}
 	}
+	b.WriteString("\n")
 
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(out); err != nil {
-		return nil, fmt.Errorf("encode vars: %w", err)
+	// ki_cp section
+	fmt.Fprintf(&b, "ki_cp_ha_mode: %v\n", s.KiCpHaMode)
+	if s.KiCpHaModeVIP == "" {
+		b.WriteString("ki_cp_ha_mode_vip: null\n")
+	} else {
+		fmt.Fprintf(&b, "ki_cp_ha_mode_vip: %q\n", s.KiCpHaModeVIP)
 	}
-	return buf.Bytes(), nil
+	fmt.Fprintf(&b, "ki_cp_dns_dnssec_validation: %v\n", s.KiCpDnsDnssecValidation)
+	b.WriteString("ki_cp_dns_server_upstream_servers:\n")
+	for _, srv := range s.KiCpDnsUpstreamServers {
+		fmt.Fprintf(&b, "  - %q\n", srv)
+	}
+	b.WriteString("ki_cp_ntp_server_upstream_servers:\n")
+	for _, srv := range s.KiCpNtpUpstreamServers {
+		fmt.Fprintf(&b, "  - %q\n", srv)
+	}
+	b.WriteString("\n")
+
+	// k8s section
+	fmt.Fprintf(&b, "k8s_certificate_validity_period: %q # 26280h = 3 year\n", s.K8sCertificateValidityPeriod)
+
+	// k8s_load_balancers — ingress LB only (gateway LB is defined in k8s_gateways for mode 1)
+	b.WriteString("k8s_load_balancers:\n")
+	fmt.Fprintf(&b, "  - name: %q\n", s.K8sIngressLBName)
+	if s.K8sIngressVIP == "" {
+		b.WriteString("    vip: null\n")
+	} else {
+		fmt.Fprintf(&b, "    vip: %q\n", s.K8sIngressVIP)
+	}
+	b.WriteString("    nodes:\n")
+	for _, n := range s.KiCpNodes {
+		fmt.Fprintf(&b, "      - %q\n", n)
+	}
+
+	// k8s_gateways
+	// Mode 1: separate gateway LB (lb2 with its own VIP)
+	// Mode 2: shared IP — gateway references the same LB as ingress
+	b.WriteString("k8s_gateways:\n")
+	if s.K8sIngressMode == 1 {
+		fmt.Fprintf(&b, "  - name: %q\n", s.K8sGatewayLBName)
+		if s.K8sGatewayVIP == "" {
+			b.WriteString("    vip: \"\"\n")
+		} else {
+			fmt.Fprintf(&b, "    vip: %q\n", s.K8sGatewayVIP)
+		}
+	} else {
+		fmt.Fprintf(&b, "  - name: %q\n", s.K8sIngressLBName)
+		b.WriteString("    vip: \"\"\n")
+	}
+	b.WriteString("    nodes: \"\"\n")
+
+	// k8s_default_ingress_class
+	b.WriteString("k8s_default_ingress_class:\n")
+	fmt.Fprintf(&b, "  load_balancer: %q\n", s.K8sIngressLBName)
+	fmt.Fprintf(&b, "  host_network_port: %d\n", s.K8sIngressHostNetworkPort)
+	b.WriteString("\n")
+	b.WriteString("\n")
+
+	// aipub section (omitted entirely when not installing AIPub)
+	if s.AipubEnabled {
+		fmt.Fprintf(&b, "aipub_ingress_zone: %q\n", s.AipubIngressZone)
+		fmt.Fprintf(&b, "aipub_ha_mode: %v\n", s.AipubHaMode)
+		if s.AipubHaModeStorageClass == "" {
+			b.WriteString("aipub_ha_mode_storage_class: null\n")
+		} else {
+			fmt.Fprintf(&b, "aipub_ha_mode_storage_class: %q\n", s.AipubHaModeStorageClass)
+		}
+		b.WriteString("aipub_cp_nodes:\n")
+		for _, n := range s.AipubCpNodes {
+			fmt.Fprintf(&b, "  - %q\n", n)
+		}
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "aipub_harbor_ingress_subdomain: %q\n", s.HarborIngressSubdomain)
+		fmt.Fprintf(&b, "aipub_harbor_replica_count: %d\n", s.HarborReplicaCount)
+		fmt.Fprintf(&b, "aipub_harbor_registry_storage_size: %s\n", s.HarborRegistryStorageSize)
+		fmt.Fprintf(&b, "aipub_harbor_postgresql_storage_size: %s\n", s.HarborPostgresqlStorageSize)
+		fmt.Fprintf(&b, "aipub_harbor_redis_storage_size: %s\n", s.HarborRedisStorageSize)
+		fmt.Fprintf(&b, "aipub_harbor_trivy_storage_size: %s\n", s.HarborTrivyStorageSize)
+		b.WriteString("\n")
+	}
+
+	// ki_cert_mode
+	b.WriteString("# ki_cert_mode options:\n")
+	b.WriteString("# - \"self_signed\": CA를 자동 생성하고 TLS 인증서를 발급 (기본값)\n")
+	b.WriteString("# - \"ca_provided\":  고객이 ca.crt + ca.key를 제공, TLS 인증서만 발급\n")
+	b.WriteString("# - \"tls_provided\": 고객이 tls.crt + tls.key를 모두 제공, 인증서 발급 생략\n")
+	fmt.Fprintf(&b, "ki_cert_mode: %q\n", s.KiCertMode)
+
+	return []byte(b.String()), nil
 }
 
-func nullIfEmpty(s string) interface{} {
-	if s == "" {
-		return nil
-	}
-	return s
-}
-
-// --- yaml.Node helpers ---
+// --- yaml.Node helpers (used by renderInventory) ---
 
 func strNode(s string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s}

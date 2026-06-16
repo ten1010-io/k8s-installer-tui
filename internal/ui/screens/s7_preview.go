@@ -13,15 +13,11 @@ import (
 )
 
 // Focus layout:
-//   0  : inventory.yml tab
-//   1  : vars.yml tab
-//   2  : viewport (scrollable)
-//   3  : nav slot (←/→: 이전/저장)
+//   0  : content (viewport — ↑/↓ scroll, ←/→ 탭 전환)
+//   1  : nav slot (←/→: 이전/저장)
 
 const (
-	s7FocusTabInv = iota
-	s7FocusTabVars
-	s7FocusViewport
+	s7FocusContent = iota
 	s7FocusNav
 	s7FocusMax = s7FocusNav
 )
@@ -30,6 +26,7 @@ type S7Preview struct {
 	inventoryContent string
 	varsContent      string
 	vp               viewport.Model
+	activeTab        int // 0=inventory, 1=vars
 	errors           []validator.Error
 	saved            bool
 	saveErr          string
@@ -64,13 +61,6 @@ func (s *S7Preview) SetSize(w, h int) {
 	s.vp.Height = vpH
 }
 
-func (s *S7Preview) activeTab() int {
-	if s.focusIdx == s7FocusTabVars {
-		return 1
-	}
-	return 0
-}
-
 func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.errors = validator.Validate(st)
 	s.saved = false
@@ -90,6 +80,7 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 		s.varsContent = vars
 	}
 
+	s.activeTab = 0
 	s.focusIdx = 0
 	s.navIdx = 0
 	s.refreshViewport()
@@ -116,59 +107,56 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if s.focusIdx == s7FocusViewport {
-				if s.vp.YOffset == 0 {
-					// 뷰포트 맨 위 → 탭으로 포커스 이동
-					s.focusIdx--
-					s.refreshViewport()
-				} else {
-					s.vp.LineUp(1)
-				}
-				return s, nil
+			if s.focusIdx == s7FocusContent {
+				s.vp.LineUp(1)
+			} else {
+				s.focusIdx = s7FocusContent
 			}
-			if s.focusIdx > 0 {
-				s.focusIdx--
-				s.refreshViewport()
-			}
+			return s, nil
 		case "down", "j":
-			if s.focusIdx == s7FocusViewport {
+			if s.focusIdx == s7FocusContent {
 				if s.vp.AtBottom() {
-					// 뷰포트 맨 아래 → nav로 포커스 이동
 					s.focusIdx = s7FocusNav
 				} else {
 					s.vp.LineDown(1)
 				}
-				return s, nil
 			}
-			if s.focusIdx < s7FocusMax {
-				s.focusIdx++
-				s.refreshViewport()
-			}
-		case "tab":
-			// 뷰포트 스크롤 중에도 Tab으로 바로 nav 이동
-			s.focusIdx = s7FocusNav
+			return s, nil
 		case "left", "h":
-			if s.focusIdx == s7FocusNav && s.navIdx > 0 {
-				s.navIdx--
+			switch s.focusIdx {
+			case s7FocusContent:
+				if s.activeTab > 0 {
+					s.activeTab--
+					s.refreshViewport()
+				}
+			case s7FocusNav:
+				if s.navIdx > 0 {
+					s.navIdx--
+				}
 			}
 		case "right", "l":
-			if s.focusIdx == s7FocusNav && s.navIdx < 1 {
-				s.navIdx++
+			switch s.focusIdx {
+			case s7FocusContent:
+				if s.activeTab < 1 {
+					s.activeTab++
+					s.refreshViewport()
+				}
+			case s7FocusNav:
+				if s.navIdx < 1 {
+					s.navIdx++
+				}
 			}
+		case "tab":
+			s.focusIdx = s7FocusNav
 		case "enter", " ":
 			if s.saved {
 				return s, tea.Quit
 			}
-			switch s.focusIdx {
-			case s7FocusNav:
+			if s.focusIdx == s7FocusNav {
 				if s.navIdx == 0 {
 					return s, Prev()
 				}
 				return s.doSave()
-			case s7FocusTabInv:
-				s.refreshViewport()
-			case s7FocusTabVars:
-				s.refreshViewport()
 			}
 		case "s":
 			return s.doSave()
@@ -200,7 +188,7 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 }
 
 func (s *S7Preview) refreshViewport() {
-	if s.activeTab() == 0 {
+	if s.activeTab == 0 {
 		s.vp.SetContent(s.inventoryContent)
 	} else {
 		s.vp.SetContent(s.varsContent)
@@ -208,33 +196,55 @@ func (s *S7Preview) refreshViewport() {
 	s.vp.GotoTop()
 }
 
+func (s *S7Preview) scrollBar() string {
+	hasAbove := s.vp.YOffset > 0
+	hasBelow := !s.vp.AtBottom()
+
+	lineLen := s.width
+	if lineLen < 4 {
+		lineLen = 4
+	}
+
+	topLine := strings.Repeat("─", lineLen)
+	botLine := strings.Repeat("─", lineLen)
+
+	if hasAbove {
+		indicator := " ↑ "
+		topLine = indicator + strings.Repeat("─", lineLen-len(indicator))
+	}
+	if hasBelow {
+		indicator := " ↓ "
+		botLine = strings.Repeat("─", lineLen-len(indicator)) + indicator
+	}
+
+	return topLine + "\n" + s.vp.View() + "\n" + botLine
+}
+
 func (s *S7Preview) View() string {
 	var b strings.Builder
 	b.WriteString(styles.StyleTitle.Render("미리보기 & 저장") + "\n\n")
 
-	// Tabs
+	// Tabs — ←/→ 전환, 콘텐츠 포커스 시 활성 탭 표시
+	contentFocused := s.focusIdx == s7FocusContent
 	var tab0, tab1 string
-	switch {
-	case s.focusIdx == s7FocusTabInv:
-		tab0 = RenderButton("inventory.yml", true)
-	case s.activeTab() == 0:
+	if s.activeTab == 0 {
 		tab0 = styles.StylePrimary.Render("[ inventory.yml ]")
-	default:
-		tab0 = styles.StyleMuted.Render("  inventory.yml  ")
-	}
-	switch {
-	case s.focusIdx == s7FocusTabVars:
-		tab1 = RenderButton("vars.yml", true)
-	case s.activeTab() == 1:
+		if contentFocused {
+			tab1 = styles.StyleMuted.Render("  vars.yml  ") + styles.StyleMuted.Render(" →")
+		} else {
+			tab1 = styles.StyleMuted.Render("  vars.yml  ")
+		}
+	} else {
+		if contentFocused {
+			tab0 = styles.StyleMuted.Render("←  inventory.yml  ")
+		} else {
+			tab0 = styles.StyleMuted.Render("  inventory.yml  ")
+		}
 		tab1 = styles.StylePrimary.Render("[ vars.yml ]")
-	default:
-		tab1 = styles.StyleMuted.Render("  vars.yml  ")
 	}
 	b.WriteString(tab0 + "  " + tab1 + "\n")
-	b.WriteString(strings.Repeat("─", s.width) + "\n")
 
-	b.WriteString(s.vp.View() + "\n")
-	b.WriteString(strings.Repeat("─", s.width) + "\n")
+	b.WriteString(s.scrollBar() + "\n")
 
 	if len(s.errors) == 0 {
 		b.WriteString(styles.StyleSuccess.Render("✓ 검증 통과 — 저장 가능합니다") + "\n")

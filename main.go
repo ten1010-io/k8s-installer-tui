@@ -56,7 +56,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	app := ui.NewApp(s, invAbs, varsAbs)
+	app := ui.NewApp(s, invAbs, varsAbs, version)
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "오류: %v\n", err)

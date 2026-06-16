@@ -19,9 +19,10 @@ type App struct {
 	screenErrors  []string
 	inventoryPath string
 	varsPath      string
+	version       string
 }
 
-func NewApp(s *state.AppState, inventoryPath, varsPath string) *App {
+func NewApp(s *state.AppState, inventoryPath, varsPath, version string) *App {
 	s1 := screens.NewS1Nodes()
 	s2 := screens.NewS2Groups()
 	s3 := screens.NewS3Network()
@@ -35,6 +36,7 @@ func NewApp(s *state.AppState, inventoryPath, varsPath string) *App {
 		screenList:    []screens.Screen{s1, s2, s3, s4, s5, s6, s7},
 		inventoryPath: inventoryPath,
 		varsPath:      varsPath,
+		version:       version,
 	}
 }
 
@@ -188,7 +190,7 @@ func (a *App) View() string {
 }
 
 func (a *App) renderHeader(width int) string {
-	title := styles.StyleHeader.Width(width).Render("  k8s-installer-tui  ")
+	title := styles.StyleHeader.Width(width).Render("  k8s-installer-tui " + a.version + "  ")
 
 	stepTitles := []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "5.AIPub", "6.인증서", "7.저장"}
 	parts := make([]string, len(a.screenList))

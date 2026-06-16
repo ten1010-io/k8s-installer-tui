@@ -71,7 +71,7 @@ func NewS5Aipub() *S5Aipub {
 		return t
 	}
 	return &S5Aipub{
-		enabled:         true,
+		enabled:         false,
 		ingressZone:     newInput("example.com"),
 		storageClass:    newInput("ontap-nas"),
 		harborSubdomain: newInput("aipub-harbor"),

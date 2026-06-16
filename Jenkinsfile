@@ -68,7 +68,7 @@ pipeline {
         stage('Build') {
             steps {
                 sh '''
-                    VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+                    VERSION=$(git describe --tags --exact-match 2>/dev/null || echo "v$(cat VERSION)-dev")
                     LDFLAGS="-X main.version=${VERSION} -s -w"
                     mkdir -p dist
                     GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/${BINARY}-linux-amd64 .

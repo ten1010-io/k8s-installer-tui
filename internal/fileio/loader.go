@@ -64,9 +64,9 @@ type varsYAML struct {
 		HostNetworkPort int    `yaml:"host_network_port"`
 	} `yaml:"k8s_default_ingress_class"`
 	K8sGateways []struct {
-		Name  string   `yaml:"name"`
-		VIP   string   `yaml:"vip"`
-		Nodes []string `yaml:"nodes"`
+		Name  string      `yaml:"name"`
+		VIP   string      `yaml:"vip"`
+		Nodes interface{} `yaml:"nodes"` // can be "" or []string
 	} `yaml:"k8s_gateways"`
 
 	AipubIngressZone        string   `yaml:"aipub_ingress_zone"`

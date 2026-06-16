@@ -58,7 +58,7 @@ func DefaultState() *AppState {
 		K8sIngressLBName:             "lb1",
 		K8sGatewayLBName:             "lb2",
 		K8sIngressHostNetworkPort:    443,
-		AipubEnabled:                 true,
+		AipubEnabled:                 false,
 		AipubIngressZone:             "example.com",
 		AipubHaMode:                  true,
 		HarborIngressSubdomain:       "aipub-harbor",

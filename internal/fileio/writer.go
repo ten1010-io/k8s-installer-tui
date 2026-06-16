@@ -207,7 +207,7 @@ func renderVars(s *state.AppState) ([]byte, error) {
 	// Mode 2: shared IP — gateway references the same LB as ingress
 	b.WriteString("k8s_gateways:\n")
 	if s.K8sIngressMode == 1 {
-		// 별도 IP 모드: gateway는 자체 LB명과 VIP를 가짐
+		// 별도 IP 모드: gateway 자체 LB명과 VIP
 		fmt.Fprintf(&b, "  - name: %q\n", s.K8sGatewayLBName)
 		if s.K8sGatewayVIP == "" {
 			b.WriteString("    vip: \"\"\n")
@@ -215,7 +215,7 @@ func renderVars(s *state.AppState) ([]byte, error) {
 			fmt.Fprintf(&b, "    vip: %q\n", s.K8sGatewayVIP)
 		}
 	} else {
-		// 공유 IP 모드: ingress LB명과 VIP를 그대로 복사
+		// 공유 IP 모드: ingress LB명과 VIP 복사
 		fmt.Fprintf(&b, "  - name: %q\n", s.K8sIngressLBName)
 		if s.K8sIngressVIP == "" {
 			b.WriteString("    vip: \"\"\n")
@@ -223,7 +223,10 @@ func renderVars(s *state.AppState) ([]byte, error) {
 			fmt.Fprintf(&b, "    vip: %q\n", s.K8sIngressVIP)
 		}
 	}
-	b.WriteString("    nodes: \"\"\n")
+	b.WriteString("    nodes:\n")
+	for _, n := range s.KiCpNodes {
+		fmt.Fprintf(&b, "      - %q\n", n)
+	}
 
 	// k8s_default_ingress_class
 	b.WriteString("k8s_default_ingress_class:\n")

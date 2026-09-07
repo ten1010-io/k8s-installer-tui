@@ -148,8 +148,9 @@ func renderVars(s *state.AppState) ([]byte, error) {
 	}
 	b.WriteString("\n")
 
-	// internal_network_extra_zone: commented out when not set, active when set
-	if s.InternalNetworkExtraZone == "" {
+	// internal_network_extra_zone: commented out when internal DNS server is disabled;
+	// when enabled, points the ingress domain's apex/wildcard records at the ingress VIP.
+	if !s.InternalDNSServerEnabled {
 		b.WriteString("#internal_network_extra_zone: \"example.com\"\n")
 		b.WriteString("#internal_network_extra_zone_a_records:\n")
 		b.WriteString("#  - name: \"@\"\n")
@@ -157,14 +158,10 @@ func renderVars(s *state.AppState) ([]byte, error) {
 		b.WriteString("#  - name: \"*\"\n")
 		b.WriteString("#    ip: \"172.16.0.254\"\n")
 	} else {
-		fmt.Fprintf(&b, "internal_network_extra_zone: %q\n", s.InternalNetworkExtraZone)
-		if len(s.InternalNetworkExtraZoneARecords) > 0 {
-			b.WriteString("internal_network_extra_zone_a_records:\n")
-			for _, r := range s.InternalNetworkExtraZoneARecords {
-				fmt.Fprintf(&b, "  - name: %q\n", r.Name)
-				fmt.Fprintf(&b, "    ip: %q\n", r.IP)
-			}
-		}
+		fmt.Fprintf(&b, "internal_network_extra_zone: %q\n", s.AipubIngressZone)
+		b.WriteString("internal_network_extra_zone_a_records:\n")
+		fmt.Fprintf(&b, "  - name: \"@\"\n    ip: %q\n", s.K8sIngressVIP)
+		fmt.Fprintf(&b, "  - name: \"*\"\n    ip: %q\n", s.K8sIngressVIP)
 	}
 	b.WriteString("\n")
 

@@ -143,7 +143,7 @@ inventory.yml      ←  새 내용으로 저장
 | DNS upstream | `ki_cp_dns_server_upstream_servers` |
 | NTP upstream | `ki_cp_ntp_server_upstream_servers` |
 | DNSSEC 검증 | `ki_cp_dns_dnssec_validation` |
-| 추가 DNS 존 | `internal_network_extra_zone` (선택) |
+| 내부 DNS 서버 활성화 여부 | 활성화 시 `internal_network_extra_zone`/`internal_network_extra_zone_a_records` 주석 해제, 도메인은 5단계 인그레스 도메인, IP는 4단계 인그레스 VIP로 자동 설정 |
 
 ### 4단계 — Kubernetes (`vars.yml`)
 
@@ -198,7 +198,7 @@ k8s-installer-tui/
 ├── Makefile
 └── internal/
     ├── state/
-    │   ├── types.go                 # NodeConfig, LBConfig, IngressConfig, ARecord
+    │   ├── types.go                 # NodeConfig
     │   └── state.go                 # AppState, DefaultState()
     ├── fileio/
     │   ├── loader.go                # YAML 파일 → AppState

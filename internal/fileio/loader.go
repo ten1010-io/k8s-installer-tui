@@ -37,24 +37,20 @@ func mappingGet(m *yaml.Node, key string) *yaml.Node {
 
 // varsYAML mirrors the structure of group_vars/all/vars.yml for parsing.
 type varsYAML struct {
-	KiVarRootPath      string   `yaml:"ki_var_root_path"`
-	ContainerdRootPath string   `yaml:"containerd_root_path"`
-	DockerRootPath     string   `yaml:"docker_root_path"`
-	InternalNetworkSubnets []string `yaml:"internal_network_subnets"`
-	InternalNetworkExtraZone string `yaml:"internal_network_extra_zone"`
-	InternalNetworkExtraZoneARecords []struct {
-		Name string `yaml:"name"`
-		IP   string `yaml:"ip"`
-	} `yaml:"internal_network_extra_zone_a_records"`
+	KiVarRootPath            string   `yaml:"ki_var_root_path"`
+	ContainerdRootPath       string   `yaml:"containerd_root_path"`
+	DockerRootPath           string   `yaml:"docker_root_path"`
+	InternalNetworkSubnets   []string `yaml:"internal_network_subnets"`
+	InternalNetworkExtraZone string   `yaml:"internal_network_extra_zone"`
 
-	KiCpHaMode              bool     `yaml:"ki_cp_ha_mode"`
-	KiCpHaModeVIP           string   `yaml:"ki_cp_ha_mode_vip"`
-	KiCpDnsDnssecValidation bool     `yaml:"ki_cp_dns_dnssec_validation"`
+	KiCpHaMode                   bool     `yaml:"ki_cp_ha_mode"`
+	KiCpHaModeVIP                string   `yaml:"ki_cp_ha_mode_vip"`
+	KiCpDnsDnssecValidation      bool     `yaml:"ki_cp_dns_dnssec_validation"`
 	KiCpDnsServerUpstreamServers []string `yaml:"ki_cp_dns_server_upstream_servers"`
 	KiCpNtpServerUpstreamServers []string `yaml:"ki_cp_ntp_server_upstream_servers"`
 
 	K8sCertificateValidityPeriod string `yaml:"k8s_certificate_validity_period"`
-	K8sLoadBalancers []struct {
+	K8sLoadBalancers             []struct {
 		Name  string   `yaml:"name"`
 		VIP   string   `yaml:"vip"`
 		Nodes []string `yaml:"nodes"`
@@ -173,10 +169,7 @@ func LoadVars(path string, s *state.AppState) error {
 	if len(v.InternalNetworkSubnets) > 0 {
 		s.InternalNetworkSubnets = v.InternalNetworkSubnets
 	}
-	s.InternalNetworkExtraZone = v.InternalNetworkExtraZone
-	for _, r := range v.InternalNetworkExtraZoneARecords {
-		s.InternalNetworkExtraZoneARecords = append(s.InternalNetworkExtraZoneARecords, state.ARecord{Name: r.Name, IP: r.IP})
-	}
+	s.InternalDNSServerEnabled = v.InternalNetworkExtraZone != ""
 
 	s.KiCpHaMode = v.KiCpHaMode
 	if v.KiCpHaModeVIP != "" {

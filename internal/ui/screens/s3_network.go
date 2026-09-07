@@ -16,7 +16,7 @@ import (
 //   3  : DNSSEC toggle
 //   4  : DNS servers list
 //   5  : NTP servers list
-//   6  : extra zone input
+//   6  : 내부 DNS 서버 활성화 토글
 //   7  : nav slot (←/→: 이전/다음)
 
 const (
@@ -26,7 +26,7 @@ const (
 	s3FocusDNSSEC
 	s3FocusDNS
 	s3FocusNTP
-	s3FocusExtraZone
+	s3FocusInternalDNS
 	s3FocusNav
 	s3FocusMax = s3FocusNav
 )
@@ -41,13 +41,13 @@ const (
 )
 
 type S3Network struct {
-	subnets    []string
-	haMode     bool
-	vip        textinput.Model
-	dnssec     bool
-	dnsServers []string
-	ntpServers []string
-	extraZone  textinput.Model
+	subnets     []string
+	haMode      bool
+	vip         textinput.Model
+	dnssec      bool
+	dnsServers  []string
+	ntpServers  []string
+	internalDNS bool
 
 	// shared inline input for subnet / DNS / NTP entry
 	editMode  editKind
@@ -65,10 +65,6 @@ func NewS3Network() *S3Network {
 	s.vip = textinput.New()
 	s.vip.Placeholder = "x.x.x.x"
 	s.vip.CharLimit = 64
-
-	s.extraZone = textinput.New()
-	s.extraZone.Placeholder = "example.com (선택사항)"
-	s.extraZone.CharLimit = 253
 
 	s.listInput = textinput.New()
 	s.listInput.CharLimit = 253
@@ -89,7 +85,7 @@ func (s *S3Network) SyncFromState(st *state.AppState) {
 	s.dnssec = st.KiCpDnsDnssecValidation
 	s.dnsServers = append([]string{}, st.KiCpDnsUpstreamServers...)
 	s.ntpServers = append([]string{}, st.KiCpNtpUpstreamServers...)
-	s.extraZone.SetValue(st.InternalNetworkExtraZone)
+	s.internalDNS = st.InternalDNSServerEnabled
 	s.focusIdx = 0
 	s.navIdx = 0
 	s.editMode = editNone
@@ -103,7 +99,7 @@ func (s *S3Network) SyncToState(st *state.AppState) {
 	st.KiCpDnsDnssecValidation = s.dnssec
 	st.KiCpDnsUpstreamServers = append([]string{}, s.dnsServers...)
 	st.KiCpNtpUpstreamServers = append([]string{}, s.ntpServers...)
-	st.InternalNetworkExtraZone = s.extraZone.Value()
+	st.InternalDNSServerEnabled = s.internalDNS
 }
 
 func (s *S3Network) Validate() []string {
@@ -126,15 +122,12 @@ func (s *S3Network) Init() tea.Cmd { return nil }
 
 func (s *S3Network) syncFocusedInputs() {
 	s.vip.Blur()
-	s.extraZone.Blur()
 	if s.editMode != editNone {
 		return
 	}
 	switch s.focusIdx {
 	case s3FocusVIP:
 		s.vip.Focus()
-	case s3FocusExtraZone:
-		s.extraZone.Focus()
 	}
 }
 
@@ -177,8 +170,6 @@ func (s *S3Network) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch s.focusIdx {
 	case s3FocusVIP:
 		s.vip, cmd = s.vip.Update(msg)
-	case s3FocusExtraZone:
-		s.extraZone, cmd = s.extraZone.Update(msg)
 	}
 	return s, cmd
 }
@@ -203,6 +194,8 @@ func (s *S3Network) activate() (tea.Model, tea.Cmd) {
 	case s3FocusNTP:
 		s.startEdit(editNTP, "time1.google.com")
 		return s, textinput.Blink
+	case s3FocusInternalDNS:
+		s.internalDNS = !s.internalDNS
 	}
 	return s, nil
 }
@@ -303,7 +296,15 @@ func (s *S3Network) View() string {
 	s.renderListSection(&b, "DNS upstream 서버", s.dnsServers, s.focusIdx == s3FocusDNS, editDNS)
 	s.renderListSection(&b, "NTP upstream 서버", s.ntpServers, s.focusIdx == s3FocusNTP, editNTP)
 
-	b.WriteString(RenderSectionHeader("추가 DNS 존 (선택)", s.focusIdx == s3FocusExtraZone) + "  " + s.extraZone.View() + "\n")
+	internalDNSStr := styles.RadioOff() + " 비활성"
+	if s.internalDNS {
+		internalDNSStr = styles.RadioOn() + " 활성"
+	}
+	b.WriteString(RenderSectionHeader("내부 DNS 서버 활성화 여부", s.focusIdx == s3FocusInternalDNS) + "  " + internalDNSStr + "\n")
+	if s.internalDNS {
+		b.WriteString(styles.StyleMuted.Render("    활성화 시 인그레스 도메인/VIP(4~5단계에서 입력)가 내부 DNS 존에 자동 반영됩니다") + "\n")
+	}
+	b.WriteString("\n")
 
 	prevFocused := s.focusIdx == s3FocusNav && s.navIdx == 0
 	nextFocused := s.focusIdx == s3FocusNav && s.navIdx == 1

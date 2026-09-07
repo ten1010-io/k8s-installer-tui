@@ -11,18 +11,17 @@ type AppState struct {
 	NvidiaGPUNodes []string
 
 	// S3: Network (vars.yml)
-	InternalNetworkSubnets           []string
-	KiCpHaMode                       bool
-	KiCpHaModeVIP                    string
-	KiCpDnsDnssecValidation          bool
-	KiCpDnsUpstreamServers           []string
-	KiCpNtpUpstreamServers           []string
-	InternalNetworkExtraZone         string
-	InternalNetworkExtraZoneARecords []ARecord
+	InternalNetworkSubnets   []string
+	KiCpHaMode               bool
+	KiCpHaModeVIP            string
+	KiCpDnsDnssecValidation  bool
+	KiCpDnsUpstreamServers   []string
+	KiCpNtpUpstreamServers   []string
+	InternalDNSServerEnabled bool
 
 	// S4: Kubernetes (vars.yml)
 	K8sCertificateValidityPeriod string
-	K8sIngressMode               int    // 1=별도IP, 2=공유IP
+	K8sIngressMode               int // 1=별도IP, 2=공유IP
 	K8sIngressLBName             string
 	K8sIngressVIP                string
 	K8sGatewayLBName             string // mode 1 only

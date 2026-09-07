@@ -143,10 +143,6 @@ func validateNetwork(s *state.AppState) []Error {
 		errs = append(errs, Error{"ki_cp_ntp_server_upstream_servers", "NTP 서버를 최소 1개 이상 입력해주세요"})
 	}
 
-	if s.InternalNetworkExtraZone != "" && !reFQDN.MatchString(s.InternalNetworkExtraZone) {
-		errs = append(errs, Error{"internal_network_extra_zone", "유효한 도메인 형식이 아닙니다 (예: example.com)"})
-	}
-
 	return errs
 }
 

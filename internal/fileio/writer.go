@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -23,7 +24,7 @@ var (
 
 // The label base and the services of aipub run on (aipub_cp_node_label_key).
 // It is a node label of k8s-installer, set in inventory.yml
-const AipubCpNodeLabel = "node-role.aipub.ten1010.io/control-plane"
+const AipubCpNodeLabel = schema.AipubCpNodeLabel
 
 // Variables older versions of this tool wrote into group_vars/all/vars.yml.
 // k8s-installer refuses them: they moved to aipub-installer (files/aipub/vars.yml)

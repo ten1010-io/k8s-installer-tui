@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 	"github.com/ten1010-io/k8s-installer-tui/internal/validator"
@@ -23,6 +24,7 @@ const (
 )
 
 // previewTab is one file of the preview. A file AIPub does not need is not shown.
+// The last tab is the site-values view, which has no path: it is not saved.
 type previewTab struct {
 	name    string
 	path    string
@@ -82,6 +84,8 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 		if r.AipubVars != nil {
 			s.tabs = append(s.tabs, previewTab{"aipub/vars.yml", s.paths.AipubVars, string(r.AipubVars)})
 		}
+		// all of the above in one annotated view; not a file that is saved
+		s.tabs = append(s.tabs, previewTab{schema.SiteValuesFile, "", string(schema.SiteValues(st))})
 	}
 
 	s.activeTab = 0
@@ -261,7 +265,9 @@ func (s *S7Preview) View() string {
 	if s.saved {
 		b.WriteString("\n" + styles.StyleSuccess.Render("✓ 저장 완료!") + "\n")
 		for _, t := range s.tabs {
-			b.WriteString(styles.StyleMuted.Render("  "+t.path) + "\n")
+			if t.path != "" {
+				b.WriteString(styles.StyleMuted.Render("  "+t.path) + "\n")
+			}
 		}
 		b.WriteString(styles.StyleMuted.Render("  기존 파일은 .bak으로 백업되었습니다") + "\n")
 		b.WriteString("\n" + styles.StyleTitle.Render("설치 계획을 보시겠습니까?") + "  " +

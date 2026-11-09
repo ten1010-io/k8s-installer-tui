@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui"
 	"github.com/ten1010-io/k8s-installer-tui/internal/validator"
@@ -27,7 +28,7 @@ func main() {
 	inventoryPath := flag.String("inventory", "inventory.yml", "inventory.yml 경로")
 	varsPath := flag.String("vars", "group_vars/all/vars.yml", "vars.yml 경로 (k8s-installer)")
 	aipubVarsPath := flag.String("aipub-vars", "files/aipub/vars.yml", "AIPub 사이트 값 경로 (aipub-installer)")
-	renderDir := flag.String("render", "", "화면 없이 세 파일을 이 디렉터리에 렌더링하고 검증 결과를 출력 (기존 파일은 그대로)")
+	renderDir := flag.String("render", "", "화면 없이 세 파일과 한눈에 보는 site-values.yml 을 이 디렉터리에 렌더링하고 검증 결과를 출력 (기존 파일은 그대로)")
 	installerRoot := flag.String("installer-root", plan.DefaultOptions().Root, "k8s-installer가 설치된 디렉터리 (setup.sh)")
 	showVersion := flag.Bool("version", false, "버전 출력")
 	flag.Parse()
@@ -86,6 +87,13 @@ func render(from fileio.Paths, s *state.AppState, dir string) int {
 		}
 		fmt.Println("written:", f.path)
 	}
+	// the view of all of it, for a person to read; nothing reads it back
+	view := filepath.Join(dir, schema.SiteValuesFile)
+	if err := os.WriteFile(view, schema.SiteValues(s), 0644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("written:", view)
 	errs := validator.Validate(s)
 	for _, e := range errs {
 		fmt.Println("✗", e.Error())

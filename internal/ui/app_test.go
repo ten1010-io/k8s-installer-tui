@@ -268,3 +268,25 @@ func TestWizardWithoutAipub(t *testing.T) {
 		t.Error("kube-proxy turned off without AIPub")
 	}
 }
+
+// The preview has one more tab: every variable in one annotated view. It is a
+// view only; saving writes the three files and nothing else.
+func TestPreviewSiteValuesTab(t *testing.T) {
+	d, paths := newDriver(t)
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("8.저장")
+	if !strings.Contains(d.screen(), "site-values.yml") {
+		t.Fatalf("no site-values tab:\n%s", d.screen())
+	}
+	d.keys("l", "l") // inventory.yml → vars.yml → site-values.yml
+	if !strings.Contains(d.screen(), "[INVENTORY]") {
+		t.Errorf("site-values tab not shown:\n%s", d.screen())
+	}
+	d.keys("s")
+	if !strings.Contains(d.screen(), "저장 완료") {
+		t.Fatalf("not saved:\n%s", d.screen())
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(paths.Inventory), "site-values.yml")); err == nil {
+		t.Error("site-values.yml saved with the files")
+	}
+}

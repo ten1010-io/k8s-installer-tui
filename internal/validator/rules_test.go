@@ -175,3 +175,90 @@ func TestCheckVar(t *testing.T) {
 		t.Error("the condition is not named")
 	}
 }
+
+// The control plane lists and the webhook preset, on the rules of
+// validate-hostvars.py of k8s-installer.
+func TestValidateControlPlane(t *testing.T) {
+	arg := func(name, value string) state.ExtraArg { return state.ExtraArg{Name: name, Value: value} }
+	vol := func(name, host, mount string) state.ExtraVolume {
+		return state.ExtraVolume{Name: name, HostPath: host, MountPath: mount}
+	}
+	cases := []struct {
+		name   string
+		edit   func(cp *state.ControlPlane)
+		fields []string
+	}{
+		{"presets", func(cp *state.ControlPlane) {
+			cp.Audit, cp.RuntimeConfig, cp.Webhook = true, true, true
+			cp.WebhookURL = "https://aipub.example.com:8443/api/token-review"
+		}, nil},
+		{"dashes and bad names", func(cp *state.ControlPlane) {
+			cp.Args = map[string][]state.ExtraArg{"apiserver": {arg("--feature-gates", "A=true"), arg("Bad_Name", "x")}}
+		}, []string{"k8s_apiserver_extra_args[0]", "k8s_apiserver_extra_args[1]"}},
+		{"refused flags", func(cp *state.ControlPlane) {
+			cp.Args = map[string][]state.ExtraArg{
+				"apiserver":          {arg("bind-address", "0.0.0.0"), arg("etcd-servers", "x")},
+				"controller_manager": {arg("cluster-cidr", "10.0.0.0/8")},
+				"etcd":               {arg("data-dir", "/data")},
+				// free on the scheduler
+				"scheduler": {arg("bind-address", "0.0.0.0")},
+			}
+		}, []string{"k8s_apiserver_extra_args[0]", "k8s_apiserver_extra_args[1]",
+			"k8s_controller_manager_extra_args[0]", "k8s_etcd_extra_args[0]"}},
+		{"repeated flag", func(cp *state.ControlPlane) {
+			cp.Args = map[string][]state.ExtraArg{"apiserver": {arg("api-audiences", "a"), arg("api-audiences", "b")}}
+		}, nil},
+		{"volumes", func(cp *state.ControlPlane) {
+			cp.Volumes = map[string][]state.ExtraVolume{
+				"apiserver":          {vol("Bad_Name", "/a", "/a"), vol("k8s-certs", "/b", "/b"), vol("ok", "rel/path", "/c")},
+				"controller_manager": {vol("dup", "/a", "/a"), vol("dup", "/b", "/b")},
+				"scheduler":          {{Name: "s", HostPath: "/s", MountPath: "/s", PathType: "Socket"}},
+			}
+		}, []string{"k8s_apiserver_extra_volumes[0]", "k8s_apiserver_extra_volumes[1]",
+			"k8s_apiserver_extra_volumes[2].hostPath", "k8s_controller_manager_extra_volumes[1]",
+			"k8s_scheduler_extra_volumes[0].pathType"}},
+		{"preset volume clash", func(cp *state.ControlPlane) {
+			cp.Audit = true
+			cp.Volumes = map[string][]state.ExtraVolume{"apiserver": {vol("audit-log", "/var/log/x", "/var/log/x")}}
+		}, []string{"k8s_apiserver_extra_volumes[2]"}},
+		{"files", func(cp *state.ControlPlane) {
+			cp.Files = []state.CpExtraFile{
+				{Src: "/abs/policy.yaml", Dest: "relative/dest", Mode: "644"},
+				{Src: "../outside", Dest: "/etc/kubernetes/pki/x.crt", Mode: "0644"},
+				{Src: "ok.yaml", Dest: "/etc/a.yaml", Mode: "0644"},
+				{Src: "ok2.yaml", Dest: "/etc/a.yaml", Mode: "0600"},
+			}
+		}, []string{"k8s_cp_extra_files[0].dest", "k8s_cp_extra_files[0].mode", "k8s_cp_extra_files[0].src",
+			"k8s_cp_extra_files[1].dest", "k8s_cp_extra_files[1].src", "k8s_cp_extra_files[3].dest"}},
+		{"webhook without url", func(cp *state.ControlPlane) { cp.Webhook = true },
+			[]string{"control_plane.webhook_url"}},
+		{"webhook url not https", func(cp *state.ControlPlane) {
+			cp.Webhook = true
+			cp.WebhookURL = "http://aipub.example.com/token-review"
+		}, []string{"control_plane.webhook_url"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := valid()
+			c.edit(&s.ControlPlane)
+			want := append([]string{}, c.fields...)
+			sort.Strings(want)
+			if got := fields(Validate(s)); got != strings.Join(want, " ") {
+				t.Errorf("rejected on\n  %s\nwant\n  %s\nerrors: %v", got, strings.Join(want, " "), Validate(s))
+			}
+			// the screen stops on the same
+			if got := fields(ControlPlane(s.ControlPlane)); got != strings.Join(want, " ") {
+				t.Errorf("screen rejects on\n  %s\nwant\n  %s", got, strings.Join(want, " "))
+			}
+		})
+	}
+
+	// the webhook needs the CA setup-cert of AIPub makes
+	s := valid()
+	s.AipubEnabled = false
+	s.ControlPlane.Webhook = true
+	s.ControlPlane.WebhookURL = "https://aipub.example.com/token-review"
+	if got := fields(Validate(s)); got != "control_plane.webhook" {
+		t.Errorf("webhook without AIPub: %s", got)
+	}
+}

@@ -3,6 +3,8 @@ package validator
 import (
 	"fmt"
 	"net"
+	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -40,6 +42,7 @@ func Validate(s *state.AppState) []Error {
 	errs = append(errs, validateNetwork(s)...)
 	errs = append(errs, validateKubernetes(s)...)
 	errs = append(errs, validateAipub(s)...)
+	errs = append(errs, validateControlPlane(s)...)
 	return errs
 }
 
@@ -91,6 +94,14 @@ func checkVar(v schema.Var, field string, val any, required bool) []Error {
 	}
 	if val == nil {
 		return nil
+	}
+	switch items := val.(type) {
+	case []state.ExtraArg:
+		return checkExtraArgs(v, field, items)
+	case []state.ExtraVolume:
+		return checkExtraVolumes(field, items)
+	case []state.CpExtraFile:
+		return checkCpExtraFiles(field, items)
 	}
 	if items, ok := val.([]string); ok {
 		var errs []Error
@@ -357,5 +368,168 @@ func validateAipub(s *state.AppState) []Error {
 		}
 	}
 
+	return errs
+}
+
+// --- the control plane (k8s_*_extra_args, k8s_*_extra_volumes, k8s_cp_extra_files) ---
+//
+// The rules of validate-hostvars.py of k8s-installer (ExtraArgModel,
+// ExtraVolumeModel, CpExtraFileModel, validate_control_plane_extra_args,
+// validate_control_plane_extra_volumes, validate_k8s_cp_extra_files), so that the
+// wizard does not write a value the installer refuses before touching a node.
+
+var (
+	reArgName  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	reDNSLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	reFileMode = regexp.MustCompile(`^0[0-7]{3}$`)
+)
+
+// kubeadmVolumeNames are the volumes kubeadm gives the control plane pods
+// itself; one declared under the same name replaces it (KUBEADM_CONTROL_PLANE_VOLUME_NAMES).
+var kubeadmVolumeNames = []string{
+	"ca-certs", "etc-ca-certificates", "etc-pki", "flexvolume-dir", "k8s-certs",
+	"kubeconfig", "usr-local-share-ca-certificates", "usr-share-ca-certificates",
+}
+
+var volumePathTypes = []string{"DirectoryOrCreate", "Directory", "FileOrCreate", "File"}
+
+// cpOwnedPaths are the trees kubeadm or k8s-installer write and remove on their
+// own, where a k8s_cp_extra_files dest is refused: k8s_pki_path,
+// k8s_manifests_path, k8s_etcd_data_path, ki_etc_root_path, ki_opt_root_path
+// (constant-vars.yml) and ki_var_root_path at the default of vars.yml.
+var cpOwnedPaths = []string{
+	"/etc/kubernetes/pki", "/etc/kubernetes/manifests", "/var/lib/etcd",
+	"/etc/k8s-installer", "/opt/k8s-installer", "/var/lib/k8s-installer",
+}
+
+func checkExtraArgs(v schema.Var, field string, args []state.ExtraArg) []Error {
+	var errs []Error
+	for i, a := range args {
+		f := fmt.Sprintf("%s[%d]", field, i)
+		switch {
+		case strings.HasPrefix(a.Name, "-"):
+			errs = append(errs, Error{f, fmt.Sprintf("'%s': 인자 이름은 앞의 대시(--) 없이 씁니다", a.Name)})
+		case !reArgName.MatchString(a.Name):
+			errs = append(errs, Error{f, fmt.Sprintf("'%s': 인자 이름은 소문자·숫자·대시만 씁니다", a.Name)})
+		case contains(v.Decided, a.Name):
+			errs = append(errs, Error{f, fmt.Sprintf("'%s' 는 설치기가 직접 정하는 인자라 넣을 수 없습니다", a.Name)})
+		}
+	}
+	return errs
+}
+
+func checkExtraVolumes(field string, vols []state.ExtraVolume) []Error {
+	var errs []Error
+	seen := map[string]bool{}
+	for i, vol := range vols {
+		f := fmt.Sprintf("%s[%d]", field, i)
+		switch {
+		case !reDNSLabel.MatchString(vol.Name):
+			errs = append(errs, Error{f, fmt.Sprintf("'%s': 볼륨 이름은 DNS-1123 레이블입니다 (소문자·숫자·대시, 63자 이하)", vol.Name)})
+		case contains(kubeadmVolumeNames, vol.Name):
+			errs = append(errs, Error{f, fmt.Sprintf("'%s' 는 kubeadm 이 쓰는 볼륨 이름이라 쓸 수 없습니다", vol.Name)})
+		case seen[vol.Name]:
+			errs = append(errs, Error{f, fmt.Sprintf("볼륨 이름 '%s' 가 중복됩니다", vol.Name)})
+		}
+		seen[vol.Name] = true
+		for _, p := range []struct{ name, path string }{{"hostPath", vol.HostPath}, {"mountPath", vol.MountPath}} {
+			if !path.IsAbs(p.path) {
+				errs = append(errs, Error{f + "." + p.name, fmt.Sprintf("'%s': 절대 경로여야 합니다", p.path)})
+			}
+		}
+		if vol.PathType != "" && !contains(volumePathTypes, vol.PathType) {
+			errs = append(errs, Error{f + ".pathType", strings.Join(volumePathTypes, ", ") + " 중 하나여야 합니다"})
+		}
+	}
+	return errs
+}
+
+func checkCpExtraFiles(field string, files []state.CpExtraFile) []Error {
+	var errs []Error
+	seen := map[string]bool{}
+	for i, file := range files {
+		f := fmt.Sprintf("%s[%d]", field, i)
+		switch {
+		case file.Src == "" || path.IsAbs(file.Src):
+			errs = append(errs, Error{f + ".src", "ansible/files 아래의 상대 경로여야 합니다"})
+		case contains(strings.Split(file.Src, "/"), ".."):
+			errs = append(errs, Error{f + ".src", "ansible/files 밖을 가리킬 수 없습니다 (..)"})
+		}
+		switch {
+		case !path.IsAbs(file.Dest):
+			errs = append(errs, Error{f + ".dest", fmt.Sprintf("'%s': 절대 경로여야 합니다", file.Dest)})
+		case seen[file.Dest]:
+			errs = append(errs, Error{f + ".dest", fmt.Sprintf("'%s' 에 두 파일을 둘 수 없습니다", file.Dest)})
+		default:
+			for _, owned := range cpOwnedPaths {
+				if within(file.Dest, owned) {
+					errs = append(errs, Error{f + ".dest", fmt.Sprintf("'%s' 는 kubeadm 이나 설치기가 관리하는 %s 안입니다", file.Dest, owned)})
+				}
+			}
+		}
+		seen[file.Dest] = true
+		if !reFileMode.MatchString(file.Mode) {
+			errs = append(errs, Error{f + ".mode", fmt.Sprintf("'%s': 0644 같은 네 자리 8진수여야 합니다", file.Mode)})
+		}
+	}
+	return errs
+}
+
+func within(p, dir string) bool {
+	p = path.Clean(p)
+	return p == dir || strings.HasPrefix(p, dir+"/")
+}
+
+func contains(l []string, x string) bool {
+	for _, v := range l {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+// validateControlPlane checks what is not a variable of vars.yml: the URL of the
+// webhook preset, which goes into the kubeconfig it names, and that the preset
+// has the CA of setup-cert of aipub-installer to start with.
+func validateControlPlane(s *state.AppState) []Error {
+	var errs []Error
+	if s.ControlPlane.Webhook && !s.AipubEnabled {
+		errs = append(errs, Error{"control_plane.webhook",
+			"AIPub 인증 웹훅은 AIPub 을 설치할 때만 켤 수 있습니다 (CA 를 setup-cert 가 만듭니다)"})
+	}
+	return append(errs, checkWebhookURL(&s.ControlPlane)...)
+}
+
+// ControlPlane checks what the control plane screen edits on its own: the eight
+// variables and the webhook URL, for the screen to stop on before the preview.
+func ControlPlane(cp state.ControlPlane) []Error {
+	s := &state.AppState{ControlPlane: cp}
+	var errs []Error
+	for _, v := range schema.ByFile(schema.FileK8s) {
+		if v.Group != "control_plane" {
+			continue
+		}
+		if val, ok := schema.Value(s, v); ok {
+			errs = append(errs, checkVar(v, v.Key, val, false)...)
+		}
+	}
+	return append(errs, checkWebhookURL(&cp)...)
+}
+
+func checkWebhookURL(cp *state.ControlPlane) []Error {
+	if !cp.Webhook {
+		return nil
+	}
+	var errs []Error
+	const field = "control_plane.webhook_url"
+	raw := strings.TrimSpace(cp.WebhookURL)
+	if raw == "" {
+		return append(errs, Error{field, "AIPub 인증 웹훅을 켰으면 토큰 검증 서버 URL 을 입력해주세요"})
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		errs = append(errs, Error{field, fmt.Sprintf("'%s': https://호스트[:포트]/경로 형식이어야 합니다 (자격 증명 없이)", raw)})
+	}
 	return errs
 }

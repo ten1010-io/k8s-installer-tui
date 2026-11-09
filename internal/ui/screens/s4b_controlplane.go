@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
+	"github.com/ten1010-io/k8s-installer-tui/internal/validator"
 )
 
 // What k8s-installer adds to the static pods of the control plane, through the
@@ -126,16 +127,19 @@ func (s *S4bControlPlane) SyncToState(st *state.AppState) {
 	st.ControlPlane = copyControlPlane(s.cp)
 }
 
-// Validate stops on what this screen alone can tell; the rules of the variables
-// are the validator's, run on the preview.
+// Validate stops on the rules of the variables of this screen and the webhook
+// URL. That the webhook needs AIPub is told on the preview, once AIPub is chosen.
 func (s *S4bControlPlane) Validate() []string {
-	if s.cp.Webhook && strings.TrimSpace(s.url.Value()) == "" {
-		return []string{"AIPub 인증 웹훅을 켰으면 토큰 검증 서버 URL 을 입력해주세요"}
-	}
 	if strings.TrimSpace(s.entry.Value()) != "" {
 		return []string{"추가할 항목에 입력한 것이 있습니다. Enter 로 추가하거나 지워주세요"}
 	}
-	return nil
+	cp := copyControlPlane(s.cp)
+	cp.WebhookURL = strings.TrimSpace(s.url.Value())
+	var msgs []string
+	for _, e := range validator.ControlPlane(cp) {
+		msgs = append(msgs, e.Error())
+	}
+	return msgs
 }
 
 func (s *S4bControlPlane) Init() tea.Cmd { return nil }

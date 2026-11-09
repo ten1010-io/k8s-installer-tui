@@ -137,3 +137,27 @@ func TestControlPlanePresetOff(t *testing.T) {
 		t.Errorf("a partial preset: %+v", partial)
 	}
 }
+
+// The files the presets copy have to be under ansible/files; the kubeconfig of
+// the webhook is not looked for, the wizard writes it.
+func TestMissingCpFiles(t *testing.T) {
+	p := DefaultPaths(t.TempDir())
+	installer := t.TempDir()
+	s := controlPlaneState()
+	var srcs []string
+	for _, f := range MissingCpFiles(s, p.FilesDir(), installer) {
+		srcs = append(srcs, f.Src)
+	}
+	if got := strings.Join(srcs, " "); got != "aipub/audit-policy.yaml site/oidc-ca.crt" {
+		t.Errorf("missing: %s", got)
+	}
+	must(t, os.MkdirAll(installer+"/aipub", 0755))
+	must(t, os.WriteFile(installer+"/aipub/audit-policy.yaml", []byte("apiVersion: audit.k8s.io/v1\n"), 0644))
+	if got := MissingCpFiles(s, p.FilesDir(), installer); len(got) != 1 || got[0].Src != "site/oidc-ca.crt" {
+		t.Errorf("after the policy is placed under the installer: %v", got)
+	}
+	s.ControlPlane.WebhookURL = "" // nothing to write the kubeconfig from
+	if got := MissingCpFiles(s, p.FilesDir(), installer); len(got) != 2 || got[0].Src != state.WebhookConfigFile {
+		t.Errorf("webhook without a URL: %v", got)
+	}
+}

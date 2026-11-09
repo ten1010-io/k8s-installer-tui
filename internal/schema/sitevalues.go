@@ -48,9 +48,13 @@ func SiteValues(s *state.AppState) []byte {
 				}
 				line, live := siteValueLine(s, v)
 				b.WriteString(line + "\n")
+				var hints []string
 				if live && v.Preflight != "" {
-					b.WriteString("# preflight: " + v.Preflight + "\n")
-					checks = append(checks, v.Key+": "+v.Preflight)
+					hints = append(hints, v.Preflight)
+				}
+				for _, h := range append(hints, controlPlaneHints(s, v)...) {
+					b.WriteString("# preflight: " + h + "\n")
+					checks = append(checks, v.Key+": "+h)
 				}
 			}
 		}
@@ -203,4 +207,42 @@ func displayWidth(s string) int {
 		}
 	}
 	return w
+}
+
+// controlPlaneHints are the checks the presets of the control plane leave to the
+// site: the files k8s_cp_extra_files copies have to be under ansible/files, and
+// the token review server of the webhook has to answer.
+func controlPlaneHints(s *state.AppState, v Var) []string {
+	cp := &s.ControlPlane
+	var out []string
+	switch v.Key {
+	case state.ArgsVar("apiserver"):
+		if cp.Webhook {
+			out = append(out, fmt.Sprintf("웹훅 URL %q 이 컨트롤 플레인 노드에서 닿고 %s 로 검증되는지 (A2.5 update-cluster 에서 적용)",
+				cp.WebhookURL, state.WebhookCAPath))
+		}
+	case state.CpExtraFilesVar:
+		for _, f := range cp.ExtraFiles(false) {
+			out = append(out, "ansible/files/"+f.Src+" 이 있어야 함"+FileSource(f))
+		}
+	}
+	return out
+}
+
+// FileSource says who puts a file of k8s_cp_extra_files under ansible/files.
+func FileSource(f state.CpExtraFile) string {
+	for _, p := range state.Presets {
+		for _, pf := range p.Files {
+			if pf != f {
+				continue
+			}
+			if p.ID == state.PresetWebhook {
+				return " (위저드가 웹훅 URL 로 만듦)"
+			}
+			if p.Provider != "" {
+				return " (" + p.Title + " 정책: " + p.Provider + " 제공)"
+			}
+		}
+	}
+	return " (사이트가 둠)"
 }

@@ -368,6 +368,13 @@ func TestWizardControlPlane(t *testing.T) {
 	d.at("5.AIPub")
 	d.keys("ctrl+n")
 	d.at("8.저장")
+	// the audit policy is the site's to provide; the preview says so, and saves
+	for _, want := range []string{"컨트롤플레인 파일 1건이 ansible/files 에 없습니다",
+		"/opt/k8s-installer/ansible/files/aipub/audit-policy.yaml", "AIPub 모니터링/python 팀 제공"} {
+		if !strings.Contains(d.screen(), want) {
+			t.Errorf("preview does not warn %q:\n%s", want, d.screen())
+		}
+	}
 	d.keys("s")
 	if !strings.Contains(d.screen(), "저장 완료") {
 		t.Fatalf("not saved:\n%s", d.screen())

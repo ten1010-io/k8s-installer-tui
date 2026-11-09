@@ -36,12 +36,16 @@ type S7Preview struct {
 	vp        viewport.Model
 	activeTab int
 	errors    []validator.Error
-	warnings  []schema.Change // values an existing cluster can not take, or takes by rebuilding nodes
-	loaded    *schema.Loaded  // what the site's files held when the wizard started; nil for a new site
-	saved     bool
-	saveErr   string
-	appState  *state.AppState
-	paths     fileio.Paths
+	warnings  []schema.Change     // values an existing cluster can not take, or takes by rebuilding nodes
+	loaded    *schema.Loaded      // what the site's files held when the wizard started; nil for a new site
+	missing   []state.CpExtraFile // files of k8s_cp_extra_files not under ansible/files
+	// installerFiles is ansible/files of the installer (setup.sh), where
+	// k8s_cp_extra_files are read from when the settings are saved elsewhere
+	installerFiles string
+	saved          bool
+	saveErr        string
+	appState       *state.AppState
+	paths          fileio.Paths
 
 	focusIdx int
 	navIdx   int
@@ -49,7 +53,7 @@ type S7Preview struct {
 	height   int
 }
 
-func NewS7Preview(s *state.AppState, paths fileio.Paths) *S7Preview {
+func NewS7Preview(s *state.AppState, paths fileio.Paths, installerFiles string) *S7Preview {
 	// Read now, before anything is saved: the warnings compare against the site
 	// as it was. A file that can not be read leaves nothing to compare against
 	loaded, _ := fileio.LoadSite(paths)
@@ -58,6 +62,8 @@ func NewS7Preview(s *state.AppState, paths fileio.Paths) *S7Preview {
 		appState: s,
 		paths:    paths,
 		loaded:   loaded,
+
+		installerFiles: installerFiles,
 	}
 }
 
@@ -76,6 +82,7 @@ func (s *S7Preview) SetSize(w, h int) {
 func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.errors = validator.Validate(st)
 	s.warnings = schema.FixedChanges(s.loaded, st)
+	s.missing = fileio.MissingCpFiles(st, s.paths.FilesDir(), s.installerFiles)
 	s.saved = false
 	s.saveErr = ""
 
@@ -272,6 +279,14 @@ func (s *S7Preview) View() string {
 		b.WriteString(styles.StyleWarning.Render(fmt.Sprintf("⚠ 기존 클러스터에서 바꾸기 어려운 값 %d건:", len(s.warnings))) + "\n")
 		for _, w := range s.warnings {
 			b.WriteString(styles.StyleWarning.Render("  • "+w.Message()) + "\n")
+		}
+	}
+
+	// not blocking either: the site puts these files there, maybe after saving
+	if len(s.missing) > 0 {
+		b.WriteString(styles.StyleWarning.Render(fmt.Sprintf("⚠ 컨트롤플레인 파일 %d건이 ansible/files 에 없습니다 (setup-cluster 전에 두세요):", len(s.missing))) + "\n")
+		for _, f := range s.missing {
+			b.WriteString(styles.StyleWarning.Render("  • "+s.installerFiles+"/"+f.Src+schema.FileSource(f)) + "\n")
 		}
 	}
 

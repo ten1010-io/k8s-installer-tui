@@ -456,3 +456,29 @@ func hostMap(hosts *yaml.Node, name string) *yaml.Node {
 	h.Style = 0
 	return h
 }
+
+// MissingCpFiles lists the files of k8s_cp_extra_files that are in none of the
+// files directories given (ansible/files next to the saved settings, of the
+// installer). The kubeconfig of the webhook preset is left out while the wizard
+// writes it. k8s-installer stops on such a file before it touches a node; the
+// preview warns sooner.
+func MissingCpFiles(s *state.AppState, filesDirs ...string) []state.CpExtraFile {
+	generated := WebhookConfig(s) != nil
+	var out []state.CpExtraFile
+	for _, f := range s.ControlPlane.ExtraFiles(false) {
+		if generated && f.Src == state.WebhookConfigFile {
+			continue
+		}
+		found := false
+		for _, dir := range filesDirs {
+			if st, err := os.Stat(filepath.Join(dir, filepath.FromSlash(f.Src))); err == nil && !st.IsDir() {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, f)
+		}
+	}
+	return out
+}

@@ -27,6 +27,7 @@ func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version st
 	s2 := screens.NewS2Groups()
 	s3 := screens.NewS3Network()
 	s4 := screens.NewS4Kubernetes()
+	s4b := screens.NewS4bControlPlane()
 	s5 := screens.NewS5Aipub()
 	s6 := screens.NewS6AipubLB()
 	s7 := screens.NewS6CertMode()
@@ -35,17 +36,17 @@ func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version st
 	s1.SyncFromState(s)
 	return &App{
 		appState:   s,
-		screenList: []screens.Screen{s1, s2, s3, s4, s5, s6, s7, s8, s9},
+		screenList: []screens.Screen{s1, s2, s3, s4, s4b, s5, s6, s7, s8, s9},
 		version:    version,
 	}
 }
 
 // The steps of the header, in the order of screenList.
-var stepTitles = []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "5.AIPub", "6.AIPub LB", "7.인증서", "8.저장", "9.설치"}
+var stepTitles = []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "4b.컨트롤플레인", "5.AIPub", "6.AIPub LB", "7.인증서", "8.저장", "9.설치"}
 
 // aipubOnlyScreens are skipped when AIPub is not installed: what they ask goes to
 // files/aipub/vars.yml, which is then not written.
-var aipubOnlyScreens = map[int]bool{5: true, 6: true}
+var aipubOnlyScreens = map[int]bool{6: true, 7: true}
 
 func (a *App) Init() tea.Cmd { return nil }
 

@@ -133,6 +133,8 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	d.at("4.K8s")
 	t.Logf("S4:\n%s", d.screen())
 	d.keys("ctrl+n")
+	d.at("4b.컨트롤플레인")
+	d.keys("ctrl+n")
 
 	// S5: AIPub on, its domain, HA off and harbor on node1
 	d.at("5.AIPub")
@@ -199,7 +201,7 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	// 9.설치: the plan of what was saved
 	d.keys("enter")
 	d.at("9.설치")
-	s9 := d.app.screenList[8].(*screens.S9Install)
+	s9 := d.app.screenList[9].(*screens.S9Install)
 	s9.SetRunner(func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		return []byte("node1 | CHANGED | rc=0 | (stdout) \nnode2 | CHANGED | rc=0 | (stdout) \n" +
 			"node3 | UNREACHABLE! => {\"msg\": \"No route to host\"}\n"), fmt.Errorf("exit status 4")
@@ -245,7 +247,7 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 
 func TestPreviewNeedsSave(t *testing.T) {
 	d, _ := newDriver(t)
-	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
 	d.at("8.저장")
 	d.keys("ctrl+n")
 	d.at("8.저장") // not saved yet
@@ -256,7 +258,7 @@ func TestPreviewNeedsSave(t *testing.T) {
 
 func TestWizardWithoutAipub(t *testing.T) {
 	d, paths := newDriver(t)
-	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
 	d.at("5.AIPub")
 	d.keys("ctrl+n") // left off
 	d.at("8.저장")     // 6 and 7 skipped
@@ -273,7 +275,7 @@ func TestWizardWithoutAipub(t *testing.T) {
 // view only; saving writes the three files and nothing else.
 func TestPreviewSiteValuesTab(t *testing.T) {
 	d, paths := newDriver(t)
-	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
 	d.at("8.저장")
 	if !strings.Contains(d.screen(), "site-values.yml") {
 		t.Fatalf("no site-values tab:\n%s", d.screen())
@@ -303,7 +305,7 @@ func TestPreviewWarnsFixedChange(t *testing.T) {
 	s.InternalNetworkSubnets = []string{"192.168.0.0/23"}
 	d := &driver{t: t, app: NewApp(s, paths, plan.DefaultOptions(), "test")}
 	d.send(tea.WindowSizeMsg{Width: 110, Height: 60})
-	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
 	d.at("8.저장")
 	if !strings.Contains(d.screen(), "internal_network_subnets 는 설치 뒤 바꿀 수 없습니다") {
 		t.Fatalf("no warning:\n%s", d.screen())
@@ -315,9 +317,81 @@ func TestPreviewWarnsFixedChange(t *testing.T) {
 
 	// a new site warns about nothing
 	n, _ := newDriver(t)
-	n.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	n.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
 	n.at("8.저장")
 	if strings.Contains(n.screen(), "바꿀 수 없습니다") {
 		t.Errorf("a new site warns:\n%s", n.screen())
+	}
+}
+
+// The control plane screen: presets switched on, entries typed in and one taken
+// out again, and what reaches vars.yml.
+func TestWizardControlPlane(t *testing.T) {
+	d, paths := newDriver(t)
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("4b.컨트롤플레인")
+
+	d.keys(" ")             // AIPub 감사 로그
+	d.keys("down", "enter") // runtime-config
+	d.keys("down", " ")     // AIPub 인증 웹훅
+	d.keys("ctrl+n")
+	d.at("4b.컨트롤플레인") // refused: no URL
+	if !strings.Contains(strings.Join(d.app.screenErrors, ""), "URL") {
+		t.Errorf("no error asking for the URL: %v", d.app.screenErrors)
+	}
+	d.keys(" ") // webhook off again
+
+	// an apiserver argument, a bad volume line, then a file
+	d.keys("down", "down") // 대상: apiserver 인자
+	d.keys("down", "oidc-issuer-url=https://idp.example.com", "enter")
+	d.keys("up", "right", "down")     // 대상: apiserver 볼륨
+	d.keys("oidc /etc/oidc", "enter") // too few fields
+	if !strings.Contains(d.screen(), "이름 hostPath mountPath") {
+		t.Errorf("a bad volume line is not refused:\n%s", d.screen())
+	}
+	d.keys("ctrl+u", "oidc /etc/oidc /etc/oidc ro Directory", "enter")
+	d.keys("up")
+	for i := 0; i < 6; i++ {
+		d.keys("right") // 대상: 컨트롤플레인 파일
+	}
+	d.keys("down", "oidc/ca.crt /etc/oidc/ca.crt", "enter")
+	d.keys("down", "down", "down") // the third entry: the file
+	t.Logf("S4b:\n%s", d.screen())
+	if !strings.Contains(d.screen(), "oidc/ca.crt → /etc/oidc/ca.crt (0644)") {
+		t.Fatalf("file entry not listed:\n%s", d.screen())
+	}
+	d.keys("d")
+	if strings.Contains(d.screen(), "oidc/ca.crt →") {
+		t.Errorf("file entry not removed:\n%s", d.screen())
+	}
+	d.keys("ctrl+n")
+	d.at("5.AIPub")
+	d.keys("ctrl+n")
+	d.at("8.저장")
+	d.keys("s")
+	if !strings.Contains(d.screen(), "저장 완료") {
+		t.Fatalf("not saved:\n%s", d.screen())
+	}
+
+	v := readYAML(t, paths.Vars)
+	args := v["k8s_apiserver_extra_args"].([]interface{})
+	var names []string
+	for _, a := range args {
+		names = append(names, a.(map[string]interface{})["name"].(string))
+	}
+	if got, want := strings.Join(names, " "), "audit-policy-file audit-log-path audit-log-maxage audit-log-maxbackup "+
+		"audit-log-maxsize runtime-config oidc-issuer-url"; got != want {
+		t.Errorf("apiserver args %s, want %s", got, want)
+	}
+	vols := v["k8s_apiserver_extra_volumes"].([]interface{})
+	if len(vols) != 3 || vols[2].(map[string]interface{})["pathType"] != "Directory" {
+		t.Errorf("apiserver volumes %v", vols)
+	}
+	files := v["k8s_cp_extra_files"].([]interface{})
+	if len(files) != 1 || files[0].(map[string]interface{})["src"] != "aipub/audit-policy.yaml" {
+		t.Errorf("cp extra files %v", files)
+	}
+	if _, err := os.Stat(paths.WebhookConfig()); err == nil {
+		t.Error("webhook kubeconfig written with the preset off")
 	}
 }

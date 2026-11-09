@@ -36,6 +36,8 @@ type S7Preview struct {
 	vp        viewport.Model
 	activeTab int
 	errors    []validator.Error
+	warnings  []schema.Change // values an existing cluster can not take, or takes by rebuilding nodes
+	loaded    *schema.Loaded  // what the site's files held when the wizard started; nil for a new site
 	saved     bool
 	saveErr   string
 	appState  *state.AppState
@@ -48,10 +50,14 @@ type S7Preview struct {
 }
 
 func NewS7Preview(s *state.AppState, paths fileio.Paths) *S7Preview {
+	// Read now, before anything is saved: the warnings compare against the site
+	// as it was. A file that can not be read leaves nothing to compare against
+	loaded, _ := fileio.LoadSite(paths)
 	return &S7Preview{
 		vp:       viewport.New(80, 20),
 		appState: s,
 		paths:    paths,
+		loaded:   loaded,
 	}
 }
 
@@ -69,6 +75,7 @@ func (s *S7Preview) SetSize(w, h int) {
 
 func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.errors = validator.Validate(st)
+	s.warnings = schema.FixedChanges(s.loaded, st)
 	s.saved = false
 	s.saveErr = ""
 
@@ -256,6 +263,15 @@ func (s *S7Preview) View() string {
 		b.WriteString(styles.StyleError.Render(fmt.Sprintf("✗ 검증 오류 %d건:", len(s.errors))) + "\n")
 		for _, e := range s.errors {
 			b.WriteString(styles.StyleError.Render("  • "+e.Error()) + "\n")
+		}
+	}
+
+	// not blocking: the operator may mean it, but update-cluster.yml will refuse
+	// or rebuild nodes for it
+	if len(s.warnings) > 0 {
+		b.WriteString(styles.StyleWarning.Render(fmt.Sprintf("⚠ 기존 클러스터에서 바꾸기 어려운 값 %d건:", len(s.warnings))) + "\n")
+		for _, w := range s.warnings {
+			b.WriteString(styles.StyleWarning.Render("  • "+w.Message()) + "\n")
 		}
 	}
 

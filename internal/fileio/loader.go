@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -262,4 +263,58 @@ func setIf(dst *string, v string) {
 	if v != "" {
 		*dst = v
 	}
+}
+
+// LoadSite reads what the files of the site hold, for the wizard to tell later
+// which values it changed (schema.FixedChanges). nil for a new site: one without
+// group_vars/all/vars.yml. A file that does not exist is left out.
+func LoadSite(p Paths) (*schema.Loaded, error) {
+	vars, err := readDoc(p.Vars)
+	if err != nil || vars == nil {
+		return nil, err
+	}
+	l := &schema.Loaded{Values: map[schema.File]map[string]any{}}
+	var k8s map[string]any
+	if err := vars.Decode(&k8s); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", p.Vars, err)
+	}
+	l.Values[schema.FileK8s] = k8s
+	if aipub, err := readDoc(p.AipubVars); err != nil {
+		return nil, err
+	} else if aipub != nil {
+		var m map[string]any
+		if err := aipub.Decode(&m); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", p.AipubVars, err)
+		}
+		l.Values[schema.FileAipub] = m
+	}
+
+	inv, err := readDoc(p.Inventory)
+	if err != nil || inv == nil {
+		return l, err
+	}
+	// the variables of the hosts, from every group they are set in
+	hostVars := map[string]any{}
+	for _, group := range keys(inv) {
+		hosts := mappingGet(mappingGet(inv, group), "hosts")
+		if hosts == nil || hosts.Kind != yaml.MappingNode {
+			continue
+		}
+		for i := 0; i+1 < len(hosts.Content); i += 2 {
+			host := hosts.Content[i].Value
+			var hv map[string]any
+			_ = hosts.Content[i+1].Decode(&hv)
+			for k, v := range hv {
+				m, _ := hostVars[k].(map[string]any)
+				if m == nil {
+					m = map[string]any{}
+					hostVars[k] = m
+				}
+				m[host] = v
+			}
+		}
+	}
+	l.Values[schema.FileInventory] = hostVars
+	l.Hosts = keys(mappingGet(mappingGet(inv, "all"), "hosts"))
+	return l, nil
 }

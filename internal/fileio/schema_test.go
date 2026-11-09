@@ -148,3 +148,48 @@ func sortSlice(v any) any {
 	}
 	return out
 }
+
+// A site loaded from its files remembers what they held; changing an immutable
+// variable, or k8s_cp of a node that was there, is reported against it.
+func TestFixedChanges(t *testing.T) {
+	p := DefaultPaths(t.TempDir())
+	if l, err := LoadSite(p); err != nil || l != nil {
+		t.Fatalf("a new site loaded as %v, %v", l, err)
+	}
+	if got := schema.FixedChanges(nil, sampleState()); len(got) != 0 {
+		t.Errorf("a new site warns: %v", got)
+	}
+
+	before := sampleState()
+	before.AipubEnabled = false // kube-proxy on
+	must(t, WriteAll(p, before))
+	loaded, err := LoadSite(p)
+	must(t, err)
+
+	s := state.DefaultState()
+	must(t, LoadAll(p, s))
+	if got := schema.FixedChanges(loaded, s); len(got) != 0 {
+		t.Fatalf("nothing changed, but: %v", got)
+	}
+
+	s.K8sPodSubnet = "10.200.0.0/16"
+	s.KiCpHaModeVIP = "192.168.0.9" // service: not reported
+	s.K8sCpNodes = []string{"node1", "node2", "node4"}
+	s.Nodes = append(s.Nodes, state.NodeConfig{Name: "node5", AnsibleHost: "192.168.0.22"})
+	s.K8sNodes = append(s.K8sNodes, "node5") // a new node: not reported
+	s.K8sCpNodes = append(s.K8sCpNodes, "node5")
+	s.AipubEnabled = true // turns kube-proxy off
+	var got []string
+	for _, c := range schema.FixedChanges(loaded, s) {
+		got = append(got, c.Message())
+	}
+	want := []string{
+		`k8s_cp (node3) 는 바꾸면 노드를 다시 만듭니다 (현재 파일: true → 새 값: false)`,
+		`k8s_cp (node4) 는 바꾸면 노드를 다시 만듭니다 (현재 파일: false → 새 값: true)`,
+		`k8s_pod_subnet 는 설치 뒤 바꿀 수 없습니다 (현재 파일: "10.244.0.0/16" → 새 값: "10.200.0.0/16")`,
+		`k8s_kube_proxy_enabled 는 설치 뒤 바꿀 수 없습니다 (현재 파일: true → 새 값: false)`,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("warnings\n  %q\nwant\n  %q", got, want)
+	}
+}

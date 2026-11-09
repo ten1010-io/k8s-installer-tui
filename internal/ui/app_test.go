@@ -290,3 +290,34 @@ func TestPreviewSiteValuesTab(t *testing.T) {
 		t.Error("site-values.yml saved with the files")
 	}
 }
+
+// Opened on an existing site, the preview warns about a value the cluster can
+// not take any more, and still saves.
+func TestPreviewWarnsFixedChange(t *testing.T) {
+	d0, paths := newDriver(t)
+	s := d0.app.appState
+	s.KiCpHaMode = false
+	if err := fileio.WriteAll(paths, s); err != nil {
+		t.Fatal(err)
+	}
+	s.InternalNetworkSubnets = []string{"192.168.0.0/23"}
+	d := &driver{t: t, app: NewApp(s, paths, plan.DefaultOptions(), "test")}
+	d.send(tea.WindowSizeMsg{Width: 110, Height: 60})
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("8.저장")
+	if !strings.Contains(d.screen(), "internal_network_subnets 는 설치 뒤 바꿀 수 없습니다") {
+		t.Fatalf("no warning:\n%s", d.screen())
+	}
+	d.keys("s")
+	if !strings.Contains(d.screen(), "저장 완료") {
+		t.Errorf("the warning blocked saving:\n%s", d.screen())
+	}
+
+	// a new site warns about nothing
+	n, _ := newDriver(t)
+	n.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	n.at("8.저장")
+	if strings.Contains(n.screen(), "바꿀 수 없습니다") {
+		t.Errorf("a new site warns:\n%s", n.screen())
+	}
+}

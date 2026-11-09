@@ -130,3 +130,67 @@ func TestCheckInstalled(t *testing.T) {
 		t.Errorf("%+v", r)
 	}
 }
+
+// The webhook preset reads the CA setup-cert makes: setup-cluster builds the
+// cluster without its entries, and update-cluster.yml applies them right after
+// setup-cert. The other presets stay in setup-cluster.
+func TestWebhookAppliedAfterCert(t *testing.T) {
+	o := DefaultOptions()
+	o.ArchivePath = "/media/usb/a.tgz"
+	s := aipubState()
+	s.ControlPlane.Audit, s.ControlPlane.RuntimeConfig = true, true
+	if got, want := ids(Build(s, o)), "P1 P2 K1 K2 K3 K4 A1 A2 A3 A4 A5"; got != want {
+		t.Errorf("audit and runtime-config only: %s, want %s", got, want)
+	}
+	for _, st := range Build(s, o) {
+		if st.ID == "K3" && len(st.Args) != 0 {
+			t.Errorf("K3 given %v without the webhook", st.Args)
+		}
+	}
+
+	s.ControlPlane.Webhook = true
+	s.ControlPlane.WebhookURL = "https://aipub.example.com/token-review"
+	steps := Build(s, o)
+	if got, want := ids(steps), "P1 P2 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
+		t.Errorf("with the webhook: %s, want %s", got, want)
+	}
+	var k3, a25 Step
+	for _, st := range steps {
+		switch st.ID {
+		case "K3":
+			k3 = st
+		case "A2.5":
+			a25 = st
+		}
+	}
+	if a25.Playbook != "playbooks/update-cluster.yml" || !strings.Contains(a25.Note, "한 대씩") {
+		t.Errorf("A2.5: %+v", a25)
+	}
+	if len(k3.Args) != 2 || k3.Args[0] != "-e" {
+		t.Fatalf("K3 args: %v", k3.Args)
+	}
+	extra := k3.Args[1]
+	for _, want := range []string{`"k8s_apiserver_extra_args":[`, `"name":"audit-policy-file"`,
+		`"name":"runtime-config"`, `"k8s_cp_extra_files":[{"src":"aipub/audit-policy.yaml"`} {
+		if !strings.Contains(extra, want) {
+			t.Errorf("K3 extra vars lack %s: %s", want, extra)
+		}
+	}
+	if strings.Contains(extra, "webhook") || strings.Contains(extra, "k8s-installer-certs") {
+		t.Errorf("K3 extra vars keep the webhook: %s", extra)
+	}
+	if !strings.Contains(k3.Note, "A2.5") {
+		t.Errorf("K3 note: %s", k3.Note)
+	}
+	script := Script(steps, o, "/home/ops/site-a")
+	for _, want := range []string{"ansible-playbook -i inventory.yml playbooks/setup-cluster.yml -e '{",
+		"ansible-playbook -i inventory.yml playbooks/update-cluster.yml",
+		"/home/ops/site-a/files/aipub/webhook-token-auth.yaml"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %q:\n%s", want, script)
+		}
+	}
+	if strings.Index(script, "setup-cert.yml") > strings.Index(script, "update-cluster.yml") {
+		t.Error("update-cluster before setup-cert")
+	}
+}

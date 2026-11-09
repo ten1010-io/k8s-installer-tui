@@ -10,6 +10,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -65,8 +66,7 @@ func Build(s *state.AppState, o Options) []Step {
 			Note: "모든 노드에 설치본 배포"},
 		{ID: "K2", Title: "setup-control-node", Kind: Playbook, Playbook: "playbooks/setup-control-node.yml",
 			Note: "ki cp 서비스: DNS, NTP, 레지스트리, apiserver LB"},
-		{ID: "K3", Title: "setup-cluster", Kind: Playbook, Playbook: "playbooks/setup-cluster.yml",
-			Note: "kubeadm. 끝나면 CNI가 없어 노드가 NotReady인 것이 정상"},
+		setupCluster(s),
 	}
 
 	push := Step{ID: "K4", Title: "push-user-registry-artifacts", Kind: Playbook,
@@ -95,16 +95,53 @@ func Build(s *state.AppState, o Options) []Step {
 		monitoring.Skip, monitoring.SkipWhy = true, "모니터링 설치 안 함"
 	}
 
-	return append(steps,
+	steps = append(steps,
 		Step{ID: "A1", Title: "setup-network", Kind: Playbook, Playbook: "aipub-playbooks/setup-network.yml",
 			Note: "Cilium, L2 VIP " + s.K8sIngressVIP + ". 끝나면 노드가 Ready"},
 		cert,
+	)
+	if s.ControlPlane.HasLater() {
+		// The webhook preset reads the CA setup-cert has just put on the nodes;
+		// update-cluster.yml finds the entries setup-cluster left out and applies
+		// them (cp_extra_files, then control_plane), one control plane node at a time
+		steps = append(steps, Step{ID: "A2.5", Title: "update-cluster (apiserver 인증 웹훅 적용)", Kind: Playbook,
+			Playbook: "playbooks/update-cluster.yml",
+			Note:     "K3 에서 뺀 인증 웹훅 항목을 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"})
+	}
+	return append(steps,
 		Step{ID: "A3", Title: "setup-base", Kind: Playbook, Playbook: "aipub-playbooks/setup-base.yml",
 			Note: "Harbor (" + haNote(s) + ")"},
 		monitoring,
 		Step{ID: "A5", Title: "setup-aipub", Kind: Playbook, Playbook: "aipub-playbooks/setup-aipub.yml",
 			Note: "AIPub 서비스. Python 쪽 컴포넌트는 아직 aipub-installer 밖이라 포함되지 않음"},
 	)
+}
+
+// setupCluster is K3. The entries of the control plane that need what a later
+// step makes (the webhook preset needs the CA of setup-cert) are left out of it:
+// the lists without them are given as extra vars, which win over vars.yml for
+// the whole run and so are what the cluster is built with and what
+// record-applied-state.yml records. update-cluster.yml (A2.5) then sees vars.yml
+// differ from the record and applies the rest.
+func setupCluster(s *state.AppState) Step {
+	st := Step{ID: "K3", Title: "setup-cluster", Kind: Playbook, Playbook: "playbooks/setup-cluster.yml",
+		Note: "kubeadm. 끝나면 CNI가 없어 노드가 NotReady인 것이 정상"}
+	cp := &s.ControlPlane
+	if !s.AipubEnabled || !cp.HasLater() {
+		return st
+	}
+	initial := map[string]any{
+		state.ArgsVar("apiserver"):    cp.ExtraArgs("apiserver", true),
+		state.VolumesVar("apiserver"): cp.ExtraVolumes("apiserver", true),
+		state.CpExtraFilesVar:         cp.ExtraFiles(true),
+	}
+	data, err := json.Marshal(initial)
+	if err != nil {
+		return st
+	}
+	st.Args = []string{"-e", string(data)}
+	st.Note += ". AIPub 인증 웹훅 항목은 빼고 만들고 (-e), A2.5 에서 적용합니다"
+	return st
 }
 
 func haNote(s *state.AppState) string {
@@ -177,6 +214,9 @@ func CopyCommands(o Options, savedIn string) []string {
 		"sudo cp " + shellQuote(src+"/group_vars/all/vars.yml") + " " + shellQuote(dst+"/group_vars/all/vars.yml"),
 		"[ -f " + shellQuote(src+"/files/aipub/vars.yml") + " ] && sudo install -D -m 0644 " +
 			shellQuote(src+"/files/aipub/vars.yml") + " " + shellQuote(dst+"/files/aipub/vars.yml") + " || true",
+		// the kubeconfig of the webhook preset of the control plane, when it is on
+		"[ -f " + shellQuote(src+"/files/"+state.WebhookConfigFile) + " ] && sudo install -D -m 0644 " +
+			shellQuote(src+"/files/"+state.WebhookConfigFile) + " " + shellQuote(dst+"/files/"+state.WebhookConfigFile) + " || true",
 	}
 }
 

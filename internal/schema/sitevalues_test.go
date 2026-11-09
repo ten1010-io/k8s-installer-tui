@@ -91,7 +91,7 @@ func TestSiteValuesIsYAML(t *testing.T) {
 	}
 
 	s.AipubEnabled = false
-	if text := string(SiteValues(s)); strings.Contains(text, "aipub_ingress_zone") {
+	if text := string(SiteValues(s)); strings.Contains(text, "aipub_ingress_zone:") {
 		t.Error("aipub variables shown without AIPub")
 	}
 }

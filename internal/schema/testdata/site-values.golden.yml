@@ -47,7 +47,7 @@ control_node_ih: {localhost: "node1"} # ○ control node 가 될 ki cp 노드 (�
 
 ### 내부 네트워크 / ki-cp ───────────────────
 internal_network_subnets: ["192.168.0.0/24"] # ✅ 노드와 ki-cp VIP 가 함께 드는 대역 (실제 넷마스크로)
-# internal_network_extra_zone: null   # ○ 내부 DNS 가 답하는 추가 존 (AIPub 도메인)
+# internal_network_extra_zone: null   # ○ 내부 DNS 가 답하는 추가 존 (aipub_ingress_zone 을 그대로 씀)
 # internal_network_extra_zone_a_records: [] # ○ 추가 존의 A 레코드 (@, * → 인그레스 VIP)
 # ki_cp_ha_mode: true                 # ○ ki control plane HA (VIP 사용)
 ki_cp_ha_mode_vip: "192.168.0.10"     # ✅ (ki_cp_ha_mode=true 일 때 필수) ki-cp VIP

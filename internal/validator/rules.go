@@ -5,16 +5,17 @@ import (
 	"net"
 	"regexp"
 	"strconv"
+	"strings"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
 var (
-	reStorage   = regexp.MustCompile(`^[0-9]+[EPTGMK]i$`)
-	reValidity  = regexp.MustCompile(`^[0-9]+h$`)
+	reSize      = regexp.MustCompile(`^[0-9]+[EPTGMK]i$`)
+	reDuration  = regexp.MustCompile(`^[0-9]+h$`)
 	reFQDN      = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`)
 	reSubdomain = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-.]*[a-z0-9])?$`)
-	reK8sName   = reSubdomain
 	reMinor     = regexp.MustCompile(`^1\.[0-9]+$`)
 )
 
@@ -25,10 +26,15 @@ type Error struct {
 
 func (e Error) Error() string { return fmt.Sprintf("%s: %s", e.Field, e.Msg) }
 
-// Validate runs all cross-field and per-field validation rules.
+// Validate runs every rule. Whether a variable is required, and the format of
+// its value, come from the schema; the rules written out below are the ones
+// that relate several values (a VIP inside a subnet, subnets that must not
+// overlap, names that must be nodes) or that are not a variable of the files
+// (the list of nodes, the load balancer screen).
 // Returns a slice of errors; empty slice means valid.
 func Validate(s *state.AppState) []Error {
 	var errs []Error
+	errs = append(errs, validateSchema(s)...)
 	errs = append(errs, validateNodes(s)...)
 	errs = append(errs, validateGroups(s)...)
 	errs = append(errs, validateNetwork(s)...)
@@ -37,6 +43,150 @@ func Validate(s *state.AppState) []Error {
 	return errs
 }
 
+// --- per variable, from the schema ---
+
+func validateSchema(s *state.AppState) []Error {
+	var errs []Error
+	for _, v := range schema.All() {
+		if !schema.Written(s, v.File) {
+			continue
+		}
+		val, managed := schema.Value(s, v)
+		if !managed {
+			continue
+		}
+		required := v.RequiredIn(s)
+		if hosts, ok := val.([]schema.HostValue); ok {
+			for i, h := range hosts {
+				errs = append(errs, checkVar(v, hostField(s, i, h.Host, v.Key), h.Value, required)...)
+			}
+			continue
+		}
+		errs = append(errs, checkVar(v, v.Key, val, required)...)
+	}
+	return errs
+}
+
+// hostField names a variable of a node the way the node screen does: by the
+// position of the node, the i-th value when the values follow the list of nodes
+// (two nodes may carry one name until that is fixed).
+func hostField(s *state.AppState, i int, host, key string) string {
+	if i < len(s.Nodes) && s.Nodes[i].Name == host {
+		return fmt.Sprintf("nodes[%d].%s", i, key)
+	}
+	for i, n := range s.Nodes {
+		if n.Name == host {
+			return fmt.Sprintf("nodes[%d].%s", i, key)
+		}
+	}
+	return fmt.Sprintf("%s(%s)", key, host)
+}
+
+// checkVar checks one value: given when required, and of the format of its type.
+// An unset (null) optional value is fine; an empty text is checked against the
+// format like any other.
+func checkVar(v schema.Var, field string, val any, required bool) []Error {
+	if schema.Missing(val) && required {
+		return []Error{{field, requiredMsg(v, val)}}
+	}
+	if val == nil {
+		return nil
+	}
+	if items, ok := val.([]string); ok {
+		var errs []Error
+		for i, item := range items {
+			if msg := formatMsg(v.Elem, v.Enum, item); msg != "" {
+				errs = append(errs, Error{fmt.Sprintf("%s[%d]", field, i), msg})
+			}
+		}
+		return errs
+	}
+	if msg := formatMsg(v.Type, v.Enum, val); msg != "" {
+		return []Error{{field, msg}}
+	}
+	return nil
+}
+
+func requiredMsg(v schema.Var, val any) string {
+	msg := "값을 입력해주세요"
+	if _, isList := val.([]string); isList || v.Type == schema.TypeList {
+		msg = "최소 1개 이상 입력해주세요"
+	}
+	if key, want, ok := v.Condition(); ok {
+		msg = fmt.Sprintf("%s=%s 이면 %s", key, want, msg)
+	}
+	if v.Short != "" {
+		msg += " (" + v.Short + ")"
+	}
+	return msg
+}
+
+// formatMsg says what is wrong with a value of type t, or "" when it is right.
+func formatMsg(t schema.Type, enum []string, val any) string {
+	text := fmt.Sprint(val)
+	switch t {
+	case schema.TypeInt:
+		if n, ok := toInt(val); !ok || n < 1 {
+			return "1 이상의 정수여야 합니다"
+		}
+	case schema.TypePort:
+		if n, ok := toInt(val); !ok || n < 1 || n > 65535 {
+			return "포트는 1-65535 범위여야 합니다"
+		}
+	case schema.TypeCIDR:
+		if _, _, err := net.ParseCIDR(text); err != nil {
+			return fmt.Sprintf("'%s'는 유효한 CIDR 형식이 아닙니다 (예: x.x.x.x/xx)", text)
+		}
+	case schema.TypeIP:
+		if net.ParseIP(text) == nil {
+			return fmt.Sprintf("'%s'는 유효한 IPv4 주소가 아닙니다", text)
+		}
+	case schema.TypeFQDN:
+		if !reFQDN.MatchString(text) {
+			return fmt.Sprintf("'%s'는 유효한 도메인 형식이 아닙니다 (예: example.com)", text)
+		}
+	case schema.TypeSubdomain:
+		if !reSubdomain.MatchString(text) {
+			return fmt.Sprintf("'%s'는 유효한 서브도메인 형식이 아닙니다", text)
+		}
+	case schema.TypeMinor:
+		if !reMinor.MatchString(text) {
+			return fmt.Sprintf("'%s'는 형식이 올바르지 않습니다 (예: 1.36)", text)
+		}
+	case schema.TypeDuration:
+		if !reDuration.MatchString(text) {
+			return fmt.Sprintf("'%s'는 형식이 올바르지 않습니다 (예: 26280h)", text)
+		}
+	case schema.TypeSize:
+		if !reSize.MatchString(text) {
+			return fmt.Sprintf("'%s'는 올바른 스토리지 크기 형식이 아닙니다 (예: 512Gi)", text)
+		}
+	case schema.TypeEnum:
+		for _, e := range enum {
+			if text == e {
+				return ""
+			}
+		}
+		return strings.Join(enum, ", ") + " 중 하나를 선택해주세요"
+	}
+	return ""
+}
+
+func toInt(val any) (int, bool) {
+	switch n := val.(type) {
+	case int:
+		return n, true
+	case string:
+		i, err := strconv.Atoi(n)
+		return i, err == nil
+	}
+	return 0, false
+}
+
+// --- across variables, and what is not a variable ---
+
+// validateNodes checks the list of nodes: there is one, and every one has a name
+// of its own. Their addresses and ports are variables (validateSchema).
 func validateNodes(s *state.AppState) []Error {
 	var errs []Error
 	seen := map[string]bool{}
@@ -49,15 +199,6 @@ func validateNodes(s *state.AppState) []Error {
 		} else {
 			seen[n.Name] = true
 		}
-		if n.AnsibleHost == "" {
-			errs = append(errs, Error{prefix + ".ansible_host", "ansible_host를 입력해주세요"})
-		}
-		if n.AnsiblePort != "" {
-			p, err := strconv.Atoi(n.AnsiblePort)
-			if err != nil || p < 1 || p > 65535 {
-				errs = append(errs, Error{prefix + ".ansible_port", "포트는 1-65535 범위여야 합니다"})
-			}
-		}
 	}
 	if len(s.Nodes) == 0 {
 		errs = append(errs, Error{"nodes", "노드를 최소 1개 이상 추가해주세요"})
@@ -65,6 +206,7 @@ func validateNodes(s *state.AppState) []Error {
 	return errs
 }
 
+// validateGroups checks that the members of the groups are nodes.
 func validateGroups(s *state.AppState) []Error {
 	var errs []Error
 	nodeNames := map[string]bool{}
@@ -82,22 +224,11 @@ func validateGroups(s *state.AppState) []Error {
 			errs = append(errs, Error{"k8s_node", fmt.Sprintf("'%s'는 노드 목록에 없습니다", name)})
 		}
 	}
-	if len(s.K8sNodes) == 0 {
-		errs = append(errs, Error{"k8s_node", "k8s_node 그룹에 최소 1개 이상의 노드가 필요합니다"})
-	}
 	return errs
 }
 
 func validateNetwork(s *state.AppState) []Error {
 	var errs []Error
-
-	// R2: ki_cp_ha_mode=true → vip 필수
-	if s.KiCpHaMode && s.KiCpHaModeVIP == "" {
-		errs = append(errs, Error{"ki_cp_ha_mode_vip", "HA 모드가 활성화된 경우 VIP를 설정해야 합니다"})
-	}
-	if s.KiCpHaModeVIP != "" && net.ParseIP(s.KiCpHaModeVIP) == nil {
-		errs = append(errs, Error{"ki_cp_ha_mode_vip", "유효한 IPv4 주소를 입력해주세요"})
-	}
 
 	// R1: VIP는 ki_cp_node 서브넷 내에 있어야 함 (subnet 정보가 있을 때만)
 	if s.KiCpHaMode && s.KiCpHaModeVIP != "" && len(s.InternalNetworkSubnets) > 0 {
@@ -115,59 +246,20 @@ func validateNetwork(s *state.AppState) []Error {
 				fmt.Sprintf("VIP %s가 내부 서브넷 범위 밖입니다", s.KiCpHaModeVIP)})
 		}
 	}
-
-	if len(s.InternalNetworkSubnets) == 0 {
-		errs = append(errs, Error{"internal_network_subnets", "서브넷을 최소 1개 이상 입력해주세요"})
-	}
-	for i, cidr := range s.InternalNetworkSubnets {
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			errs = append(errs, Error{
-				fmt.Sprintf("internal_network_subnets[%d]", i),
-				fmt.Sprintf("'%s'는 유효한 CIDR 형식이 아닙니다 (예: x.x.x.x/xx)", cidr),
-			})
-		}
-	}
-
-	if len(s.KiCpDnsUpstreamServers) == 0 {
-		errs = append(errs, Error{"ki_cp_dns_server_upstream_servers", "DNS 서버를 최소 1개 이상 입력해주세요"})
-	}
-	for i, srv := range s.KiCpDnsUpstreamServers {
-		if net.ParseIP(srv) == nil {
-			errs = append(errs, Error{
-				fmt.Sprintf("ki_cp_dns_server_upstream_servers[%d]", i),
-				fmt.Sprintf("'%s'는 유효한 IPv4 주소가 아닙니다", srv),
-			})
-		}
-	}
-
-	if len(s.KiCpNtpUpstreamServers) == 0 {
-		errs = append(errs, Error{"ki_cp_ntp_server_upstream_servers", "NTP 서버를 최소 1개 이상 입력해주세요"})
-	}
-
 	return errs
 }
 
 func validateKubernetes(s *state.AppState) []Error {
 	var errs []Error
 
-	if !reValidity.MatchString(s.K8sCertificateValidityPeriod) {
-		errs = append(errs, Error{"k8s_certificate_validity_period", "형식이 올바르지 않습니다 (예: 26280h)"})
-	}
-	if !reMinor.MatchString(s.K8sMinorVersion) {
-		errs = append(errs, Error{"k8s_minor_version", "형식이 올바르지 않습니다 (예: 1.36)"})
-	}
-
 	// k8s-installer: the pod and service subnets must not overlap each other or the
-	// network of the nodes (validate_k8s_subnets)
-	subnets := map[string]string{"k8s_pod_subnet": s.K8sPodSubnet, "k8s_service_subnet": s.K8sServiceSubnet}
+	// network of the nodes (validate_k8s_subnets). A subnet that does not parse is
+	// reported by validateSchema
 	parsed := map[string]*net.IPNet{}
-	for name, cidr := range subnets {
-		_, n, err := net.ParseCIDR(cidr)
-		if err != nil {
-			errs = append(errs, Error{name, fmt.Sprintf("'%s'는 유효한 CIDR 형식이 아닙니다", cidr)})
-			continue
+	for name, cidr := range map[string]string{"k8s_pod_subnet": s.K8sPodSubnet, "k8s_service_subnet": s.K8sServiceSubnet} {
+		if _, n, err := net.ParseCIDR(cidr); err == nil {
+			parsed[name] = n
 		}
-		parsed[name] = n
 	}
 	if p, sv := parsed["k8s_pod_subnet"], parsed["k8s_service_subnet"]; p != nil && sv != nil && overlaps(p, sv) {
 		errs = append(errs, Error{"k8s_service_subnet", "파드 서브넷과 서비스 서브넷이 겹칩니다"})
@@ -185,7 +277,8 @@ func validateKubernetes(s *state.AppState) []Error {
 	}
 
 	// The load balancers below belong to AIPub (aipub_load_balancers); without it
-	// nothing reads them
+	// nothing reads them. They are the fields of the load balancer screen, which
+	// make up two entries of one variable, so they are checked here
 	if !s.AipubEnabled {
 		return errs
 	}
@@ -239,23 +332,15 @@ func validateAipub(s *state.AppState) []Error {
 	}
 	var errs []Error
 
-	if !reFQDN.MatchString(s.AipubIngressZone) {
-		errs = append(errs, Error{"aipub_ingress_zone", "유효한 도메인 형식이 아닙니다 (예: example.com)"})
+	// R5: without HA the local PV node (required, validateSchema) has to carry the
+	// aipub label (check-base.yml)
+	if !s.AipubHaMode && s.AipubHarborLocalPVNode != "" && !s.IsAipubCpNode(s.AipubHarborLocalPVNode) {
+		errs = append(errs, Error{"aipub_harbor_local_pv_node",
+			fmt.Sprintf("'%s'는 AIPub 컨트롤 플레인 노드가 아닙니다", s.AipubHarborLocalPVNode)})
 	}
 
-	// R5: aipub_ha_mode=true → storage_class 필수, false → local PV 노드 필수
-	// (check-base.yml); the local PV node has to carry the aipub label
-	if s.AipubHaMode && s.AipubHaModeStorageClass == "" {
-		errs = append(errs, Error{"aipub_ha_mode_storage_class", "AIPub HA 모드에서는 StorageClass를 지정해야 합니다"})
-	}
-	if !s.AipubHaMode {
-		if s.AipubHarborLocalPVNode == "" {
-			errs = append(errs, Error{"aipub_harbor_local_pv_node", "HA가 아니면 Harbor 데이터를 둘 노드를 지정해야 합니다"})
-		} else if !s.IsAipubCpNode(s.AipubHarborLocalPVNode) {
-			errs = append(errs, Error{"aipub_harbor_local_pv_node",
-				fmt.Sprintf("'%s'는 AIPub 컨트롤 플레인 노드가 아닙니다", s.AipubHarborLocalPVNode)})
-		}
-	}
+	// The aipub label is a variable of the nodes (k8s_node_labels), chosen on the
+	// AIPub screen as a list of nodes
 	if len(s.AipubCpNodes) == 0 {
 		errs = append(errs, Error{"aipub_cp_nodes", "AIPub 컨트롤 플레인 노드를 1개 이상 선택해야 합니다 (Harbor가 그 노드에서 돕니다)"})
 	}
@@ -270,28 +355,6 @@ func validateAipub(s *state.AppState) []Error {
 			errs = append(errs, Error{"aipub_cp_nodes",
 				fmt.Sprintf("'%s'는 마스터 노드 그룹에 속하지 않습니다", n)})
 		}
-	}
-
-	if !reSubdomain.MatchString(s.HarborIngressSubdomain) {
-		errs = append(errs, Error{"aipub_harbor_ingress_subdomain", "유효한 서브도메인 형식이 아닙니다"})
-	}
-	if s.HarborReplicaCount < 1 {
-		errs = append(errs, Error{"aipub_harbor_replica_count", "레플리카 수는 최소 1 이상이어야 합니다"})
-	}
-	for _, field := range []struct{ name, val string }{
-		{"aipub_harbor_registry_storage_size", s.HarborRegistryStorageSize},
-		{"aipub_harbor_postgresql_storage_size", s.HarborPostgresqlStorageSize},
-		{"aipub_harbor_redis_storage_size", s.HarborRedisStorageSize},
-		{"aipub_harbor_trivy_storage_size", s.HarborTrivyStorageSize},
-	} {
-		if !reStorage.MatchString(field.val) {
-			errs = append(errs, Error{field.name, fmt.Sprintf("'%s'는 올바른 스토리지 크기 형식이 아닙니다 (예: 512Gi)", field.val)})
-		}
-	}
-
-	certModes := map[string]bool{"self_signed": true, "ca_provided": true, "tls_provided": true}
-	if !certModes[s.AipubCertMode] {
-		errs = append(errs, Error{"aipub_cert_mode", "self_signed, ca_provided, tls_provided 중 하나를 선택해주세요"})
 	}
 
 	return errs

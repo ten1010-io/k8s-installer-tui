@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
@@ -17,6 +18,13 @@ type Screen interface {
 	SyncToState(s *state.AppState)
 	Validate() []string
 	SetSize(w, h int)
+}
+
+// short is the one-line description the schema gives a variable, for a help
+// string next to the field that edits it.
+func short(key string) string {
+	v, _ := schema.Get(key)
+	return v.Short
 }
 
 type NavigateNextMsg struct{}

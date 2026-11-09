@@ -171,14 +171,14 @@ func (s *S4Kubernetes) View() string {
 
 	f := s.focusIdx
 	b.WriteString(RenderSectionHeader("마이너 버전", f == s4FocusMinor) + "  " + s.minorVersion.View() +
-		styles.StyleMuted.Render("  릴리스가 지원하는 것 (release.yml k8s_versions)") + "\n\n")
+		styles.StyleMuted.Render("  "+short("k8s_minor_version")) + "\n\n")
 	b.WriteString(RenderSectionHeader("파드 서브넷", f == s4FocusPodSubnet) + "  " + s.podSubnet.View() + "\n")
 	b.WriteString(RenderSectionHeader("서비스 서브넷", f == s4FocusServiceSubnet) + "  " + s.serviceSubnet.View() + "\n")
 	b.WriteString(styles.StyleMuted.Render("    노드·서비스가 쓰는 망과 겹치면 안 됩니다. 클러스터를 만든 뒤에는 바꿀 수 없습니다") + "\n\n")
 	b.WriteString(RenderSectionHeader("인증서 유효기간", f == s4FocusCert) + "  " + s.certValidity.View() +
 		styles.StyleMuted.Render("  (예: 26280h = 3년)") + "\n\n")
 
-	b.WriteString(styles.StyleMuted.Render("kube-proxy: AIPub을 설치하면 끕니다 (Cilium이 대체). 5단계에서 정해집니다") + "\n")
+	b.WriteString(styles.StyleMuted.Render(short("k8s_kube_proxy_enabled")+". 5단계에서 정해집니다") + "\n")
 
 	prevFocused := f == s4FocusNav && s.navIdx == 0
 	nextFocused := f == s4FocusNav && s.navIdx == 1

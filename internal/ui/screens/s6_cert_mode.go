@@ -104,7 +104,7 @@ func (s *S6CertMode) activate() (tea.Model, tea.Cmd) {
 func (s *S6CertMode) View() string {
 	var b strings.Builder
 	b.WriteString(styles.StyleTitle.Render("인증서 모드 선택") + "\n")
-	b.WriteString(styles.StyleMuted.Render("ki_cert_mode 값을 선택합니다.") + "\n\n")
+	b.WriteString(styles.StyleMuted.Render("aipub_cert_mode: "+short("aipub_cert_mode")) + "\n\n")
 
 	for i, m := range certModes {
 		optFocused := s.focusIdx == i

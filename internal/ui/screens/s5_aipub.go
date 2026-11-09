@@ -344,7 +344,7 @@ func (s *S5Aipub) View() string {
 
 	if s.haMode {
 		b.WriteString(RenderSectionHeader("StorageClass", f == s5FocusStorageClass) +
-			"  " + s.storageClass.View() + styles.StyleMuted.Render("  ReadWriteMany") + "\n\n")
+			"  " + s.storageClass.View() + styles.StyleMuted.Render("  "+short("aipub_ha_mode_storage_class")) + "\n\n")
 	} else {
 		b.WriteString(RenderSectionHeader("Harbor 데이터 노드", f == s5FocusStorageClass) +
 			"  " + s.localPVNode.View() + styles.StyleMuted.Render("  아래에서 선택한 CP 노드 중 하나") + "\n")

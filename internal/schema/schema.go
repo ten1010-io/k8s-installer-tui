@@ -53,6 +53,13 @@ const (
 	TypeEnum      Type = "enum"      // one of Enum
 	TypeList      Type = "list"      // a sequence; its items are Elem when that is set
 	TypeMap       Type = "map"       // a mapping
+
+	// The items of the lists of the control plane, each a mapping of one shape
+	// (validate-hostvars.py of k8s-installer: ExtraArgModel, ExtraVolumeModel,
+	// CpExtraFileModel)
+	TypeExtraArg    Type = "extra_arg"     // {name, value}: a flag without its dashes
+	TypeExtraVolume Type = "extra_volume"  // {name, hostPath, mountPath, readOnly?, pathType?}
+	TypeCpExtraFile Type = "cp_extra_file" // {src, dest, mode}
 )
 
 // Required values.
@@ -83,6 +90,9 @@ type Var struct {
 	Long     string   // the comment of the installer's template, as it is there
 	// Preflight is a check worth running before the installer does, one line
 	Preflight string
+	// Decided are the flags the installer decides for the component itself and
+	// refuses in a list of TypeExtraArg (ki_decided_args of ki_k8s_cp_components)
+	Decided []string
 	// VarClass is what changing the variable on an existing cluster takes, from
 	// ki_var_classes of k8s-installer (immutable, node_rebuild, service, ...).
 	// Empty for the variables of aipub, which k8s-installer does not classify

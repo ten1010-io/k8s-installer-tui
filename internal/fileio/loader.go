@@ -21,7 +21,27 @@ func LoadAll(p Paths, s *state.AppState) error {
 	if err := LoadVars(p.Vars, s); err != nil {
 		return err
 	}
+	loadWebhookURL(p.WebhookConfig(), s)
 	return LoadAipubVars(p.AipubVars, s)
+}
+
+// loadWebhookURL reads the token review server back from the kubeconfig the
+// webhook preset wrote. Nothing when there is none or it does not parse.
+func loadWebhookURL(path string, s *state.AppState) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var kc struct {
+		Clusters []struct {
+			Cluster struct {
+				Server string `yaml:"server"`
+			} `yaml:"cluster"`
+		} `yaml:"clusters"`
+	}
+	if yaml.Unmarshal(data, &kc) == nil && len(kc.Clusters) > 0 {
+		s.ControlPlane.WebhookURL = kc.Clusters[0].Cluster.Server
+	}
 }
 
 type allHostEntry struct {
@@ -156,6 +176,15 @@ type varsYAML struct {
 	K8sServiceSubnet             string `yaml:"k8s_service_subnet"`
 	K8sCertificateValidityPeriod string `yaml:"k8s_certificate_validity_period"`
 
+	K8sApiserverExtraArgs            []state.ExtraArg    `yaml:"k8s_apiserver_extra_args"`
+	K8sControllerManagerExtraArgs    []state.ExtraArg    `yaml:"k8s_controller_manager_extra_args"`
+	K8sSchedulerExtraArgs            []state.ExtraArg    `yaml:"k8s_scheduler_extra_args"`
+	K8sEtcdExtraArgs                 []state.ExtraArg    `yaml:"k8s_etcd_extra_args"`
+	K8sApiserverExtraVolumes         []state.ExtraVolume `yaml:"k8s_apiserver_extra_volumes"`
+	K8sControllerManagerExtraVolumes []state.ExtraVolume `yaml:"k8s_controller_manager_extra_volumes"`
+	K8sSchedulerExtraVolumes         []state.ExtraVolume `yaml:"k8s_scheduler_extra_volumes"`
+	K8sCpExtraFiles                  []state.CpExtraFile `yaml:"k8s_cp_extra_files"`
+
 	// older versions of this tool
 	K8sLoadBalancers       []lbYAML         `yaml:"k8s_load_balancers"`
 	K8sGateways            []lbYAML         `yaml:"k8s_gateways"`
@@ -191,6 +220,18 @@ func LoadVars(path string, s *state.AppState) error {
 	setIf(&s.K8sPodSubnet, v.K8sPodSubnet)
 	setIf(&s.K8sServiceSubnet, v.K8sServiceSubnet)
 	setIf(&s.K8sCertificateValidityPeriod, v.K8sCertificateValidityPeriod)
+
+	// The control plane: the presets it holds whole, and the rest as entries
+	s.ControlPlane.Absorb(map[string][]state.ExtraArg{
+		"apiserver":          v.K8sApiserverExtraArgs,
+		"controller_manager": v.K8sControllerManagerExtraArgs,
+		"scheduler":          v.K8sSchedulerExtraArgs,
+		"etcd":               v.K8sEtcdExtraArgs,
+	}, map[string][]state.ExtraVolume{
+		"apiserver":          v.K8sApiserverExtraVolumes,
+		"controller_manager": v.K8sControllerManagerExtraVolumes,
+		"scheduler":          v.K8sSchedulerExtraVolumes,
+	}, v.K8sCpExtraFiles)
 
 	// Written by older versions of this tool: the same values under the k8s_ names
 	legacy := v.aipubYAML

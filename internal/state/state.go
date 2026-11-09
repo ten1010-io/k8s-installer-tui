@@ -36,6 +36,10 @@ type AppState struct {
 	K8sServiceSubnet             string
 	K8sCertificateValidityPeriod string
 
+	// S4b: Control plane (vars.yml → k8s_*_extra_args, k8s_*_extra_volumes,
+	// k8s_cp_extra_files; the kubeconfig of the webhook preset under files/)
+	ControlPlane ControlPlane
+
 	// S4: Load balancers of AIPub (files/aipub/vars.yml → aipub_load_balancers,
 	// aipub_default_ingress_class). Named K8s* from when k8s-installer carried them
 	K8sIngressMode            int // 1=별도IP (ingress lb + gateway lb), 2=공유IP

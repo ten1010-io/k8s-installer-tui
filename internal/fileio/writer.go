@@ -44,6 +44,16 @@ type Paths struct {
 	AipubVars string // files/aipub/vars.yml
 }
 
+// FilesDir is the files directory of the installer next to the saved files
+// (ansible/files), where k8s_cp_extra_files reads src from.
+func (p Paths) FilesDir() string { return filepath.Dir(filepath.Dir(p.AipubVars)) }
+
+// WebhookConfig is where the kubeconfig of the webhook preset is written:
+// files/aipub/webhook-token-auth.yaml.
+func (p Paths) WebhookConfig() string {
+	return filepath.Join(p.FilesDir(), filepath.FromSlash(state.WebhookConfigFile))
+}
+
 // DefaultPaths are the places k8s-installer reads the files from, relative to
 // its ansible directory (/opt/k8s-installer/ansible).
 func DefaultPaths(ansibleDir string) Paths {
@@ -55,11 +65,14 @@ func DefaultPaths(ansibleDir string) Paths {
 }
 
 // Rendered is the content of the three files. AipubVars is nil when AIPub is not
-// installed, and the file is then left alone.
+// installed, and the file is then left alone. WebhookConfig is the kubeconfig of
+// the webhook preset of the control plane, nil while it is off (a file written
+// before is left alone).
 type Rendered struct {
-	Inventory []byte
-	Vars      []byte
-	AipubVars []byte
+	Inventory     []byte
+	Vars          []byte
+	AipubVars     []byte
+	WebhookConfig []byte
 }
 
 // Render renders the three files over what is at p, or over the templates.
@@ -77,6 +90,7 @@ func Render(p Paths, s *state.AppState) (*Rendered, error) {
 			return nil, fmt.Errorf("files/aipub/vars.yml: %w", err)
 		}
 	}
+	r.WebhookConfig = WebhookConfig(s)
 	return &r, nil
 }
 
@@ -90,7 +104,7 @@ func WriteAll(p Paths, s *state.AppState) error {
 	files := []struct {
 		path string
 		data []byte
-	}{{p.Inventory, r.Inventory}, {p.Vars, r.Vars}, {p.AipubVars, r.AipubVars}}
+	}{{p.Inventory, r.Inventory}, {p.Vars, r.Vars}, {p.AipubVars, r.AipubVars}, {p.WebhookConfig(), r.WebhookConfig}}
 	for _, f := range files {
 		if f.data == nil {
 			continue
@@ -180,7 +194,99 @@ func renderVars(existing []byte, s *state.AppState) ([]byte, error) {
 	setKey(top, "k8s_minor_version", quoted(s.K8sMinorVersion))
 	setKey(top, "k8s_certificate_validity_period", quoted(s.K8sCertificateValidityPeriod))
 
+	// The control plane: presets and entries typed in, merged. An empty list is
+	// written as the template writes it, [], rather than the key taken out: the
+	// key carries the comment of the template above it, and addMissingKeys would
+	// put it back on the next save anyway
+	cp := &s.ControlPlane
+	for _, comp := range state.CpComponents {
+		setKey(top, state.ArgsVar(comp), extraArgsNode(cp.ExtraArgs(comp, false)))
+	}
+	for _, comp := range state.CpVolumeComponents {
+		setKey(top, state.VolumesVar(comp), extraVolumesNode(cp.ExtraVolumes(comp, false)))
+	}
+	setKey(top, state.CpExtraFilesVar, cpExtraFilesNode(cp.ExtraFiles(false)))
+
 	return encodeDoc(top)
+}
+
+func extraArgsNode(args []state.ExtraArg) *yaml.Node {
+	items := make([]*yaml.Node, len(args))
+	for i, a := range args {
+		items[i] = mapNode("name", quoted(a.Name), "value", quoted(a.Value))
+	}
+	return listOrEmpty(items)
+}
+
+func extraVolumesNode(vols []state.ExtraVolume) *yaml.Node {
+	items := make([]*yaml.Node, len(vols))
+	for i, v := range vols {
+		m := mapNode("name", quoted(v.Name), "hostPath", quoted(v.HostPath), "mountPath", quoted(v.MountPath))
+		if v.ReadOnly {
+			m.Content = append(m.Content, strKey("readOnly"), boolNode(true))
+		}
+		if v.PathType != "" {
+			m.Content = append(m.Content, strKey("pathType"), quoted(v.PathType))
+		}
+		items[i] = m
+	}
+	return listOrEmpty(items)
+}
+
+func cpExtraFilesNode(files []state.CpExtraFile) *yaml.Node {
+	items := make([]*yaml.Node, len(files))
+	for i, f := range files {
+		items[i] = mapNode("src", quoted(f.Src), "dest", quoted(f.Dest), "mode", quoted(f.Mode))
+	}
+	return listOrEmpty(items)
+}
+
+// listOrEmpty is a block sequence, or [] when there is nothing in it.
+func listOrEmpty(items []*yaml.Node) *yaml.Node {
+	n := seqNode(items...)
+	if len(items) == 0 {
+		n.Style = yaml.FlowStyle
+	}
+	return n
+}
+
+// --- the kubeconfig of the webhook preset (files/aipub/webhook-token-auth.yaml) ---
+
+// WebhookConfig is the kubeconfig the apiserver reads the token review server of
+// AIPub from (--authentication-token-webhook-config-file), nil when the webhook
+// preset is off or has no URL. It names the server and the CA setup-cert of
+// aipub-installer puts on every node, and holds nothing secret: it is copied to
+// the control plane nodes in the clear (k8s_cp_extra_files).
+func WebhookConfig(s *state.AppState) []byte {
+	cp := &s.ControlPlane
+	if !cp.Webhook || strings.TrimSpace(cp.WebhookURL) == "" {
+		return nil
+	}
+	const name = "aipub-token-review"
+	doc := mapNode(
+		"apiVersion", strKey("v1"),
+		"kind", strKey("Config"),
+		"clusters", seqNode(mapNode(
+			"name", strKey(name),
+			"cluster", mapNode(
+				"server", quoted(strings.TrimSpace(cp.WebhookURL)),
+				"certificate-authority", strKey(state.WebhookCAPath),
+			),
+		)),
+		"users", seqNode(mapNode("name", strKey("kube-apiserver"), "user", emptyMap())),
+		"contexts", seqNode(mapNode(
+			"name", strKey(name),
+			"context", mapNode("cluster", strKey(name), "user", strKey("kube-apiserver")),
+		)),
+		"current-context", strKey(name),
+	)
+	doc.HeadComment = "Written by k8s-installer-tui (AIPub 인증 웹훅). Copied to every control plane node\n" +
+		"in the clear by k8s_cp_extra_files: never put a credential here"
+	out, err := encodeDoc(doc)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // addMissingKeys appends to cur, with their comments, the keys of the template it

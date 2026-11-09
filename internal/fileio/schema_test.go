@@ -29,7 +29,8 @@ func schemaStates() map[string]*state.AppState {
 	noAipub.KiCpHaMode = false
 	noAipub.KiCpHaModeVIP = ""
 
-	return map[string]*state.AppState{"full": full, "no HA": noHA, "no AIPub": noAipub}
+	return map[string]*state.AppState{"full": full, "no HA": noHA, "no AIPub": noAipub,
+		"control plane": controlPlaneState()}
 }
 
 // written lists, per file, the values the rendered files hold under the names

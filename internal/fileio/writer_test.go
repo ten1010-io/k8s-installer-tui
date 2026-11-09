@@ -278,3 +278,32 @@ func TestIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// A site file written with the old aipub_java_* names (aipub-installer still
+// accepts them as aliases of aipub_app_*) loads, and saving keeps those keys and
+// their comments as they were.
+func TestAipubJavaNamesKept(t *testing.T) {
+	dir := t.TempDir()
+	p := DefaultPaths(dir)
+	must(t, os.MkdirAll(filepath.Dir(p.AipubVars), 0755))
+	site := "aipub_ingress_zone: \"java.example.com\"\n# old name of aipub_app_edition\naipub_java_edition: \"enterprise\"\naipub_java_file_storage_size: \"20Gi\"\n"
+	must(t, os.WriteFile(p.AipubVars, []byte(site), 0644))
+
+	s := state.DefaultState()
+	must(t, LoadAll(p, s))
+	if !s.AipubEnabled || s.AipubIngressZone != "java.example.com" {
+		t.Fatalf("site file with aipub_java_* not loaded: enabled=%v zone=%q", s.AipubEnabled, s.AipubIngressZone)
+	}
+	r, err := Render(p, s)
+	must(t, err)
+	a := decode(t, r.AipubVars)
+	if a["aipub_java_edition"] != "enterprise" || a["aipub_java_file_storage_size"] != "20Gi" {
+		t.Errorf("aipub_java_* values lost: %v", a)
+	}
+	if _, ok := a["aipub_app_edition"]; ok {
+		t.Error("aipub_app_edition added next to aipub_java_edition")
+	}
+	if !strings.Contains(string(r.AipubVars), "# old name of aipub_app_edition") {
+		t.Error("comment on aipub_java_edition lost")
+	}
+}

@@ -54,6 +54,9 @@ aipub_ha_mode_storage_class: "nfs-client"
 # Without HA: the volumes are directories of one labelled node, by inventory name
 #aipub_ha_mode: false
 #aipub_harbor_local_pv_node: "node1"
+# Set it to offer a storage class in the frontend without HA; left unset, only
+# NFS is offered
+#aipub_app_storage_class_name: "local-path"
 
 #aipub_harbor_registry_storage_size: "512Gi"
 #aipub_harbor_postgresql_storage_size: "128Gi"
@@ -69,35 +72,52 @@ aipub_ha_mode_storage_class: "nfs-client"
 
 # ---- aipub (setup-aipub.yml) ----
 
-# aipub is served at https://<aipub_java_host_prefix>.<aipub_ingress_zone>
-#aipub_java_host_prefix: "aipub"
+# The variables of aipub are aipub_app_*. Their old names aipub_java_* still work
+# (a site file written with them needs no change); do not set both names of one
+# variable to different values (docs/variables.md)
+
+# aipub is served at https://<aipub_app_host_prefix>.<aipub_ingress_zone>
+#aipub_app_host_prefix: "aipub"
 # enterprise or lite: lite leaves aipub-nav out and gives the backend and the
 # frontend the features of lite only
-#aipub_java_edition: "enterprise"
+#aipub_app_edition: "enterprise"
 
 # The image tags are not set here: they are those of the catalog of the package
 # (ansible/aipub_vars/catalog.yml), which this file can not change
 
 # The shared data volume of the backend. dynamic takes a claim on a storage
 # class, by default aipub_ha_mode_storage_class: set one without HA
-#aipub_java_file_storage_storage_class_name: "nfs-client"
-#aipub_java_file_storage_size: "20Gi"
-# Or a directory of one node, by its kubernetes node name
-#aipub_java_file_storage_type: "static"
-#aipub_java_file_storage_static_type: "local"
-#aipub_java_file_storage_local_path: "/aipub/pv/aipub-backend-data"
-#aipub_java_file_storage_local_node_hostname: "node1"
+#aipub_app_file_storage_storage_class_name: "nfs-client"
+#aipub_app_file_storage_size: "20Gi"
+# Or a directory of one node, by its kubernetes node name (kubectl get nodes); setup-aipub.yml makes the
+# directory on that node
+#aipub_app_file_storage_type: "static"
+#aipub_app_file_storage_static_type: "local"
+#aipub_app_file_storage_local_path: "/aipub/pv/aipub-backend-data"
+#aipub_app_file_storage_local_node_hostname: "node1"
 
 # Whether long inactive users are moved to INACTIVE, which cannot be undone
-#aipub_java_user_manage_enabled: false
+#aipub_app_user_manage_enabled: false
 
-# Values files given to the installer after the site values, on aipub_runner_node
-#aipub_java_extra_values: ["/etc/aipub/aipub-values-override.yaml"]
+# Values files given to the installer after the site values, on aipub_runner_node. A variable of an
+# application goes under env/secretEnv of its chart by its own name (README.md, "Changing a value for one site")
+#aipub_app_extra_values: ["/etc/aipub/aipub-values-override.yaml"]
+
+# installer (default) or helmfile: the same releases and objects, deployed by helmfile sync
+#aipub_app_deploy_tool: "helmfile"
+# The package lays helmfile there; set only to use another one
+#aipub_app_helmfile_bin: "/opt/k8s-installer/aipub-bin/helmfile"
 
 # The back office admin. This file is copied in plain text to every ki cp node
-#aipub_java_backoffice_admin_password: ""
+#aipub_app_backoffice_admin_password: ""
 
 # ---- monitoring (setup-monitoring.yml) ----
+
+# installer (default) or helmfile: the same releases and objects, deployed by helmfile sync around presync.sh and
+# postsync.sh. Binaries, dry-run, results and how to go back: helmfile/monitoring/README.md, "Field use"
+#aipub_monitoring_deploy_tool: "helmfile"
+#aipub_monitoring_helm_bin: "helm"
+#aipub_monitoring_helmfile_dry_run: true
 
 # The volumes of OpenSearch and VictoriaMetrics. With HA, claims on a storage
 # class, by default aipub_ha_mode_storage_class; empty takes the default one

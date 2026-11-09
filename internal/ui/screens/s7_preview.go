@@ -22,17 +22,22 @@ const (
 	s7FocusMax = s7FocusNav
 )
 
+// previewTab is one file of the preview. A file AIPub does not need is not shown.
+type previewTab struct {
+	name    string
+	path    string
+	content string
+}
+
 type S7Preview struct {
-	inventoryContent string
-	varsContent      string
-	vp               viewport.Model
-	activeTab        int // 0=inventory, 1=vars
-	errors           []validator.Error
-	saved            bool
-	saveErr          string
-	appState         *state.AppState
-	inventoryPath    string
-	varsPath         string
+	tabs      []previewTab
+	vp        viewport.Model
+	activeTab int
+	errors    []validator.Error
+	saved     bool
+	saveErr   string
+	appState  *state.AppState
+	paths     fileio.Paths
 
 	focusIdx int
 	navIdx   int
@@ -40,12 +45,11 @@ type S7Preview struct {
 	height   int
 }
 
-func NewS7Preview(s *state.AppState, inventoryPath, varsPath string) *S7Preview {
+func NewS7Preview(s *state.AppState, paths fileio.Paths) *S7Preview {
 	return &S7Preview{
-		vp:            viewport.New(80, 20),
-		appState:      s,
-		inventoryPath: inventoryPath,
-		varsPath:      varsPath,
+		vp:       viewport.New(80, 20),
+		appState: s,
+		paths:    paths,
 	}
 }
 
@@ -66,18 +70,18 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.saved = false
 	s.saveErr = ""
 
-	inv, err := fileio.RenderInventoryString(st)
+	s.tabs = nil
+	r, err := fileio.Render(s.paths, st)
 	if err != nil {
-		s.inventoryContent = fmt.Sprintf("렌더링 오류: %v", err)
+		s.tabs = []previewTab{{name: "오류", content: fmt.Sprintf("렌더링 오류: %v", err)}}
 	} else {
-		s.inventoryContent = inv
-	}
-
-	vars, err := fileio.RenderVarsString(st)
-	if err != nil {
-		s.varsContent = fmt.Sprintf("렌더링 오류: %v", err)
-	} else {
-		s.varsContent = vars
+		s.tabs = []previewTab{
+			{"inventory.yml", s.paths.Inventory, string(r.Inventory)},
+			{"vars.yml", s.paths.Vars, string(r.Vars)},
+		}
+		if r.AipubVars != nil {
+			s.tabs = append(s.tabs, previewTab{"aipub/vars.yml", s.paths.AipubVars, string(r.AipubVars)})
+		}
 	}
 
 	s.activeTab = 0
@@ -91,6 +95,9 @@ func (s *S7Preview) SyncToState(_ *state.AppState) {}
 func (s *S7Preview) Validate() []string {
 	errs := validator.Validate(s.appState)
 	if len(errs) == 0 {
+		if !s.saved {
+			return []string{"저장(s)한 뒤에 설치 계획으로 넘어갈 수 있습니다"}
+		}
 		return nil
 	}
 	msgs := make([]string, len(errs))
@@ -137,7 +144,7 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "right", "l":
 			switch s.focusIdx {
 			case s7FocusContent:
-				if s.activeTab < 1 {
+				if s.activeTab < len(s.tabs)-1 {
 					s.activeTab++
 					s.refreshViewport()
 				}
@@ -150,7 +157,7 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.focusIdx = s7FocusNav
 		case "enter", " ":
 			if s.saved {
-				return s, tea.Quit
+				return s, Next()
 			}
 			if s.focusIdx == s7FocusNav {
 				if s.navIdx == 0 {
@@ -160,6 +167,9 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "s":
 			return s.doSave()
+		case "ctrl+n":
+			// the app checks Validate, which asks for the save first
+			return s, Next()
 		case "ctrl+p":
 			return s, Prev()
 		}
@@ -174,12 +184,8 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 		s.saveErr = "검증 오류가 있어 저장할 수 없습니다"
 		return s, nil
 	}
-	if err := fileio.WriteInventory(s.inventoryPath, s.appState); err != nil {
-		s.saveErr = fmt.Sprintf("inventory.yml 저장 실패: %v", err)
-		return s, nil
-	}
-	if err := fileio.WriteVars(s.varsPath, s.appState); err != nil {
-		s.saveErr = fmt.Sprintf("vars.yml 저장 실패: %v", err)
+	if err := fileio.WriteAll(s.paths, s.appState); err != nil {
+		s.saveErr = fmt.Sprintf("저장 실패: %v", err)
 		return s, nil
 	}
 	s.saved = true
@@ -188,10 +194,8 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 }
 
 func (s *S7Preview) refreshViewport() {
-	if s.activeTab == 0 {
-		s.vp.SetContent(s.inventoryContent)
-	} else {
-		s.vp.SetContent(s.varsContent)
+	if s.activeTab < len(s.tabs) {
+		s.vp.SetContent(s.tabs[s.activeTab].content)
 	}
 	s.vp.GotoTop()
 }
@@ -224,25 +228,21 @@ func (s *S7Preview) View() string {
 	var b strings.Builder
 	b.WriteString(styles.StyleTitle.Render("미리보기 & 저장") + "\n\n")
 
-	// Tabs — ←/→ 전환, 콘텐츠 포커스 시 활성 탭 표시
+	// Tabs — ←/→ 전환
 	contentFocused := s.focusIdx == s7FocusContent
-	var tab0, tab1 string
-	if s.activeTab == 0 {
-		tab0 = styles.StylePrimary.Render("[ inventory.yml ]")
-		if contentFocused {
-			tab1 = styles.StyleMuted.Render("  vars.yml  ") + styles.StyleMuted.Render(" →")
+	parts := make([]string, len(s.tabs))
+	for i, t := range s.tabs {
+		if i == s.activeTab {
+			parts[i] = styles.StylePrimary.Render("[ " + t.name + " ]")
 		} else {
-			tab1 = styles.StyleMuted.Render("  vars.yml  ")
+			parts[i] = styles.StyleMuted.Render("  " + t.name + "  ")
 		}
-	} else {
-		if contentFocused {
-			tab0 = styles.StyleMuted.Render("←  inventory.yml  ")
-		} else {
-			tab0 = styles.StyleMuted.Render("  inventory.yml  ")
-		}
-		tab1 = styles.StylePrimary.Render("[ vars.yml ]")
 	}
-	b.WriteString(tab0 + "  " + tab1 + "\n")
+	tabLine := strings.Join(parts, " ")
+	if contentFocused && len(s.tabs) > 1 {
+		tabLine += styles.StyleMuted.Render("   ←/→ 파일 전환")
+	}
+	b.WriteString(tabLine + "\n")
 
 	b.WriteString(s.scrollBar() + "\n")
 
@@ -260,10 +260,12 @@ func (s *S7Preview) View() string {
 	}
 	if s.saved {
 		b.WriteString("\n" + styles.StyleSuccess.Render("✓ 저장 완료!") + "\n")
-		b.WriteString(styles.StyleMuted.Render(fmt.Sprintf("  %s\n  %s", s.inventoryPath, s.varsPath)) + "\n")
+		for _, t := range s.tabs {
+			b.WriteString(styles.StyleMuted.Render("  "+t.path) + "\n")
+		}
 		b.WriteString(styles.StyleMuted.Render("  기존 파일은 .bak으로 백업되었습니다") + "\n")
-		b.WriteString("\n" + styles.StyleTitle.Render("종료하시겠습니까?") + "  " +
-			styles.StyleMuted.Render("Enter 확인") + "\n")
+		b.WriteString("\n" + styles.StyleTitle.Render("설치 계획을 보시겠습니까?") + "  " +
+			styles.StyleMuted.Render("Enter: 9.설치로   Ctrl+C: 종료") + "\n")
 	}
 
 	prevFocused := s.focusIdx == s7FocusNav && s.navIdx == 0

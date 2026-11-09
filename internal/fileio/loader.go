@@ -9,37 +9,138 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// allHostEntry and k8sNodeEntry are used for decoding individual host entries.
+// LoadAll reads the three files into the state. A file that does not exist leaves
+// the defaults. Files written by older versions of this tool (aipub_* and the
+// load balancers in group_vars/all/vars.yml) are read too, so that saving moves
+// those values to files/aipub/vars.yml.
+func LoadAll(p Paths, s *state.AppState) error {
+	if err := LoadInventory(p.Inventory, s); err != nil {
+		return err
+	}
+	if err := LoadVars(p.Vars, s); err != nil {
+		return err
+	}
+	return LoadAipubVars(p.AipubVars, s)
+}
+
 type allHostEntry struct {
 	AnsibleHost    string `yaml:"ansible_host"`
 	AnsiblePort    int    `yaml:"ansible_port"`
-	AnsibleSSHUser string `yaml:"ansible_ssh_user"`
+	AnsibleUser    string `yaml:"ansible_user"`
+	AnsibleSSHUser string `yaml:"ansible_ssh_user"` // older versions of this tool
 }
 
 type k8sNodeEntry struct {
-	K8sCp     bool `yaml:"k8s_cp"`
-	NvidiaGPU bool `yaml:"nvidia_gpu"`
+	K8sCp         bool              `yaml:"k8s_cp"`
+	NvidiaGPU     bool              `yaml:"nvidia_gpu"`
+	K8sNodeLabels map[string]string `yaml:"k8s_node_labels"`
 }
 
-// mappingGet returns the value node for the given key in a YAML mapping node,
-// or nil if not found. Mapping node Content is [key0, val0, key1, val1, ...].
-func mappingGet(m *yaml.Node, key string) *yaml.Node {
-	if m == nil || m.Kind != yaml.MappingNode {
-		return nil
+// mappingGet returns the value node of key in a mapping node, or nil.
+func mappingGet(m *yaml.Node, key string) *yaml.Node { return getKey(m, key) }
+
+func readDoc(path string) (*yaml.Node, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
 	}
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			return m.Content[i+1]
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	top, err := parseDoc(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return top, nil
+}
+
+// LoadInventory reads nodes and groups in the order the file lists them.
+func LoadInventory(path string, s *state.AppState) error {
+	root, err := readDoc(path)
+	if err != nil || root == nil {
+		return err
+	}
+
+	if hostsNode := mappingGet(mappingGet(root, "all"), "hosts"); hostsNode != nil {
+		s.Nodes = nil
+		for i := 0; i+1 < len(hostsNode.Content); i += 2 {
+			var h allHostEntry
+			_ = hostsNode.Content[i+1].Decode(&h)
+			nc := state.NodeConfig{Name: hostsNode.Content[i].Value, AnsibleHost: h.AnsibleHost}
+			if h.AnsiblePort != 0 {
+				nc.AnsiblePort = strconv.Itoa(h.AnsiblePort)
+			}
+			nc.AnsibleUser = h.AnsibleUser
+			if nc.AnsibleUser == "" {
+				nc.AnsibleUser = h.AnsibleSSHUser
+			}
+			s.Nodes = append(s.Nodes, nc)
+		}
+	}
+
+	if hostsNode := mappingGet(mappingGet(root, "ki_cp_node"), "hosts"); hostsNode != nil {
+		s.KiCpNodes = keys(hostsNode)
+	}
+
+	if hostsNode := mappingGet(mappingGet(root, "k8s_node"), "hosts"); hostsNode != nil {
+		s.K8sNodes, s.K8sCpNodes, s.NvidiaGPUNodes = nil, nil, nil
+		var labelled []string
+		for i := 0; i+1 < len(hostsNode.Content); i += 2 {
+			name := hostsNode.Content[i].Value
+			s.K8sNodes = append(s.K8sNodes, name)
+			var e k8sNodeEntry
+			_ = hostsNode.Content[i+1].Decode(&e)
+			if e.K8sCp {
+				s.K8sCpNodes = append(s.K8sCpNodes, name)
+			}
+			if e.NvidiaGPU {
+				s.NvidiaGPUNodes = append(s.NvidiaGPUNodes, name)
+			}
+			if _, ok := e.K8sNodeLabels[AipubCpNodeLabel]; ok {
+				labelled = append(labelled, name)
+			}
+		}
+		if len(labelled) > 0 {
+			s.AipubCpNodes = labelled
 		}
 	}
 	return nil
 }
 
-// varsYAML mirrors the structure of group_vars/all/vars.yml for parsing.
+type lbYAML struct {
+	Name  string   `yaml:"name"`
+	VIP   string   `yaml:"vip"`
+	Nodes []string `yaml:"nodes"`
+}
+
+type ingressClassYAML struct {
+	LoadBalancer    string `yaml:"load_balancer"`
+	HostNetworkPort int    `yaml:"host_network_port"`
+}
+
+// aipubYAML is the aipub part, read from files/aipub/vars.yml or, written by older
+// versions of this tool, from group_vars/all/vars.yml.
+type aipubYAML struct {
+	LoadBalancers       []lbYAML         `yaml:"aipub_load_balancers"`
+	DefaultIngressClass ingressClassYAML `yaml:"aipub_default_ingress_class"`
+	CertMode            string           `yaml:"aipub_cert_mode"`
+
+	IngressZone          string   `yaml:"aipub_ingress_zone"`
+	HaMode               *bool    `yaml:"aipub_ha_mode"`
+	HaModeStorageClass   string   `yaml:"aipub_ha_mode_storage_class"`
+	HarborLocalPVNode    string   `yaml:"aipub_harbor_local_pv_node"`
+	CpNodes              []string `yaml:"aipub_cp_nodes"` // older versions of this tool
+	HarborIngressSub     string   `yaml:"aipub_harbor_ingress_subdomain"`
+	HarborReplicaCount   int      `yaml:"aipub_harbor_replica_count"`
+	HarborRegistrySize   string   `yaml:"aipub_harbor_registry_storage_size"`
+	HarborPostgresqlSize string   `yaml:"aipub_harbor_postgresql_storage_size"`
+	HarborRedisSize      string   `yaml:"aipub_harbor_redis_storage_size"`
+	HarborTrivySize      string   `yaml:"aipub_harbor_trivy_storage_size"`
+}
+
 type varsYAML struct {
-	KiVarRootPath            string   `yaml:"ki_var_root_path"`
-	ContainerdRootPath       string   `yaml:"containerd_root_path"`
-	DockerRootPath           string   `yaml:"docker_root_path"`
+	aipubYAML `yaml:",inline"`
+
 	InternalNetworkSubnets   []string `yaml:"internal_network_subnets"`
 	InternalNetworkExtraZone string   `yaml:"internal_network_extra_zone"`
 
@@ -49,120 +150,26 @@ type varsYAML struct {
 	KiCpDnsServerUpstreamServers []string `yaml:"ki_cp_dns_server_upstream_servers"`
 	KiCpNtpServerUpstreamServers []string `yaml:"ki_cp_ntp_server_upstream_servers"`
 
+	K8sMinorVersion              string `yaml:"k8s_minor_version"`
+	K8sPodSubnet                 string `yaml:"k8s_pod_subnet"`
+	K8sServiceSubnet             string `yaml:"k8s_service_subnet"`
 	K8sCertificateValidityPeriod string `yaml:"k8s_certificate_validity_period"`
-	K8sLoadBalancers             []struct {
-		Name  string   `yaml:"name"`
-		VIP   string   `yaml:"vip"`
-		Nodes []string `yaml:"nodes"`
-	} `yaml:"k8s_load_balancers"`
-	K8sDefaultIngressClass struct {
-		LoadBalancer    string `yaml:"load_balancer"`
-		HostNetworkPort int    `yaml:"host_network_port"`
-	} `yaml:"k8s_default_ingress_class"`
-	K8sGateways []struct {
-		Name  string      `yaml:"name"`
-		VIP   string      `yaml:"vip"`
-		Nodes interface{} `yaml:"nodes"` // can be "" or []string
-	} `yaml:"k8s_gateways"`
 
-	AipubIngressZone        string   `yaml:"aipub_ingress_zone"`
-	AipubHaMode             bool     `yaml:"aipub_ha_mode"`
-	AipubHaModeStorageClass string   `yaml:"aipub_ha_mode_storage_class"`
-	AipubCpNodes            []string `yaml:"aipub_cp_nodes"`
-
-	AipubHarborIngressSubdomain      string `yaml:"aipub_harbor_ingress_subdomain"`
-	AipubHarborReplicaCount          int    `yaml:"aipub_harbor_replica_count"`
-	AipubHarborRegistryStorageSize   string `yaml:"aipub_harbor_registry_storage_size"`
-	AipubHarborPostgresqlStorageSize string `yaml:"aipub_harbor_postgresql_storage_size"`
-	AipubHarborRedisStorageSize      string `yaml:"aipub_harbor_redis_storage_size"`
-	AipubHarborTrivyStorageSize      string `yaml:"aipub_harbor_trivy_storage_size"`
-
-	KiCertMode string `yaml:"ki_cert_mode"`
+	// older versions of this tool
+	K8sLoadBalancers       []lbYAML         `yaml:"k8s_load_balancers"`
+	K8sGateways            []lbYAML         `yaml:"k8s_gateways"`
+	K8sDefaultIngressClass ingressClassYAML `yaml:"k8s_default_ingress_class"`
+	KiCertMode             string           `yaml:"ki_cert_mode"`
 }
 
-// LoadInventory reads inventory.yml and populates the node/group fields of AppState.
-// Nodes are added in the exact order they appear in the YAML file.
-// Returns nil error and leaves state unchanged if the file does not exist.
-func LoadInventory(path string, s *state.AppState) error {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
-	// Decode into yaml.Node to preserve mapping key order.
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
-	}
-	if len(doc.Content) == 0 {
-		return nil
-	}
-	root := doc.Content[0] // DocumentNode → MappingNode
-
-	// all.hosts — iterate Content in YAML file order to preserve node sequence.
-	if hostsNode := mappingGet(mappingGet(root, "all"), "hosts"); hostsNode != nil {
-		s.Nodes = nil
-		for i := 0; i+1 < len(hostsNode.Content); i += 2 {
-			name := hostsNode.Content[i].Value
-			var h allHostEntry
-			_ = hostsNode.Content[i+1].Decode(&h)
-			nc := state.NodeConfig{Name: name, AnsibleHost: h.AnsibleHost}
-			if h.AnsiblePort != 0 {
-				nc.AnsiblePort = strconv.Itoa(h.AnsiblePort)
-			}
-			if h.AnsibleSSHUser != "" {
-				nc.AnsibleUser = h.AnsibleSSHUser
-			}
-			s.Nodes = append(s.Nodes, nc)
-		}
-	}
-
-	// ki_cp_node.hosts — names only, order preserved.
-	if hostsNode := mappingGet(mappingGet(root, "ki_cp_node"), "hosts"); hostsNode != nil {
-		s.KiCpNodes = nil
-		for i := 0; i+1 < len(hostsNode.Content); i += 2 {
-			s.KiCpNodes = append(s.KiCpNodes, hostsNode.Content[i].Value)
-		}
-	}
-
-	// k8s_node.hosts — names and role flags, order preserved.
-	if hostsNode := mappingGet(mappingGet(root, "k8s_node"), "hosts"); hostsNode != nil {
-		s.K8sNodes = nil
-		s.K8sCpNodes = nil
-		s.NvidiaGPUNodes = nil
-		for i := 0; i+1 < len(hostsNode.Content); i += 2 {
-			name := hostsNode.Content[i].Value
-			s.K8sNodes = append(s.K8sNodes, name)
-			var entry k8sNodeEntry
-			_ = hostsNode.Content[i+1].Decode(&entry)
-			if entry.K8sCp {
-				s.K8sCpNodes = append(s.K8sCpNodes, name)
-			}
-			if entry.NvidiaGPU {
-				s.NvidiaGPUNodes = append(s.NvidiaGPUNodes, name)
-			}
-		}
-	}
-
-	return nil
-}
-
-// LoadVars reads group_vars/all/vars.yml and populates the config fields of AppState.
-// Returns nil error and leaves state unchanged if the file does not exist.
+// LoadVars reads group_vars/all/vars.yml.
 func LoadVars(path string, s *state.AppState) error {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
+	root, err := readDoc(path)
+	if err != nil || root == nil {
+		return err
 	}
-	if err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
 	var v varsYAML
-	if err := yaml.Unmarshal(data, &v); err != nil {
+	if err := root.Decode(&v); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
 
@@ -170,11 +177,8 @@ func LoadVars(path string, s *state.AppState) error {
 		s.InternalNetworkSubnets = v.InternalNetworkSubnets
 	}
 	s.InternalDNSServerEnabled = v.InternalNetworkExtraZone != ""
-
 	s.KiCpHaMode = v.KiCpHaMode
-	if v.KiCpHaModeVIP != "" {
-		s.KiCpHaModeVIP = v.KiCpHaModeVIP
-	}
+	s.KiCpHaModeVIP = v.KiCpHaModeVIP
 	s.KiCpDnsDnssecValidation = v.KiCpDnsDnssecValidation
 	if len(v.KiCpDnsServerUpstreamServers) > 0 {
 		s.KiCpDnsUpstreamServers = v.KiCpDnsServerUpstreamServers
@@ -182,64 +186,80 @@ func LoadVars(path string, s *state.AppState) error {
 	if len(v.KiCpNtpServerUpstreamServers) > 0 {
 		s.KiCpNtpUpstreamServers = v.KiCpNtpServerUpstreamServers
 	}
+	setIf(&s.K8sMinorVersion, v.K8sMinorVersion)
+	setIf(&s.K8sPodSubnet, v.K8sPodSubnet)
+	setIf(&s.K8sServiceSubnet, v.K8sServiceSubnet)
+	setIf(&s.K8sCertificateValidityPeriod, v.K8sCertificateValidityPeriod)
 
-	if v.K8sCertificateValidityPeriod != "" {
-		s.K8sCertificateValidityPeriod = v.K8sCertificateValidityPeriod
-	}
-	if len(v.K8sLoadBalancers) > 0 {
-		s.K8sIngressLBName = v.K8sLoadBalancers[0].Name
-		s.K8sIngressVIP = v.K8sLoadBalancers[0].VIP
-	}
-	if v.K8sDefaultIngressClass.HostNetworkPort > 0 {
-		s.K8sIngressHostNetworkPort = v.K8sDefaultIngressClass.HostNetworkPort
-	}
-	if len(v.K8sGateways) > 0 {
-		gw := v.K8sGateways[0]
-		ingressLBName := ""
-		if len(v.K8sLoadBalancers) > 0 {
-			ingressLBName = v.K8sLoadBalancers[0].Name
+	// Written by older versions of this tool: the same values under the k8s_ names
+	legacy := v.aipubYAML
+	if len(legacy.LoadBalancers) == 0 && len(v.K8sLoadBalancers) > 0 {
+		legacy.LoadBalancers = v.K8sLoadBalancers
+		if len(v.K8sGateways) > 0 && v.K8sGateways[0].Name != v.K8sLoadBalancers[0].Name {
+			legacy.LoadBalancers = append(legacy.LoadBalancers, v.K8sGateways[0])
 		}
-		if gw.Name == ingressLBName {
-			s.K8sIngressMode = 2
-		} else {
-			s.K8sIngressMode = 1
-			s.K8sGatewayLBName = gw.Name
-			s.K8sGatewayVIP = gw.VIP
-		}
+		legacy.DefaultIngressClass = v.K8sDefaultIngressClass
 	}
-
-	if v.AipubIngressZone != "" {
-		s.AipubEnabled = true
-		s.AipubIngressZone = v.AipubIngressZone
+	if legacy.CertMode == "" {
+		legacy.CertMode = v.KiCertMode
 	}
-	s.AipubHaMode = v.AipubHaMode
-	s.AipubHaModeStorageClass = v.AipubHaModeStorageClass
-	if len(v.AipubCpNodes) > 0 {
-		s.AipubCpNodes = v.AipubCpNodes
-	}
-
-	if v.AipubHarborIngressSubdomain != "" {
-		s.HarborIngressSubdomain = v.AipubHarborIngressSubdomain
-	}
-	if v.AipubHarborReplicaCount > 0 {
-		s.HarborReplicaCount = v.AipubHarborReplicaCount
-	}
-	if v.AipubHarborRegistryStorageSize != "" {
-		s.HarborRegistryStorageSize = v.AipubHarborRegistryStorageSize
-	}
-	if v.AipubHarborPostgresqlStorageSize != "" {
-		s.HarborPostgresqlStorageSize = v.AipubHarborPostgresqlStorageSize
-	}
-	if v.AipubHarborRedisStorageSize != "" {
-		s.HarborRedisStorageSize = v.AipubHarborRedisStorageSize
-	}
-	if v.AipubHarborTrivyStorageSize != "" {
-		s.HarborTrivyStorageSize = v.AipubHarborTrivyStorageSize
-	}
-
-	if v.KiCertMode != "" {
-		s.KiCertMode = v.KiCertMode
-	}
-
+	applyAipub(legacy, s)
 	return nil
+}
+
+// LoadAipubVars reads files/aipub/vars.yml. Its values win over what an older
+// vars.yml carried.
+func LoadAipubVars(path string, s *state.AppState) error {
+	root, err := readDoc(path)
+	if err != nil || root == nil {
+		return err
+	}
+	var a aipubYAML
+	if err := root.Decode(&a); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	s.AipubEnabled = true
+	applyAipub(a, s)
+	return nil
+}
+
+func applyAipub(a aipubYAML, s *state.AppState) {
+	if a.IngressZone != "" {
+		s.AipubEnabled = true
+		s.AipubIngressZone = a.IngressZone
+	}
+	if n := len(a.LoadBalancers); n > 0 {
+		s.K8sIngressLBName, s.K8sIngressVIP = a.LoadBalancers[0].Name, a.LoadBalancers[0].VIP
+		s.K8sIngressMode = 2
+		if n > 1 {
+			s.K8sIngressMode = 1
+			s.K8sGatewayLBName, s.K8sGatewayVIP = a.LoadBalancers[1].Name, a.LoadBalancers[1].VIP
+		}
+	}
+	if a.DefaultIngressClass.HostNetworkPort > 0 {
+		s.K8sIngressHostNetworkPort = a.DefaultIngressClass.HostNetworkPort
+	}
+	setIf(&s.AipubCertMode, a.CertMode)
+	if a.HaMode != nil {
+		s.AipubHaMode = *a.HaMode
+	}
+	setIf(&s.AipubHaModeStorageClass, a.HaModeStorageClass)
+	setIf(&s.AipubHarborLocalPVNode, a.HarborLocalPVNode)
+	if len(a.CpNodes) > 0 && len(s.AipubCpNodes) == 0 {
+		s.AipubCpNodes = a.CpNodes
+	}
+	setIf(&s.HarborIngressSubdomain, a.HarborIngressSub)
+	if a.HarborReplicaCount > 0 {
+		s.HarborReplicaCount = a.HarborReplicaCount
+	}
+	setIf(&s.HarborRegistryStorageSize, a.HarborRegistrySize)
+	setIf(&s.HarborPostgresqlStorageSize, a.HarborPostgresqlSize)
+	setIf(&s.HarborRedisStorageSize, a.HarborRedisSize)
+	setIf(&s.HarborTrivyStorageSize, a.HarborTrivySize)
+}
+
+func setIf(dst *string, v string) {
+	if v != "" {
+		*dst = v
+	}
 }

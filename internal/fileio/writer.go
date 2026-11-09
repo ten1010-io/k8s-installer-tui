@@ -1,9 +1,10 @@
 package fileio
 
 import (
-	"bytes"
+	_ "embed"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -11,288 +12,340 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// WriteInventory writes inventory.yml, backing up any existing file first.
-func WriteInventory(path string, s *state.AppState) error {
-	if err := backup(path); err != nil {
-		return err
-	}
+// The files of the installers this tool writes for, taken from them (see
+// templates/README.md). A file the site does not have yet starts from these.
+var (
+	//go:embed templates/k8s-vars.yml
+	k8sVarsTemplate []byte
+	//go:embed templates/aipub-vars.yml
+	aipubVarsTemplate []byte
+)
 
-	content, err := renderInventory(s)
+// The label base and the services of aipub run on (aipub_cp_node_label_key).
+// It is a node label of k8s-installer, set in inventory.yml
+const AipubCpNodeLabel = "node-role.aipub.ten1010.io/control-plane"
+
+// Variables older versions of this tool wrote into group_vars/all/vars.yml.
+// k8s-installer refuses them: they moved to aipub-installer (files/aipub/vars.yml)
+// or were removed
+var legacyK8sVars = []string{
+	"containerd_root_path",
+	"k8s_load_balancers",
+	"k8s_gateways",
+	"k8s_default_ingress_class",
+	"ki_cert_mode",
+}
+
+// Paths are the three files the tool reads and writes.
+type Paths struct {
+	Inventory string // inventory.yml
+	Vars      string // group_vars/all/vars.yml
+	AipubVars string // files/aipub/vars.yml
+}
+
+// DefaultPaths are the places k8s-installer reads the files from, relative to
+// its ansible directory (/opt/k8s-installer/ansible).
+func DefaultPaths(ansibleDir string) Paths {
+	return Paths{
+		Inventory: filepath.Join(ansibleDir, "inventory.yml"),
+		Vars:      filepath.Join(ansibleDir, "group_vars", "all", "vars.yml"),
+		AipubVars: filepath.Join(ansibleDir, "files", "aipub", "vars.yml"),
+	}
+}
+
+// Rendered is the content of the three files. AipubVars is nil when AIPub is not
+// installed, and the file is then left alone.
+type Rendered struct {
+	Inventory []byte
+	Vars      []byte
+	AipubVars []byte
+}
+
+// Render renders the three files over what is at p, or over the templates.
+func Render(p Paths, s *state.AppState) (*Rendered, error) {
+	var r Rendered
+	var err error
+	if r.Inventory, err = renderInventory(readOrNil(p.Inventory), s); err != nil {
+		return nil, fmt.Errorf("inventory.yml: %w", err)
+	}
+	if r.Vars, err = renderVars(readOrNil(p.Vars), s); err != nil {
+		return nil, fmt.Errorf("vars.yml: %w", err)
+	}
+	if s.AipubEnabled {
+		if r.AipubVars, err = renderAipubVars(readOrNil(p.AipubVars), s); err != nil {
+			return nil, fmt.Errorf("files/aipub/vars.yml: %w", err)
+		}
+	}
+	return &r, nil
+}
+
+// WriteAll renders and writes the files, keeping the previous version of each as
+// <file>.bak.
+func WriteAll(p Paths, s *state.AppState) error {
+	r, err := Render(p, s)
 	if err != nil {
 		return err
 	}
-
-	return os.WriteFile(path, content, 0644)
+	files := []struct {
+		path string
+		data []byte
+	}{{p.Inventory, r.Inventory}, {p.Vars, r.Vars}, {p.AipubVars, r.AipubVars}}
+	for _, f := range files {
+		if f.data == nil {
+			continue
+		}
+		if err := writeWithBackup(f.path, f.data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// WriteVars writes group_vars/all/vars.yml, backing up any existing file first.
-func WriteVars(path string, s *state.AppState) error {
-	if err := backup(path); err != nil {
-		return err
-	}
-
-	content, err := renderVars(s)
+func readOrNil(path string) []byte {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(path, content, 0644)
-}
-
-// RenderInventoryString returns the inventory.yml content as a string (for preview).
-func RenderInventoryString(s *state.AppState) (string, error) {
-	b, err := renderInventory(s)
-	return string(b), err
-}
-
-// RenderVarsString returns the vars.yml content as a string (for preview).
-func RenderVarsString(s *state.AppState) (string, error) {
-	b, err := renderVars(s)
-	return string(b), err
-}
-
-func backup(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
-	return os.Rename(path, path+".bak")
+	return data
 }
 
-func renderInventory(s *state.AppState) ([]byte, error) {
-	// Build using ordered yaml.Node to guarantee key order in output.
-	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-
-	// control_node section
-	root.Content = append(root.Content,
-		strNode("control_node"),
-		mappingNode(
-			"hosts", mappingNode(
-				"localhost", mappingNode(
-					"ansible_connection", strNode("local"),
-				),
-			),
-		),
-	)
-
-	// all.hosts
-	allHosts := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	for _, n := range s.Nodes {
-		hostEntry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		addStr(hostEntry, "ansible_host", n.AnsibleHost)
-		if n.AnsiblePort != "" {
-			port, _ := strconv.Atoi(n.AnsiblePort)
-			addInt(hostEntry, "ansible_port", port)
-		}
-		if n.AnsibleUser != "" {
-			addStr(hostEntry, "ansible_ssh_user", n.AnsibleUser)
-		}
-		allHosts.Content = append(allHosts.Content, strNode(n.Name), hostEntry)
+func writeWithBackup(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
 	}
-	root.Content = append(root.Content,
-		strNode("all"),
-		mappingNode("hosts", allHosts),
-	)
-
-	// ki_cp_node
-	kiCpHosts := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	for _, name := range s.KiCpNodes {
-		kiCpHosts.Content = append(kiCpHosts.Content,
-			strNode(name),
-			&yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"},
-		)
-	}
-	root.Content = append(root.Content,
-		strNode("ki_cp_node"),
-		mappingNode("hosts", kiCpHosts),
-	)
-
-	// k8s_node
-	k8sHosts := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	for _, name := range s.K8sNodes {
-		entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		if s.IsK8sCpNode(name) {
-			addBool(entry, "k8s_cp", true)
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Rename(path, path+".bak"); err != nil {
+			return err
 		}
-		if s.IsNvidiaGPUNode(name) {
-			addBool(entry, "nvidia_gpu", true)
-		}
-		k8sHosts.Content = append(k8sHosts.Content, strNode(name), entry)
 	}
-	root.Content = append(root.Content,
-		strNode("k8s_node"),
-		mappingNode("hosts", k8sHosts),
-	)
-
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(&yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}); err != nil {
-		return nil, fmt.Errorf("encode inventory: %w", err)
-	}
-	return buf.Bytes(), nil
+	return os.WriteFile(path, data, 0644)
 }
 
-func renderVars(s *state.AppState) ([]byte, error) {
-	var b strings.Builder
+// --- group_vars/all/vars.yml ---
 
-	// Static header
-	b.WriteString("ki_var_root_path: \"/var/lib/k8s-installer\"\n")
-	b.WriteString("containerd_root_path: \"/var/lib/containerd\"\n")
-	b.WriteString("docker_root_path: \"/var/lib/docker\"\n")
-	b.WriteString("\n")
-
-	// internal_network_subnets
-	b.WriteString("internal_network_subnets:\n")
-	for _, subnet := range s.InternalNetworkSubnets {
-		fmt.Fprintf(&b, "  - %q\n", subnet)
+// renderVars edits the vars.yml of the site, or the template of k8s-installer.
+// A file written by an older version of this tool (no k8s_minor_version) lacks
+// most of what k8s-installer requires now, so it is replaced by the template and
+// only the values this tool manages are carried over through the state.
+func renderVars(existing []byte, s *state.AppState) ([]byte, error) {
+	tpl, err := parseDoc(k8sVarsTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("template: %w", err)
 	}
-	b.WriteString("\n")
+	top := tpl
+	if existing != nil {
+		cur, err := parseDoc(existing)
+		if err != nil {
+			return nil, err
+		}
+		if getKey(cur, "k8s_minor_version") != nil {
+			top = cur
+			addMissingKeys(top, tpl)
+		}
+	}
 
-	// internal_network_extra_zone: commented out when internal DNS server is disabled;
-	// when enabled, points the ingress domain's apex/wildcard records at the ingress VIP.
-	if !s.InternalDNSServerEnabled {
-		b.WriteString("#internal_network_extra_zone: \"example.com\"\n")
-		b.WriteString("#internal_network_extra_zone_a_records:\n")
-		b.WriteString("#  - name: \"@\"\n")
-		b.WriteString("#    ip: \"172.16.0.254\"\n")
-		b.WriteString("#  - name: \"*\"\n")
-		b.WriteString("#    ip: \"172.16.0.254\"\n")
+	for _, k := range legacyK8sVars {
+		deleteKey(top, k)
+	}
+	for _, k := range keys(top) {
+		if strings.HasPrefix(k, "aipub_") {
+			deleteKey(top, k)
+		}
+	}
+
+	setKey(top, "internal_network_subnets", quotedSeq(s.InternalNetworkSubnets))
+	if s.InternalDNSServerEnabled {
+		// The domain of AIPub resolved by the dns server of the ki cp nodes: the
+		// apex and every name under it at the ingress VIP
+		setKey(top, "internal_network_extra_zone", quoted(s.AipubIngressZone))
+		setKey(top, "internal_network_extra_zone_a_records", seqNode(
+			mapNode("name", quoted("@"), "ip", quoted(s.K8sIngressVIP)),
+			mapNode("name", quoted("*"), "ip", quoted(s.K8sIngressVIP)),
+		))
 	} else {
-		fmt.Fprintf(&b, "internal_network_extra_zone: %q\n", s.AipubIngressZone)
-		b.WriteString("internal_network_extra_zone_a_records:\n")
-		fmt.Fprintf(&b, "  - name: \"@\"\n    ip: %q\n", s.K8sIngressVIP)
-		fmt.Fprintf(&b, "  - name: \"*\"\n    ip: %q\n", s.K8sIngressVIP)
-	}
-	b.WriteString("\n")
-
-	// ki_cp section
-	fmt.Fprintf(&b, "ki_cp_ha_mode: %v\n", s.KiCpHaMode)
-	if s.KiCpHaModeVIP == "" {
-		b.WriteString("ki_cp_ha_mode_vip: null\n")
-	} else {
-		fmt.Fprintf(&b, "ki_cp_ha_mode_vip: %q\n", s.KiCpHaModeVIP)
-	}
-	fmt.Fprintf(&b, "ki_cp_dns_dnssec_validation: %v\n", s.KiCpDnsDnssecValidation)
-	b.WriteString("ki_cp_dns_server_upstream_servers:\n")
-	for _, srv := range s.KiCpDnsUpstreamServers {
-		fmt.Fprintf(&b, "  - %q\n", srv)
-	}
-	b.WriteString("ki_cp_ntp_server_upstream_servers:\n")
-	for _, srv := range s.KiCpNtpUpstreamServers {
-		fmt.Fprintf(&b, "  - %q\n", srv)
-	}
-	b.WriteString("\n")
-
-	// k8s section
-	fmt.Fprintf(&b, "k8s_certificate_validity_period: %q # 26280h = 3 year\n", s.K8sCertificateValidityPeriod)
-
-	// k8s_load_balancers — ingress LB only (gateway LB is defined in k8s_gateways for mode 1)
-	b.WriteString("k8s_load_balancers:\n")
-	fmt.Fprintf(&b, "  - name: %q\n", s.K8sIngressLBName)
-	if s.K8sIngressVIP == "" {
-		b.WriteString("    vip: null\n")
-	} else {
-		fmt.Fprintf(&b, "    vip: %q\n", s.K8sIngressVIP)
-	}
-	b.WriteString("    nodes:\n")
-	for _, n := range s.KiCpNodes {
-		fmt.Fprintf(&b, "      - %q\n", n)
+		deleteKey(top, "internal_network_extra_zone")
+		deleteKey(top, "internal_network_extra_zone_a_records")
 	}
 
-	// k8s_gateways
-	// Mode 1: separate gateway LB (lb2 with its own VIP)
-	// Mode 2: shared IP — gateway references the same LB as ingress
-	b.WriteString("k8s_gateways:\n")
+	setKey(top, "ki_cp_ha_mode", boolNode(s.KiCpHaMode))
+	setKey(top, "ki_cp_ha_mode_vip", quotedOrNull(s.KiCpHaModeVIP))
+	setKey(top, "ki_cp_dns_dnssec_validation", boolNode(s.KiCpDnsDnssecValidation))
+	setKey(top, "ki_cp_dns_server_upstream_servers", quotedSeq(s.KiCpDnsUpstreamServers))
+	setKey(top, "ki_cp_ntp_server_upstream_servers", quotedSeq(s.KiCpNtpUpstreamServers))
+
+	setKey(top, "k8s_pod_subnet", quoted(s.K8sPodSubnet))
+	setKey(top, "k8s_service_subnet", quoted(s.K8sServiceSubnet))
+	setKey(top, "k8s_kube_proxy_enabled", boolNode(s.KubeProxyEnabled()))
+	setKey(top, "k8s_minor_version", quoted(s.K8sMinorVersion))
+	setKey(top, "k8s_certificate_validity_period", quoted(s.K8sCertificateValidityPeriod))
+
+	return encodeDoc(top)
+}
+
+// addMissingKeys appends to cur, with their comments, the keys of the template it
+// does not have: variables a newer installer added since the file was written.
+func addMissingKeys(cur, tpl *yaml.Node) {
+	for i := 0; i+1 < len(tpl.Content); i += 2 {
+		if keyIndex(cur, tpl.Content[i].Value) < 0 {
+			cur.Content = append(cur.Content, tpl.Content[i], tpl.Content[i+1])
+		}
+	}
+}
+
+// --- files/aipub/vars.yml ---
+
+// renderAipubVars edits the site values of aipub-installer, or its example file.
+// Only aipub_* variables are written; load-site-vars.yml refuses anything else.
+func renderAipubVars(existing []byte, s *state.AppState) ([]byte, error) {
+	src := aipubVarsTemplate
+	if existing != nil {
+		src = existing
+	}
+	top, err := parseDoc(src)
+	if err != nil {
+		return nil, err
+	}
+
+	// Network: the ingress VIP, and in mode 1 a second VIP for the gateway of the
+	// workloads. The nodes answering ARP for them are the k8s control plane nodes
+	lbNodes := s.K8sCpNodes
+	lbs := []*yaml.Node{lbEntry(s.K8sIngressLBName, s.K8sIngressVIP, lbNodes)}
 	if s.K8sIngressMode == 1 {
-		// 별도 IP 모드: gateway 자체 LB명과 VIP
-		fmt.Fprintf(&b, "  - name: %q\n", s.K8sGatewayLBName)
-		if s.K8sGatewayVIP == "" {
-			b.WriteString("    vip: \"\"\n")
-		} else {
-			fmt.Fprintf(&b, "    vip: %q\n", s.K8sGatewayVIP)
-		}
+		lbs = append(lbs, lbEntry(s.K8sGatewayLBName, s.K8sGatewayVIP, lbNodes))
+	}
+	setKey(top, "aipub_load_balancers", seqNode(lbs...))
+	setKey(top, "aipub_default_ingress_class", mapNode(
+		"load_balancer", quoted(s.K8sIngressLBName),
+		"host_network_port", intNode(s.K8sIngressHostNetworkPort),
+	))
+
+	setKey(top, "aipub_cert_mode", quoted(s.AipubCertMode))
+
+	setKey(top, "aipub_ingress_zone", quoted(s.AipubIngressZone))
+	setKey(top, "aipub_harbor_ingress_subdomain", quoted(s.HarborIngressSubdomain))
+	setKey(top, "aipub_ha_mode", boolNode(s.AipubHaMode))
+	if s.AipubHaMode {
+		setKey(top, "aipub_ha_mode_storage_class", quoted(s.AipubHaModeStorageClass))
+		deleteKey(top, "aipub_harbor_local_pv_node")
 	} else {
-		// 공유 IP 모드: ingress LB명과 VIP 복사
-		fmt.Fprintf(&b, "  - name: %q\n", s.K8sIngressLBName)
-		if s.K8sIngressVIP == "" {
-			b.WriteString("    vip: \"\"\n")
+		deleteKey(top, "aipub_ha_mode_storage_class")
+		setKey(top, "aipub_harbor_local_pv_node", quoted(s.AipubHarborLocalPVNode))
+	}
+	setKey(top, "aipub_harbor_replica_count", intNode(s.HarborReplicaCount))
+	setKey(top, "aipub_harbor_registry_storage_size", quoted(s.HarborRegistryStorageSize))
+	setKey(top, "aipub_harbor_postgresql_storage_size", quoted(s.HarborPostgresqlStorageSize))
+	setKey(top, "aipub_harbor_redis_storage_size", quoted(s.HarborRedisStorageSize))
+	setKey(top, "aipub_harbor_trivy_storage_size", quoted(s.HarborTrivyStorageSize))
+
+	return encodeDoc(top)
+}
+
+func lbEntry(name, vip string, nodes []string) *yaml.Node {
+	return mapNode("name", quoted(name), "vip", quotedOrNull(vip), "nodes", flowSeq(nodes))
+}
+
+// --- inventory.yml ---
+
+// renderInventory edits the inventory of the site, or a new one. Hosts and group
+// members are added, updated and removed to match the state; any other variable
+// of a host (kernel arguments, labels, taints set by hand) is left as it was.
+func renderInventory(existing []byte, s *state.AppState) ([]byte, error) {
+	top, err := parseDoc(existing)
+	if err != nil {
+		return nil, err
+	}
+
+	// control_node: the control node is the first ki cp node
+	localhost := subMap(subMap(subMap(top, "control_node"), "hosts"), "localhost")
+	setKey(localhost, "ansible_connection", strKey("local"))
+	if len(s.KiCpNodes) > 0 {
+		setKey(localhost, "control_node_ih", strKey(s.KiCpNodes[0]))
+	}
+
+	// all.hosts: address and login of every node
+	allHosts := subMap(subMap(top, "all"), "hosts")
+	syncHosts(allHosts, s.NodeNames())
+	for _, n := range s.Nodes {
+		h := hostMap(allHosts, n.Name)
+		setKey(h, "ansible_host", strKey(n.AnsibleHost))
+		if n.AnsiblePort != "" {
+			p, _ := strconv.Atoi(n.AnsiblePort)
+			setKey(h, "ansible_port", intNode(p))
 		} else {
-			fmt.Fprintf(&b, "    vip: %q\n", s.K8sIngressVIP)
+			deleteKey(h, "ansible_port")
 		}
-	}
-	b.WriteString("    nodes:\n")
-	for _, n := range s.KiCpNodes {
-		fmt.Fprintf(&b, "      - %q\n", n)
-	}
-
-	// k8s_default_ingress_class
-	b.WriteString("k8s_default_ingress_class:\n")
-	fmt.Fprintf(&b, "  load_balancer: %q\n", s.K8sIngressLBName)
-	fmt.Fprintf(&b, "  host_network_port: %d\n", s.K8sIngressHostNetworkPort)
-	b.WriteString("\n")
-	b.WriteString("\n")
-
-	// aipub section (omitted entirely when not installing AIPub)
-	if s.AipubEnabled {
-		fmt.Fprintf(&b, "aipub_ingress_zone: %q\n", s.AipubIngressZone)
-		fmt.Fprintf(&b, "aipub_ha_mode: %v\n", s.AipubHaMode)
-		if s.AipubHaModeStorageClass == "" {
-			b.WriteString("aipub_ha_mode_storage_class: null\n")
+		deleteKey(h, "ansible_ssh_user") // older versions of this tool
+		if n.AnsibleUser != "" {
+			setKey(h, "ansible_user", strKey(n.AnsibleUser))
 		} else {
-			fmt.Fprintf(&b, "aipub_ha_mode_storage_class: %q\n", s.AipubHaModeStorageClass)
+			deleteKey(h, "ansible_user")
 		}
-		b.WriteString("aipub_cp_nodes:\n")
-		for _, n := range s.AipubCpNodes {
-			fmt.Fprintf(&b, "  - %q\n", n)
-		}
-		b.WriteString("\n")
-		fmt.Fprintf(&b, "aipub_harbor_ingress_subdomain: %q\n", s.HarborIngressSubdomain)
-		fmt.Fprintf(&b, "aipub_harbor_replica_count: %d\n", s.HarborReplicaCount)
-		fmt.Fprintf(&b, "aipub_harbor_registry_storage_size: %s\n", s.HarborRegistryStorageSize)
-		fmt.Fprintf(&b, "aipub_harbor_postgresql_storage_size: %s\n", s.HarborPostgresqlStorageSize)
-		fmt.Fprintf(&b, "aipub_harbor_redis_storage_size: %s\n", s.HarborRedisStorageSize)
-		fmt.Fprintf(&b, "aipub_harbor_trivy_storage_size: %s\n", s.HarborTrivyStorageSize)
-		b.WriteString("\n")
 	}
 
-	// ki_cert_mode
-	b.WriteString("# ki_cert_mode options:\n")
-	b.WriteString("# - \"self_signed\": CA를 자동 생성하고 TLS 인증서를 발급 (기본값)\n")
-	b.WriteString("# - \"ca_provided\":  고객이 ca.crt + ca.key를 제공, TLS 인증서만 발급\n")
-	b.WriteString("# - \"tls_provided\": 고객이 tls.crt + tls.key를 모두 제공, 인증서 발급 생략\n")
-	fmt.Fprintf(&b, "ki_cert_mode: %q\n", s.KiCertMode)
+	kiCpHosts := subMap(subMap(top, "ki_cp_node"), "hosts")
+	syncHosts(kiCpHosts, s.KiCpNodes)
 
-	return []byte(b.String()), nil
-}
+	k8sHosts := subMap(subMap(top, "k8s_node"), "hosts")
+	syncHosts(k8sHosts, s.K8sNodes)
+	for _, name := range s.K8sNodes {
+		h := hostMap(k8sHosts, name)
+		if s.IsK8sCpNode(name) {
+			setKey(h, "k8s_cp", boolNode(true))
+		} else {
+			deleteKey(h, "k8s_cp")
+		}
+		deleteKey(h, "nvidia_gpu") // removed from k8s-installer, which refuses it now
 
-// --- yaml.Node helpers (used by renderInventory) ---
-
-func strNode(s string) *yaml.Node {
-	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s}
-}
-
-func mappingNode(key string, val *yaml.Node) *yaml.Node {
-	m := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	m.Content = append(m.Content, strNode(key), val)
-	return m
-}
-
-func addStr(m *yaml.Node, key, val string) {
-	m.Content = append(m.Content, strNode(key), strNode(val))
-}
-
-func addInt(m *yaml.Node, key string, val int) {
-	m.Content = append(m.Content, strNode(key), &yaml.Node{
-		Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(val),
-	})
-}
-
-func addBool(m *yaml.Node, key string, val bool) {
-	v := "false"
-	if val {
-		v = "true"
+		// The nodes base and the services of aipub run on carry this label
+		labels := getKey(h, "k8s_node_labels")
+		wantLabel := s.AipubEnabled && s.IsAipubCpNode(name)
+		if wantLabel {
+			if labels == nil || labels.Kind != yaml.MappingNode {
+				labels = mapNode()
+				setKey(h, "k8s_node_labels", labels)
+			}
+			setKey(labels, AipubCpNodeLabel, quoted(""))
+		} else if labels != nil {
+			deleteKey(labels, AipubCpNodeLabel)
+			if len(labels.Content) == 0 {
+				deleteKey(h, "k8s_node_labels")
+			}
+		}
+		if len(h.Content) == 0 {
+			h.Style = yaml.FlowStyle
+		}
 	}
-	m.Content = append(m.Content, strNode(key), &yaml.Node{
-		Kind: yaml.ScalarNode, Tag: "!!bool", Value: v,
-	})
+
+	// broken_node: kept as the site has it; created empty in a new inventory
+	if getKey(top, "broken_node") == nil {
+		setKey(top, "broken_node", mapNode("hosts", emptyMap()))
+	}
+
+	return encodeDoc(top)
+}
+
+// syncHosts makes the members of a hosts mapping the names given, in that order:
+// a member that stays keeps its variables, a new one starts as {}.
+func syncHosts(hosts *yaml.Node, names []string) {
+	old := map[string]*yaml.Node{}
+	for i := 0; i+1 < len(hosts.Content); i += 2 {
+		old[hosts.Content[i].Value] = hosts.Content[i+1]
+	}
+	var content []*yaml.Node
+	for _, n := range names {
+		v, ok := old[n]
+		if !ok || v.Kind != yaml.MappingNode {
+			v = emptyMap()
+		}
+		content = append(content, strKey(n), v)
+	}
+	hosts.Content = content
+}
+
+// hostMap is the variables mapping of a member, written in block style once it
+// has any.
+func hostMap(hosts *yaml.Node, name string) *yaml.Node {
+	h := getKey(hosts, name)
+	h.Style = 0
+	return h
 }

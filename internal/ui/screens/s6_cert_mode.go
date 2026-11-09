@@ -41,7 +41,7 @@ func (s *S6CertMode) SetSize(w, h int) {
 func (s *S6CertMode) SyncFromState(st *state.AppState) {
 	s.selected = 0
 	for i, m := range certModes {
-		if m.value == st.KiCertMode {
+		if m.value == st.AipubCertMode {
 			s.selected = i
 			break
 		}
@@ -51,7 +51,7 @@ func (s *S6CertMode) SyncFromState(st *state.AppState) {
 }
 
 func (s *S6CertMode) SyncToState(st *state.AppState) {
-	st.KiCertMode = certModes[s.selected].value
+	st.AipubCertMode = certModes[s.selected].value
 }
 
 func (s *S6CertMode) Validate() []string { return nil }

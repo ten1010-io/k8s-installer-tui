@@ -15,6 +15,7 @@ var (
 	reFQDN      = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`)
 	reSubdomain = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-.]*[a-z0-9])?$`)
 	reK8sName   = reSubdomain
+	reMinor     = regexp.MustCompile(`^1\.[0-9]+$`)
 )
 
 type Error struct {
@@ -152,6 +153,42 @@ func validateKubernetes(s *state.AppState) []Error {
 	if !reValidity.MatchString(s.K8sCertificateValidityPeriod) {
 		errs = append(errs, Error{"k8s_certificate_validity_period", "형식이 올바르지 않습니다 (예: 26280h)"})
 	}
+	if !reMinor.MatchString(s.K8sMinorVersion) {
+		errs = append(errs, Error{"k8s_minor_version", "형식이 올바르지 않습니다 (예: 1.36)"})
+	}
+
+	// k8s-installer: the pod and service subnets must not overlap each other or the
+	// network of the nodes (validate_k8s_subnets)
+	subnets := map[string]string{"k8s_pod_subnet": s.K8sPodSubnet, "k8s_service_subnet": s.K8sServiceSubnet}
+	parsed := map[string]*net.IPNet{}
+	for name, cidr := range subnets {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			errs = append(errs, Error{name, fmt.Sprintf("'%s'는 유효한 CIDR 형식이 아닙니다", cidr)})
+			continue
+		}
+		parsed[name] = n
+	}
+	if p, sv := parsed["k8s_pod_subnet"], parsed["k8s_service_subnet"]; p != nil && sv != nil && overlaps(p, sv) {
+		errs = append(errs, Error{"k8s_service_subnet", "파드 서브넷과 서비스 서브넷이 겹칩니다"})
+	}
+	for _, cidr := range s.InternalNetworkSubnets {
+		_, in, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		for name, n := range parsed {
+			if overlaps(in, n) {
+				errs = append(errs, Error{name, fmt.Sprintf("내부 서브넷 %s와 겹칩니다", cidr)})
+			}
+		}
+	}
+
+	// The load balancers below belong to AIPub (aipub_load_balancers); without it
+	// nothing reads them
+	if !s.AipubEnabled {
+		return errs
+	}
 
 	if s.K8sIngressMode != 1 && s.K8sIngressMode != 2 {
 		errs = append(errs, Error{"k8s_ingress_mode", "인그레스 모드는 1 또는 2여야 합니다"})
@@ -186,8 +223,15 @@ func validateKubernetes(s *state.AppState) []Error {
 		errs = append(errs, Error{"k8s_ingress_host_network_port", "포트는 1-65535 범위여야 합니다"})
 	}
 
+	// aipub_load_balancers: the k8s control plane nodes answer ARP for the VIPs
+	if len(s.K8sCpNodes) == 0 {
+		errs = append(errs, Error{"aipub_load_balancers", "VIP를 받을 마스터(k8s_cp) 노드가 없습니다"})
+	}
+
 	return errs
 }
+
+func overlaps(a, b *net.IPNet) bool { return a.Contains(b.IP) || b.Contains(a.IP) }
 
 func validateAipub(s *state.AppState) []Error {
 	if !s.AipubEnabled {
@@ -199,9 +243,21 @@ func validateAipub(s *state.AppState) []Error {
 		errs = append(errs, Error{"aipub_ingress_zone", "유효한 도메인 형식이 아닙니다 (예: example.com)"})
 	}
 
-	// R5: aipub_ha_mode=true → storage_class 필수
+	// R5: aipub_ha_mode=true → storage_class 필수, false → local PV 노드 필수
+	// (check-base.yml); the local PV node has to carry the aipub label
 	if s.AipubHaMode && s.AipubHaModeStorageClass == "" {
 		errs = append(errs, Error{"aipub_ha_mode_storage_class", "AIPub HA 모드에서는 StorageClass를 지정해야 합니다"})
+	}
+	if !s.AipubHaMode {
+		if s.AipubHarborLocalPVNode == "" {
+			errs = append(errs, Error{"aipub_harbor_local_pv_node", "HA가 아니면 Harbor 데이터를 둘 노드를 지정해야 합니다"})
+		} else if !s.IsAipubCpNode(s.AipubHarborLocalPVNode) {
+			errs = append(errs, Error{"aipub_harbor_local_pv_node",
+				fmt.Sprintf("'%s'는 AIPub 컨트롤 플레인 노드가 아닙니다", s.AipubHarborLocalPVNode)})
+		}
+	}
+	if len(s.AipubCpNodes) == 0 {
+		errs = append(errs, Error{"aipub_cp_nodes", "AIPub 컨트롤 플레인 노드를 1개 이상 선택해야 합니다 (Harbor가 그 노드에서 돕니다)"})
 	}
 
 	// R6: aipub_cp_nodes ⊆ k8s_cp_node
@@ -234,8 +290,8 @@ func validateAipub(s *state.AppState) []Error {
 	}
 
 	certModes := map[string]bool{"self_signed": true, "ca_provided": true, "tls_provided": true}
-	if !certModes[s.KiCertMode] {
-		errs = append(errs, Error{"ki_cert_mode", "self_signed, ca_provided, tls_provided 중 하나를 선택해주세요"})
+	if !certModes[s.AipubCertMode] {
+		errs = append(errs, Error{"aipub_cert_mode", "self_signed, ca_provided, tls_provided 중 하나를 선택해주세요"})
 	}
 
 	return errs

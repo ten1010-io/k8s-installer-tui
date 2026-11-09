@@ -1,0 +1,12 @@
+aipub_load_balancers:
+  - name: "lb1"
+    vip: "10.10.0.100"
+    nodes: ["master1"]
+aipub_default_ingress_class:
+  load_balancer: "lb1"
+  host_network_port: 443
+aipub_ingress_zone: "aipub.univ.ac.kr"
+aipub_ha_mode: false
+aipub_harbor_local_pv_node: "master1"
+aipub_harbor_replica_count: 1
+aipub_cert_mode: "ca_provided"

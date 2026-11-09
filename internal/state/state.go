@@ -1,13 +1,24 @@
 package state
 
+// AppState holds everything the screens edit. It is written to three files:
+//
+//	inventory.yml               nodes, groups, the aipub control plane label   (k8s-installer)
+//	group_vars/all/vars.yml     the cluster                                    (k8s-installer)
+//	files/aipub/vars.yml        aipub_* only, when AIPub is installed          (aipub-installer)
+//
+// k8s-installer refuses a variable of vars.yml it does not classify, and
+// aipub-installer refuses anything but aipub_* in its file, so no variable is
+// written to the other file.
 type AppState struct {
 	// S1: Nodes (inventory.yml → all.hosts)
 	Nodes []NodeConfig
 
 	// S2: Groups (inventory.yml → ki_cp_node, k8s_node)
-	KiCpNodes      []string
-	K8sNodes       []string
-	K8sCpNodes     []string
+	KiCpNodes  []string
+	K8sNodes   []string
+	K8sCpNodes []string
+	// Read from older inventories only. k8s-installer removed nvidia_gpu (the
+	// node runtime finds the gpus itself) and refuses an inventory that sets it
 	NvidiaGPUNodes []string
 
 	// S3: Network (vars.yml)
@@ -20,19 +31,26 @@ type AppState struct {
 	InternalDNSServerEnabled bool
 
 	// S4: Kubernetes (vars.yml)
+	K8sMinorVersion              string
+	K8sPodSubnet                 string
+	K8sServiceSubnet             string
 	K8sCertificateValidityPeriod string
-	K8sIngressMode               int // 1=별도IP, 2=공유IP
-	K8sIngressLBName             string
-	K8sIngressVIP                string
-	K8sGatewayLBName             string // mode 1 only
-	K8sGatewayVIP                string // mode 1 only
-	K8sIngressHostNetworkPort    int
 
-	// S5: AIPub (vars.yml)
+	// S4: Load balancers of AIPub (files/aipub/vars.yml → aipub_load_balancers,
+	// aipub_default_ingress_class). Named K8s* from when k8s-installer carried them
+	K8sIngressMode            int // 1=별도IP (ingress lb + gateway lb), 2=공유IP
+	K8sIngressLBName          string
+	K8sIngressVIP             string
+	K8sGatewayLBName          string // mode 1 only
+	K8sGatewayVIP             string // mode 1 only
+	K8sIngressHostNetworkPort int
+
+	// S5: AIPub (files/aipub/vars.yml)
 	AipubEnabled                bool
 	AipubIngressZone            string
 	AipubHaMode                 bool
 	AipubHaModeStorageClass     string
+	AipubHarborLocalPVNode      string // without HA: the node harbor keeps its data on
 	AipubCpNodes                []string
 	HarborIngressSubdomain      string
 	HarborReplicaCount          int
@@ -41,8 +59,8 @@ type AppState struct {
 	HarborRedisStorageSize      string
 	HarborTrivyStorageSize      string
 
-	// S6: Certificate mode (vars.yml)
-	KiCertMode string
+	// S6: Certificate mode (files/aipub/vars.yml → aipub_cert_mode)
+	AipubCertMode string
 }
 
 func DefaultState() *AppState {
@@ -52,6 +70,9 @@ func DefaultState() *AppState {
 		KiCpDnsUpstreamServers:       []string{"8.8.8.8", "8.8.4.4"},
 		KiCpNtpUpstreamServers:       []string{"time1.google.com", "time2.google.com"},
 		InternalNetworkSubnets:       []string{"192.168.0.0/24"},
+		K8sMinorVersion:              "1.36",
+		K8sPodSubnet:                 "10.244.0.0/16",
+		K8sServiceSubnet:             "10.96.0.0/12",
 		K8sCertificateValidityPeriod: "26280h",
 		K8sIngressMode:               2,
 		K8sIngressLBName:             "lb1",
@@ -66,9 +87,15 @@ func DefaultState() *AppState {
 		HarborPostgresqlStorageSize:  "128Gi",
 		HarborRedisStorageSize:       "32Gi",
 		HarborTrivyStorageSize:       "5Gi",
-		KiCertMode:                   "self_signed",
+		AipubCertMode:                "self_signed",
 	}
 }
+
+// KubeProxyEnabled is what k8s_kube_proxy_enabled is written as. AIPub brings
+// cilium up with kubeProxyReplacement, and setup-network.yml stops on a cluster
+// that has kube-proxy; without AIPub the cluster keeps kube-proxy for whatever
+// cni the site installs.
+func (s *AppState) KubeProxyEnabled() bool { return !s.AipubEnabled }
 
 func (s *AppState) NodeNames() []string {
 	names := make([]string, len(s.Nodes))

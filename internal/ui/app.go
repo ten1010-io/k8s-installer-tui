@@ -5,40 +5,47 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/screens"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 type App struct {
-	appState      *state.AppState
-	screenList    []screens.Screen
-	current       int
-	width         int
-	height        int
-	screenErrors  []string
-	inventoryPath string
-	varsPath      string
-	version       string
+	appState     *state.AppState
+	screenList   []screens.Screen
+	current      int
+	width        int
+	height       int
+	screenErrors []string
+	version      string
 }
 
-func NewApp(s *state.AppState, inventoryPath, varsPath, version string) *App {
+func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version string) *App {
 	s1 := screens.NewS1Nodes()
 	s2 := screens.NewS2Groups()
 	s3 := screens.NewS3Network()
 	s4 := screens.NewS4Kubernetes()
 	s5 := screens.NewS5Aipub()
-	s6 := screens.NewS6CertMode()
-	s7 := screens.NewS7Preview(s, inventoryPath, varsPath)
+	s6 := screens.NewS6AipubLB()
+	s7 := screens.NewS6CertMode()
+	s8 := screens.NewS7Preview(s, paths)
+	s9 := screens.NewS9Install(s, paths, opts)
 	s1.SyncFromState(s)
 	return &App{
-		appState:      s,
-		screenList:    []screens.Screen{s1, s2, s3, s4, s5, s6, s7},
-		inventoryPath: inventoryPath,
-		varsPath:      varsPath,
-		version:       version,
+		appState:   s,
+		screenList: []screens.Screen{s1, s2, s3, s4, s5, s6, s7, s8, s9},
+		version:    version,
 	}
 }
+
+// The steps of the header, in the order of screenList.
+var stepTitles = []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "5.AIPub", "6.AIPub LB", "7.인증서", "8.저장", "9.설치"}
+
+// aipubOnlyScreens are skipped when AIPub is not installed: what they ask goes to
+// files/aipub/vars.yml, which is then not written.
+var aipubOnlyScreens = map[int]bool{5: true, 6: true}
 
 func (a *App) Init() tea.Cmd { return nil }
 
@@ -76,9 +83,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // skipScreen returns true for screens that should be skipped in navigation.
-// S6 (index 5, 인증서) is skipped when AIPub is not being installed.
 func (a *App) skipScreen(idx int) bool {
-	return idx == 5 && !a.appState.AipubEnabled
+	return aipubOnlyScreens[idx] && !a.appState.AipubEnabled
 }
 
 func (a *App) goNext() (tea.Model, tea.Cmd) {
@@ -192,7 +198,6 @@ func (a *App) View() string {
 func (a *App) renderHeader(width int) string {
 	title := styles.StyleHeader.Width(width).Render("  k8s-installer-tui " + a.version + "  ")
 
-	stepTitles := []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "5.AIPub", "6.인증서", "7.저장"}
 	parts := make([]string, len(a.screenList))
 	for i, t := range stepTitles {
 		switch {

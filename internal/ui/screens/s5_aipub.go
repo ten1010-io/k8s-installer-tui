@@ -16,7 +16,7 @@ import (
 //   --- enabled일 때만 ---
 //   1  : ingress zone
 //   2  : HA mode toggle
-//   3  : storage class
+//   3  : storage class (HA) / harbor data node (without HA)
 //   4  : CP nodes section
 //   5  : harbor subdomain
 //   6  : harbor replicas
@@ -47,6 +47,7 @@ type S5Aipub struct {
 	ingressZone     textinput.Model
 	haMode          bool
 	storageClass    textinput.Model
+	localPVNode     textinput.Model // aipub_harbor_local_pv_node, without HA
 	k8sNodeNames    []string
 	cpNodeChecks    []bool
 	cpNodeCursor    int
@@ -74,6 +75,7 @@ func NewS5Aipub() *S5Aipub {
 		enabled:         false,
 		ingressZone:     newInput("example.com"),
 		storageClass:    newInput("ontap-nas"),
+		localPVNode:     newInput("예: node1"),
 		harborSubdomain: newInput("aipub-harbor"),
 		harborReplicas:  newInput("3"),
 		harborRegistry:  newInput("512Gi"),
@@ -94,6 +96,7 @@ func (s *S5Aipub) SyncFromState(st *state.AppState) {
 	s.ingressZone.SetValue(st.AipubIngressZone)
 	s.haMode = st.AipubHaMode
 	s.storageClass.SetValue(st.AipubHaModeStorageClass)
+	s.localPVNode.SetValue(st.AipubHarborLocalPVNode)
 	s.k8sNodeNames = append([]string{}, st.K8sCpNodes...)
 	s.cpNodeChecks = make([]bool, len(s.k8sNodeNames))
 	for i, n := range s.k8sNodeNames {
@@ -123,6 +126,7 @@ func (s *S5Aipub) SyncToState(st *state.AppState) {
 	st.AipubIngressZone = s.ingressZone.Value()
 	st.AipubHaMode = s.haMode
 	st.AipubHaModeStorageClass = s.storageClass.Value()
+	st.AipubHarborLocalPVNode = strings.TrimSpace(s.localPVNode.Value())
 	st.AipubCpNodes = nil
 	for i, n := range s.k8sNodeNames {
 		if s.cpNodeChecks[i] {
@@ -148,6 +152,24 @@ func (s *S5Aipub) Validate() []string {
 	if s.haMode && s.storageClass.Value() == "" {
 		return []string{"AIPub HA 모드 활성화 시 StorageClass를 입력해주세요"}
 	}
+	checked := map[string]bool{}
+	for i, n := range s.k8sNodeNames {
+		if s.cpNodeChecks[i] {
+			checked[n] = true
+		}
+	}
+	if len(checked) == 0 {
+		return []string{"AIPub CP 노드를 1개 이상 선택해주세요 (Harbor와 AIPub 서비스가 그 노드에서 돕니다)"}
+	}
+	if !s.haMode {
+		node := strings.TrimSpace(s.localPVNode.Value())
+		if node == "" {
+			return []string{"HA가 아니면 Harbor 데이터를 둘 노드를 입력해주세요"}
+		}
+		if !checked[node] {
+			return []string{"Harbor 데이터 노드 '" + node + "'는 선택한 AIPub CP 노드가 아닙니다"}
+		}
+	}
 	if s.harborSubdomain.Value() == "" {
 		return []string{"Harbor 서브도메인을 입력해주세요"}
 	}
@@ -161,11 +183,15 @@ func (s *S5Aipub) Validate() []string {
 func (s *S5Aipub) Init() tea.Cmd { return nil }
 
 func (s *S5Aipub) inputs() []*textinput.Model {
+	storage := &s.storageClass
+	if !s.haMode {
+		storage = &s.localPVNode
+	}
 	return []*textinput.Model{
 		s5FocusEnabled:         nil,
 		s5FocusIngressZone:     &s.ingressZone,
 		s5FocusHaMode:          nil,
-		s5FocusStorageClass:    &s.storageClass,
+		s5FocusStorageClass:    storage,
 		s5FocusCpNodes:         nil,
 		s5FocusHarborSubdomain: &s.harborSubdomain,
 		s5FocusHarborReplicas:  &s.harborReplicas,
@@ -177,6 +203,8 @@ func (s *S5Aipub) inputs() []*textinput.Model {
 }
 
 func (s *S5Aipub) syncFocus() {
+	s.storageClass.Blur()
+	s.localPVNode.Blur()
 	for _, inp := range s.inputs() {
 		if inp != nil {
 			inp.Blur()
@@ -186,6 +214,11 @@ func (s *S5Aipub) syncFocus() {
 	if s.focusIdx < len(inps) && inps[s.focusIdx] != nil {
 		inps[s.focusIdx].Focus()
 	}
+}
+
+func (s *S5Aipub) inputFocused() bool {
+	inps := s.inputs()
+	return s.focusIdx < len(inps) && inps[s.focusIdx] != nil
 }
 
 func (s *S5Aipub) nextFocus() int {
@@ -205,6 +238,10 @@ func (s *S5Aipub) prevFocus() int {
 func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Letters typed into a text input are text: h/j/k/l move only elsewhere
+		if msg.Type == tea.KeyRunes && s.inputFocused() {
+			break
+		}
 		switch msg.String() {
 		case "up", "k":
 			if s.focusIdx == s5FocusCpNodes && s.cpNodeCursor > 0 {
@@ -250,6 +287,7 @@ func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.enabled = !s.enabled
 			case s5FocusHaMode:
 				s.haMode = !s.haMode
+				s.syncFocus()
 			case s5FocusCpNodes:
 				if s.cpNodeCursor < len(s.cpNodeChecks) {
 					s.cpNodeChecks[s.cpNodeCursor] = !s.cpNodeChecks[s.cpNodeCursor]
@@ -304,12 +342,14 @@ func (s *S5Aipub) View() string {
 	b.WriteString(RenderSectionHeader("AIPub HA 모드", f == s5FocusHaMode) +
 		"  " + haStr + "\n")
 
-	scView := s.storageClass.View()
-	if !s.haMode {
-		scView = styles.StyleMuted.Render("(HA 비활성)")
+	if s.haMode {
+		b.WriteString(RenderSectionHeader("StorageClass", f == s5FocusStorageClass) +
+			"  " + s.storageClass.View() + styles.StyleMuted.Render("  ReadWriteMany") + "\n\n")
+	} else {
+		b.WriteString(RenderSectionHeader("Harbor 데이터 노드", f == s5FocusStorageClass) +
+			"  " + s.localPVNode.View() + styles.StyleMuted.Render("  아래에서 선택한 CP 노드 중 하나") + "\n")
+		b.WriteString(styles.StyleMuted.Render("    HA가 아니면 Harbor 데이터가 이 노드의 디렉터리에 저장됩니다. 노드를 잃으면 데이터도 잃습니다") + "\n\n")
 	}
-	b.WriteString(RenderSectionHeader("StorageClass", f == s5FocusStorageClass) +
-		"  " + scView + "\n\n")
 
 	b.WriteString(RenderSectionHeader("AIPub CP 노드", f == s5FocusCpNodes) + "\n")
 	for i, n := range s.k8sNodeNames {

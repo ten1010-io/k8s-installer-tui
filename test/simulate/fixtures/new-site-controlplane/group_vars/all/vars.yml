@@ -1,0 +1,50 @@
+# new-site-non-ha with every preset of the control plane screen on and an entry
+# typed in for the controller manager, the way the tool reads a site back: the
+# presets are the lists holding all of their entries
+ki_cp_ha_mode: false
+k8s_apiserver_extra_args:
+  - name: audit-policy-file
+    value: /etc/kubernetes/audit-policy.yaml
+  - name: audit-log-path
+    value: /var/log/aipub/usage/audit.log
+  - name: audit-log-maxage
+    value: 30
+  - name: audit-log-maxbackup
+    value: 30
+  - name: audit-log-maxsize
+    value: 100
+  - name: runtime-config
+    value: admissionregistration.k8s.io/v1beta1=true
+  - name: authentication-token-webhook-config-file
+    value: /etc/kubernetes/webhook-token-auth.yaml
+  - name: authentication-token-webhook-cache-ttl
+    value: 2m
+k8s_apiserver_extra_volumes:
+  - name: audit-policy
+    hostPath: /etc/kubernetes/audit-policy.yaml
+    mountPath: /etc/kubernetes/audit-policy.yaml
+    readOnly: true
+    pathType: File
+  - name: audit-log
+    hostPath: /var/log/aipub/usage
+    mountPath: /var/log/aipub/usage
+    pathType: DirectoryOrCreate
+  - name: webhook-token-auth
+    hostPath: /etc/kubernetes/webhook-token-auth.yaml
+    mountPath: /etc/kubernetes/webhook-token-auth.yaml
+    readOnly: true
+    pathType: File
+  - name: k8s-installer-certs
+    hostPath: /etc/k8s-installer/certs
+    mountPath: /etc/k8s-installer/certs
+    readOnly: true
+k8s_controller_manager_extra_args:
+  - name: node-cidr-mask-size
+    value: 24
+k8s_cp_extra_files:
+  - src: aipub/audit-policy.yaml
+    dest: /etc/kubernetes/audit-policy.yaml
+    mode: "0644"
+  - src: aipub/webhook-token-auth.yaml
+    dest: /etc/kubernetes/webhook-token-auth.yaml
+    mode: "0644"

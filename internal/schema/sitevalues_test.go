@@ -30,6 +30,8 @@ func goldenState() *state.AppState {
 	s.AipubCpNodes = []string{"node1"}
 	s.K8sIngressVIP = "192.168.0.100"
 	s.HarborReplicaCount = 1
+	s.ControlPlane.Audit, s.ControlPlane.RuntimeConfig, s.ControlPlane.Webhook = true, true, true
+	s.ControlPlane.WebhookURL = "https://aipub.example.com/token-review"
 	return s
 }
 

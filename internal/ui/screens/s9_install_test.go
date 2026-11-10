@@ -1,6 +1,9 @@
 package screens
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,5 +30,34 @@ func TestS9PlanStopLeftWhenItFits(t *testing.T) {
 	s.SetSize(96, 200)
 	if s.focusIdx != s9FocusNav {
 		t.Errorf("focus %d once the plan fits, want the buttons", s.focusIdx)
+	}
+}
+
+// When ssh-copy-id gives the terminal back (tea.ExecProcess calls back with
+// sendDoneMsg), P2 runs again, whether it ended well or was interrupted.
+func TestS9RunsP2AfterTheTerminal(t *testing.T) {
+	for _, err := range []error{nil, errors.New("signal: interrupt")} {
+		st := state.DefaultState()
+		s := NewS9Install(st, fileio.DefaultPaths(t.TempDir()), plan.DefaultOptions())
+		s.SyncFromState(st)
+		var p2 int
+		s.SetRunner(func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+			if strings.Contains(args[len(args)-1], "'sudo -n true'") {
+				p2++
+				return []byte("node1 | CHANGED | rc=0 | (stdout) \n"), nil
+			}
+			return nil, nil
+		})
+		_, cmd := s.Update(sendDoneMsg{err: err})
+		if cmd == nil {
+			t.Fatal("P2 does not run again")
+		}
+		s.Update(cmd())
+		if r := s.checks["P2"]; p2 != 1 || !r.OK || s.checking {
+			t.Errorf("err %v: P2 ran %d times: %+v", err, p2, r)
+		}
+		if err != nil && !strings.Contains(s.message, "끝나지 않았습니다 (signal: interrupt)") {
+			t.Errorf("message %q", s.message)
+		}
 	}
 }

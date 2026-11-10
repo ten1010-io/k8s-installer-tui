@@ -121,7 +121,8 @@ func build(s *state.AppState, o Options) []Step {
 		{ID: "P1", Title: "setup.sh 완료", Kind: Check, Sees: "setup.sh 가 설치 디렉터리에 남긴 release 파일이 있는지",
 			Note: "번들을 풀고 " + o.Root + " 에 설치하는 단계. sudo가 필요해 직접 실행합니다"},
 		{ID: "P2", Title: "SSH·sudo 접속", Kind: Check, Sees: "모든 노드에 ansible_user 로 접속해 sudo -n true 가 통과하는지",
-			Note: "configure-control-node-ssh.sh 안내대로 키를 등록한 뒤, 모든 노드에 비밀번호 없이 접속·sudo"},
+			Note: "configure-control-node-ssh.sh 가 만든 키를 모든 노드에 등록한 뒤 (설치 화면 k·p, 또는 --send-ssh-key), 모든 노드에 비밀번호 없이 접속·sudo. " +
+				"키 상태만 보려면 --check-ssh"},
 	}
 	if o.Existing {
 		// read only, and only offered: a new site has no apiserver to look at

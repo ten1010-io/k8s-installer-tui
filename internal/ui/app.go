@@ -92,6 +92,10 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			// a screen that runs something stops it instead (sending the key)
+			if in, ok := a.screenList[a.current].(interface{ Interrupt() bool }); ok && in.Interrupt() {
+				return a, nil
+			}
 			return a, tea.Quit
 		// control keys, so no text input takes them as text: they work on every screen
 		case "pgup", "ctrl+p":

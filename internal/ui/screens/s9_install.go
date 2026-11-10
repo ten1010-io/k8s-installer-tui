@@ -35,8 +35,13 @@ const (
 )
 
 // checkDoneMsg carries the results of the checks that run ansible and take a
-// while: P2, and P3 on an existing site, by step id.
-type checkDoneMsg struct{ results map[string]plan.CheckResult }
+// while: P2, P6, and P3 on an existing site, by step id. shell is what P6 found
+// for plan.Options.ShellExecutable (empty: none needed); set only when P6 ran
+type checkDoneMsg struct {
+	results  map[string]plan.CheckResult
+	shell    string
+	shellSet bool
+}
 
 type S9Install struct {
 	appState *state.AppState
@@ -145,6 +150,7 @@ func (s *S9Install) runChecks() tea.Cmd {
 	}
 	s.checks["P2"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n true')"}}
 	s.checking = true
+	s.checks["P6"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n /bin/sh -c true')"}}
 	opts, run, st := s.opts, s.run, s.appState
 	if opts.Existing {
 		// read only: the apiserver manifest of the first control plane node
@@ -152,10 +158,14 @@ func (s *S9Install) runChecks() tea.Cmd {
 	}
 	return func() tea.Msg {
 		r := map[string]plan.CheckResult{"P2": plan.CheckSSH(context.Background(), opts, run)}
+		var shell string
+		r["P6"], shell = plan.CheckBecomeShell(context.Background(), opts, run)
 		if opts.Existing {
+			// after P6: the slurp is a become, too
+			opts.ShellExecutable = shell
 			r["P3"] = plan.CheckLegacy(context.Background(), opts, st, run)
 		}
-		return checkDoneMsg{r}
+		return checkDoneMsg{results: r, shell: shell, shellSet: true}
 	}
 }
 
@@ -175,6 +185,10 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.checks[id] = r
 		}
 		s.checking = false
+		if msg.shellSet {
+			s.opts.ShellExecutable = msg.shell
+			s.rebuild()
+		}
 		return s, nil
 
 	case tea.KeyMsg:
@@ -298,7 +312,7 @@ func (s *S9Install) View() string {
 			icon = "!"
 		case checked && res.OK:
 			icon = "✓"
-		case checked && !res.OK && !((st.ID == "P2" || st.ID == "P3") && s.checking):
+		case checked && !res.OK && !((st.ID == "P2" || st.ID == "P3" || st.ID == "P6") && s.checking):
 			icon = "✗"
 		}
 		line := fmt.Sprintf("  %s %-3s %-30s", icon, st.ID, st.Title)

@@ -225,9 +225,7 @@ func IssuerFrom(data []byte) (string, string) {
 // slurp reads a file of node, read only (ansible slurp, as root: the manifests
 // are root's). ansible -o prints one line: node | SUCCESS => {"content": ...}.
 func slurp(ctx context.Context, o Options, node, path string, run RunFunc) ([]byte, error) {
-	script := fmt.Sprintf("source %s && ansible %s -i inventory.yml -b -o -m slurp -a %s",
-		shellQuote(o.Root+"/venv/bin/activate"), shellQuote(node), shellQuote("src="+path))
-	out, err := run(ctx, o.AnsibleDir(), "bash", "-c", script)
+	_, out, err := adhoc(ctx, o, run, node, true, "slurp", "src="+path)
 	for _, l := range strings.Split(string(out), "\n") {
 		l = strings.TrimSpace(l)
 		if !strings.HasPrefix(l, node+" | ") {

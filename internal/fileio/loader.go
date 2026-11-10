@@ -194,6 +194,15 @@ type aipubYAML struct {
 	HarborPostgresqlSize string   `yaml:"aipub_harbor_postgresql_storage_size"`
 	HarborRedisSize      string   `yaml:"aipub_harbor_redis_storage_size"`
 	HarborTrivySize      string   `yaml:"aipub_harbor_trivy_storage_size"`
+
+	AppEdition        string `yaml:"aipub_app_edition"`
+	AppDeployTool     string `yaml:"aipub_app_deploy_tool"`
+	AppHelmfileBin    string `yaml:"aipub_app_helmfile_bin"`
+	MonDeployTool     string `yaml:"aipub_monitoring_deploy_tool"`
+	MonHelmfileBin    string `yaml:"aipub_monitoring_helmfile_bin"`
+	MonKustomizeBin   string `yaml:"aipub_monitoring_kustomize_bin"`
+	MonHelmBin        string `yaml:"aipub_monitoring_helm_bin"`
+	MonHelmfileDryRun *bool  `yaml:"aipub_monitoring_helmfile_dry_run"`
 }
 
 type varsYAML struct {
@@ -336,6 +345,17 @@ func applyAipub(a aipubYAML, s *state.AppState) {
 	setIf(&s.HarborPostgresqlStorageSize, a.HarborPostgresqlSize)
 	setIf(&s.HarborRedisStorageSize, a.HarborRedisSize)
 	setIf(&s.HarborTrivyStorageSize, a.HarborTrivySize)
+
+	setIf(&s.AipubAppEdition, a.AppEdition)
+	setIf(&s.AipubAppDeployTool, a.AppDeployTool)
+	setIf(&s.AipubAppHelmfileBin, a.AppHelmfileBin)
+	setIf(&s.AipubMonitoringDeployTool, a.MonDeployTool)
+	setIf(&s.AipubMonitoringHelmfileBin, a.MonHelmfileBin)
+	setIf(&s.AipubMonitoringKustomizeBin, a.MonKustomizeBin)
+	setIf(&s.AipubMonitoringHelmBin, a.MonHelmBin)
+	if a.MonHelmfileDryRun != nil {
+		s.AipubMonitoringHelmfileDryRun = *a.MonHelmfileDryRun
+	}
 }
 
 func setIf(dst *string, v string) {

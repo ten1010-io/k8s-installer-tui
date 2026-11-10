@@ -136,6 +136,10 @@ func (s *S9Install) prev(i int) int {
 
 func (s *S9Install) runChecks() tea.Cmd {
 	s.checks["P1"] = plan.CheckInstalled(s.opts)
+	if s.appState.AipubEnabled {
+		// local reads, nothing to wait for
+		s.checks["P4"] = plan.CheckAipubBin(s.opts, s.appState)
+	}
 	s.checks["P2"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n true')"}}
 	s.checking = true
 	opts, run, st := s.opts, s.run, s.appState
@@ -285,6 +289,10 @@ func (s *S9Install) View() string {
 		switch {
 		case st.Skip:
 			icon = "-"
+		case checked && res.Skipped:
+			icon = "-"
+		case checked && res.OK && res.Warn:
+			icon = "!"
 		case checked && res.OK:
 			icon = "✓"
 		case checked && !res.OK && !((st.ID == "P2" || st.ID == "P3") && s.checking):
@@ -296,6 +304,8 @@ func (s *S9Install) View() string {
 			b.WriteString(styles.StyleMuted.Render(line+"건너뜀: "+st.SkipWhy) + "\n")
 		case icon == "✗":
 			b.WriteString(styles.StyleError.Render(line) + "\n")
+		case icon == "!":
+			b.WriteString(styles.StyleWarning.Render(line) + "\n")
 		case icon == "✓":
 			b.WriteString(styles.StyleSuccess.Render(line) + "\n")
 		default:

@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
@@ -24,7 +25,15 @@ import (
 //   8  : harbor postgresql storage
 //   9  : harbor redis storage
 //   10 : harbor trivy storage
-//   11 : nav slot
+//   11 : 에디션 (enterprise | lite)
+//   12 : AIPub 배포 도구 (installer | helmfile)
+//   13 : helmfile 경로            (helmfile 일 때만)
+//   14 : 모니터링 배포 도구 (installer | helmfile)
+//   15 : 모니터링 helmfile 경로    (모니터링이 helmfile 일 때만)
+//   16 : 모니터링 kustomize 경로   (")
+//   17 : 모니터링 helm 경로        (")
+//   18 : helmfile dry-run          (")
+//   19 : nav slot
 
 const (
 	s5FocusEnabled = iota
@@ -38,6 +47,14 @@ const (
 	s5FocusHarborPg
 	s5FocusHarborRedis
 	s5FocusHarborTrivy
+	s5FocusEdition
+	s5FocusAppTool
+	s5FocusAppBin
+	s5FocusMonTool
+	s5FocusMonHelmfileBin
+	s5FocusMonKustomizeBin
+	s5FocusMonHelmBin
+	s5FocusMonDryRun
 	s5FocusNav
 	s5FocusMax = s5FocusNav
 )
@@ -57,6 +74,15 @@ type S5Aipub struct {
 	harborPg        textinput.Model
 	harborRedis     textinput.Model
 	harborTrivy     textinput.Model
+
+	edition         string
+	appTool         string
+	appBin          textinput.Model
+	monTool         string
+	monHelmfileBin  textinput.Model
+	monKustomizeBin textinput.Model
+	monHelmBin      textinput.Model
+	monDryRun       bool
 
 	focusIdx int
 	navIdx   int
@@ -82,6 +108,11 @@ func NewS5Aipub() *S5Aipub {
 		harborPg:        newInput("128Gi"),
 		harborRedis:     newInput("32Gi"),
 		harborTrivy:     newInput("5Gi"),
+
+		appBin:          newInput("기본: 패키지가 두는 helmfile"),
+		monHelmfileBin:  newInput("기본: AIPub 의 helmfile 과 같음"),
+		monKustomizeBin: newInput("기본: helmfile 옆의 kustomize"),
+		monHelmBin:      newInput("helm"),
 	}
 }
 
@@ -112,6 +143,14 @@ func (s *S5Aipub) SyncFromState(st *state.AppState) {
 	s.harborPg.SetValue(st.HarborPostgresqlStorageSize)
 	s.harborRedis.SetValue(st.HarborRedisStorageSize)
 	s.harborTrivy.SetValue(st.HarborTrivyStorageSize)
+	s.edition = st.AipubAppEdition
+	s.appTool = st.AipubAppDeployTool
+	s.appBin.SetValue(st.AipubAppHelmfileBin)
+	s.monTool = st.AipubMonitoringDeployTool
+	s.monHelmfileBin.SetValue(st.AipubMonitoringHelmfileBin)
+	s.monKustomizeBin.SetValue(st.AipubMonitoringKustomizeBin)
+	s.monHelmBin.SetValue(st.AipubMonitoringHelmBin)
+	s.monDryRun = st.AipubMonitoringHelmfileDryRun
 	s.focusIdx = 0
 	s.navIdx = 0
 	s.cpNodeCursor = 0
@@ -140,6 +179,14 @@ func (s *S5Aipub) SyncToState(st *state.AppState) {
 	st.HarborPostgresqlStorageSize = s.harborPg.Value()
 	st.HarborRedisStorageSize = s.harborRedis.Value()
 	st.HarborTrivyStorageSize = s.harborTrivy.Value()
+	st.AipubAppEdition = s.edition
+	st.AipubAppDeployTool = s.appTool
+	st.AipubAppHelmfileBin = strings.TrimSpace(s.appBin.Value())
+	st.AipubMonitoringDeployTool = s.monTool
+	st.AipubMonitoringHelmfileBin = strings.TrimSpace(s.monHelmfileBin.Value())
+	st.AipubMonitoringKustomizeBin = strings.TrimSpace(s.monKustomizeBin.Value())
+	st.AipubMonitoringHelmBin = strings.TrimSpace(s.monHelmBin.Value())
+	st.AipubMonitoringHelmfileDryRun = s.monDryRun
 }
 
 func (s *S5Aipub) Validate() []string {
@@ -199,6 +246,14 @@ func (s *S5Aipub) inputs() []*textinput.Model {
 		s5FocusHarborPg:        &s.harborPg,
 		s5FocusHarborRedis:     &s.harborRedis,
 		s5FocusHarborTrivy:     &s.harborTrivy,
+		s5FocusEdition:         nil,
+		s5FocusAppTool:         nil,
+		s5FocusAppBin:          &s.appBin,
+		s5FocusMonTool:         nil,
+		s5FocusMonHelmfileBin:  &s.monHelmfileBin,
+		s5FocusMonKustomizeBin: &s.monKustomizeBin,
+		s5FocusMonHelmBin:      &s.monHelmBin,
+		s5FocusMonDryRun:       nil,
 	}
 }
 
@@ -221,18 +276,35 @@ func (s *S5Aipub) inputFocused() bool {
 	return s.focusIdx < len(inps) && inps[s.focusIdx] != nil
 }
 
-func (s *S5Aipub) nextFocus() int {
-	if !s.enabled && s.focusIdx == s5FocusEnabled {
-		return s5FocusNav
+// shown reports whether a row is on the screen: without AIPub only the toggle,
+// and the paths of a deploy tool's binaries only while that tool is helmfile.
+func (s *S5Aipub) shown(idx int) bool {
+	if !s.enabled {
+		return idx == s5FocusEnabled || idx == s5FocusNav
 	}
-	return s.focusIdx + 1
+	switch idx {
+	case s5FocusAppBin:
+		return s.appTool == helmfileTool
+	case s5FocusMonHelmfileBin, s5FocusMonKustomizeBin, s5FocusMonHelmBin, s5FocusMonDryRun:
+		return s.monTool == helmfileTool
+	}
+	return true
+}
+
+func (s *S5Aipub) nextFocus() int {
+	i := s.focusIdx + 1
+	for i < s5FocusMax && !s.shown(i) {
+		i++
+	}
+	return i
 }
 
 func (s *S5Aipub) prevFocus() int {
-	if !s.enabled && s.focusIdx == s5FocusNav {
-		return s5FocusEnabled
+	i := s.focusIdx - 1
+	for i > 0 && !s.shown(i) {
+		i--
 	}
-	return s.focusIdx - 1
+	return i
 }
 
 func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -292,6 +364,14 @@ func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if s.cpNodeCursor < len(s.cpNodeChecks) {
 					s.cpNodeChecks[s.cpNodeCursor] = !s.cpNodeChecks[s.cpNodeCursor]
 				}
+			case s5FocusEdition:
+				s.edition = nextChoice("aipub_app_edition", s.edition)
+			case s5FocusAppTool:
+				s.appTool = nextChoice("aipub_app_deploy_tool", s.appTool)
+			case s5FocusMonTool:
+				s.monTool = nextChoice("aipub_monitoring_deploy_tool", s.monTool)
+			case s5FocusMonDryRun:
+				s.monDryRun = !s.monDryRun
 			}
 		case "ctrl+n":
 			return s, Next()
@@ -374,9 +454,65 @@ func (s *S5Aipub) View() string {
 	b.WriteString(RenderSectionHeader("Redis 스토리지", f == s5FocusHarborRedis) + "  " + s.harborRedis.View() + "\n")
 	b.WriteString(RenderSectionHeader("Trivy 스토리지", f == s5FocusHarborTrivy) + "  " + s.harborTrivy.View() + "\n")
 
+	b.WriteString("\n" + styles.StylePrimary.Render("에디션과 배포 도구") + "\n")
+	b.WriteString(RenderSectionHeader("에디션", f == s5FocusEdition) + "  " +
+		choiceView("aipub_app_edition", s.edition) + styles.StyleMuted.Render("  lite 는 aipub-nav 를 뺍니다") + "\n")
+	b.WriteString(RenderSectionHeader("AIPub 배포 도구", f == s5FocusAppTool) + "  " +
+		choiceView("aipub_app_deploy_tool", s.appTool) + "\n")
+	if s.appTool == helmfileTool {
+		b.WriteString(RenderSectionHeader("  helmfile 경로", f == s5FocusAppBin) + "  " + s.appBin.View() + "\n")
+	}
+	b.WriteString(RenderSectionHeader("모니터링 배포 도구", f == s5FocusMonTool) + "  " +
+		choiceView("aipub_monitoring_deploy_tool", s.monTool) + "\n")
+	if s.monTool == helmfileTool {
+		b.WriteString(RenderSectionHeader("  helmfile 경로", f == s5FocusMonHelmfileBin) + "  " + s.monHelmfileBin.View() + "\n")
+		b.WriteString(RenderSectionHeader("  kustomize 경로", f == s5FocusMonKustomizeBin) + "  " + s.monKustomizeBin.View() + "\n")
+		b.WriteString(RenderSectionHeader("  helm 경로", f == s5FocusMonHelmBin) + "  " + s.monHelmBin.View() + "\n")
+		dry := styles.RadioOff() + " 실제 배포"
+		if s.monDryRun {
+			dry = styles.RadioOn() + " dry-run (클러스터에 쓰지 않음)"
+		}
+		b.WriteString(RenderSectionHeader("  helmfile dry-run", f == s5FocusMonDryRun) + "  " + dry + "\n")
+	}
+	if s.appTool == helmfileTool || s.monTool == helmfileTool {
+		b.WriteString(styles.StyleMuted.Render("    helmfile 은 패키지가 aipub-bin 을 실었을 때 설치기가 깔아 줍니다. 비워 두면 그 경로를 씁니다") + "\n")
+	}
+
 	prevFocused := f == s5FocusNav && s.navIdx == 0
 	nextFocused := f == s5FocusNav && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
 	return b.String()
+}
+
+// helmfileTool is the value of a deploy tool that asks for the helmfile binaries.
+const helmfileTool = "helmfile"
+
+// nextChoice is the value after cur among the values the schema allows for key,
+// the first one for a value it does not know.
+func nextChoice(key, cur string) string {
+	v, ok := schema.Get(key)
+	if !ok || len(v.Enum) == 0 {
+		return cur
+	}
+	for i, e := range v.Enum {
+		if e == cur {
+			return v.Enum[(i+1)%len(v.Enum)]
+		}
+	}
+	return v.Enum[0]
+}
+
+// choiceView shows the values the schema allows for key, the chosen one marked.
+func choiceView(key, cur string) string {
+	v, _ := schema.Get(key)
+	parts := make([]string, len(v.Enum))
+	for i, e := range v.Enum {
+		if e == cur {
+			parts[i] = styles.RadioOn() + " " + e
+		} else {
+			parts[i] = styles.RadioOff() + " " + e
+		}
+	}
+	return strings.Join(parts, "   ")
 }

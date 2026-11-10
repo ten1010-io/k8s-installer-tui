@@ -13,8 +13,12 @@ import (
 
 // CheckResult is what a check found: OK, and one line per thing it looked at.
 type CheckResult struct {
-	OK    bool
-	Lines []string
+	OK bool
+	// Warn: OK, but worth a look; the lines say what. Skipped: not run, the
+	// first line says why
+	Warn    bool
+	Skipped bool
+	Lines   []string
 }
 
 // RunFunc runs a command in dir and returns its combined output. Tests replace it.

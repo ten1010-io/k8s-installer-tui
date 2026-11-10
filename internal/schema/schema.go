@@ -98,6 +98,11 @@ type Var struct {
 	// Empty for the variables of aipub, which k8s-installer does not classify
 	VarClass string
 	Screen   string // the wizard step it is edited on, when one edits it
+	// Optional marks a variable of aipub the wizard writes only while the state
+	// differs from Default (an empty text counts as the default for a TypeString),
+	// and takes out of the file once it is back at it, so that a file keeps what
+	// the installer defaults to. Value says "not managed" for it at the default
+	Optional bool
 }
 
 // Groups are the sections of the site-values view, in the order shown.

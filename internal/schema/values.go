@@ -56,9 +56,25 @@ func Value(s *state.AppState, v Var) (any, bool) {
 	case FileK8s:
 		return k8sValue(s, v.Key)
 	case FileAipub:
-		return aipubValue(s, v.Key)
+		val, ok := aipubValue(s, v.Key)
+		if ok && v.Optional && atDefault(v, val) {
+			return nil, false
+		}
+		return val, ok
 	}
 	return nil, false
+}
+
+// atDefault reports whether the value of an Optional variable is its default,
+// which the writer leaves out of the file.
+func atDefault(v Var, val any) bool {
+	if str, ok := val.(string); ok && v.Type == TypeString && str == "" {
+		return true
+	}
+	if v.Default == "" && Missing(val) {
+		return true
+	}
+	return reflect.DeepEqual(Normalize(v, val), Normalize(v, v.DefaultValue()))
 }
 
 func inventoryValue(s *state.AppState, key string) (any, bool) {
@@ -192,6 +208,24 @@ func aipubValue(s *state.AppState, key string) (any, bool) {
 		return s.HarborRedisStorageSize, true
 	case "aipub_harbor_trivy_storage_size":
 		return s.HarborTrivyStorageSize, true
+
+	// Optional: Value leaves them out at their default
+	case "aipub_app_edition":
+		return s.AipubAppEdition, true
+	case "aipub_app_deploy_tool":
+		return s.AipubAppDeployTool, true
+	case "aipub_app_helmfile_bin":
+		return s.AipubAppHelmfileBin, true
+	case "aipub_monitoring_deploy_tool":
+		return s.AipubMonitoringDeployTool, true
+	case "aipub_monitoring_helmfile_bin":
+		return s.AipubMonitoringHelmfileBin, true
+	case "aipub_monitoring_kustomize_bin":
+		return s.AipubMonitoringKustomizeBin, true
+	case "aipub_monitoring_helm_bin":
+		return s.AipubMonitoringHelmBin, true
+	case "aipub_monitoring_helmfile_dry_run":
+		return s.AipubMonitoringHelmfileDryRun, true
 	}
 	return nil, false
 }

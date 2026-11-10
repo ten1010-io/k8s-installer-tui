@@ -107,6 +107,12 @@ func Build(s *state.AppState, o Options) []Step {
 			Note: "첫 k8s 컨트롤 플레인 노드의 " + APIServerManifest + " 를 읽기만 함 (slurp). 손으로 넣은 감사 로그·runtime-config·" +
 				"인증 플래그가 켜진 프리셋과 맞는지. 감지된 것을 끄고 update-cluster 하면 그 기능이 사라짐"})
 	}
+	if HelmfileChosen(s) {
+		// only offered when it matters, like P3
+		steps = append(steps, Step{ID: "P4", Title: "aipub-bin", Kind: Check,
+			Note: "배포 도구가 helmfile: 패키지가 helmfile·kustomize 를 실었는지 (" + PackageFile + " 의 aipub_bin). " +
+				"없으면 사이트가 노드에 직접 두고 경로를 변수로 지정해야 함"})
+	}
 	steps = append(steps,
 		Step{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",
 			Note: "모든 노드에 설치본 배포"},

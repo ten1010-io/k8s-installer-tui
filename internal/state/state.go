@@ -68,6 +68,17 @@ type AppState struct {
 	HarborRedisStorageSize      string
 	HarborTrivyStorageSize      string
 
+	// S5: edition and deploy tools (files/aipub/vars.yml), written only when they
+	// differ from the default of aipub-installer (schema.Var.Optional)
+	AipubAppEdition               string // aipub_app_edition: enterprise | lite
+	AipubAppDeployTool            string // aipub_app_deploy_tool: installer | helmfile
+	AipubMonitoringDeployTool     string // aipub_monitoring_deploy_tool: installer | helmfile
+	AipubAppHelmfileBin           string // empty: the helmfile of the package
+	AipubMonitoringHelmfileBin    string // empty: the same as aipub_app_helmfile_bin
+	AipubMonitoringKustomizeBin   string // empty: kustomize beside the helmfile
+	AipubMonitoringHelmBin        string // empty or helm: the helm of k8s-installer
+	AipubMonitoringHelmfileDryRun bool
+
 	// S6: Certificate mode (files/aipub/vars.yml → aipub_cert_mode)
 	AipubCertMode string
 }
@@ -98,6 +109,11 @@ func DefaultState() *AppState {
 		HarborRedisStorageSize:       "32Gi",
 		HarborTrivyStorageSize:       "5Gi",
 		AipubCertMode:                "self_signed",
+
+		AipubAppEdition:           "enterprise",
+		AipubAppDeployTool:        "installer",
+		AipubMonitoringDeployTool: "installer",
+		AipubMonitoringHelmBin:    "helm",
 		// The authentication of AIPub on a new site (aipub-installer k8s-jwks:
 		// "A new install has no webhook")
 		ControlPlane: ControlPlane{JWKS: true},

@@ -42,6 +42,7 @@ func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version st
 	s6 := screens.NewS6AipubLB()
 	s7 := screens.NewS6CertMode()
 	s8 := screens.NewS7Preview(s, paths, opts.AnsibleDir()+"/files")
+	s8.SetInstaller(opts)
 	s9 := screens.NewS9Install(s, paths, opts)
 	s1.SyncFromState(s)
 	return &App{

@@ -453,3 +453,36 @@ func TestWizardControlPlane(t *testing.T) {
 		t.Errorf("JWKS written without AIPub: %v", args)
 	}
 }
+
+// helmfile as a deploy tool, on a package without the binaries: the preview says
+// the site has to lay them, and does not block the save.
+func TestPreviewWarnsHelmfileWithoutAipubBin(t *testing.T) {
+	d, paths := newDriver(t)
+	s := d.app.appState
+	s.AipubEnabled = true
+	s.AipubHaModeStorageClass = "nfs-client"
+	s.AipubCpNodes = []string{"node1"}
+	s.K8sIngressVIP = "192.168.0.100"
+	s.AipubAppDeployTool = "helmfile"
+
+	opts := plan.DefaultOptions()
+	opts.Root = t.TempDir() // no aipub-package.json
+	p := screens.NewS7Preview(s, paths, opts.AnsibleDir()+"/files")
+	p.SetInstaller(opts)
+	p.SetSize(100, 60)
+	p.SyncFromState(s)
+	view := ansi.ReplaceAllString(p.View(), "")
+	for _, want := range []string{"helmfile 로 배포하는데", "aipub_app_helmfile_bin", "검증 통과"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the preview lacks %q:\n%s", want, view)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(opts.Root, plan.PackageFile), []byte(`{"aipub_bin": ["helmfile", "kustomize"]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	p.SyncFromState(s)
+	if view := ansi.ReplaceAllString(p.View(), ""); strings.Contains(view, "helmfile 로 배포하는데") {
+		t.Errorf("warned although the package has aipub-bin:\n%s", view)
+	}
+}

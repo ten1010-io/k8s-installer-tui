@@ -171,6 +171,8 @@ aipub_harbor_local_pv_node: "node1"   # ✅ (aipub_ha_mode=false 일 때 필수)
 # aipub_app_helmfile_bin: null        # ○ 다른 helmfile 을 쓸 때만 (기본 패키지의 것)
 # aipub_monitoring_deploy_tool: "installer" # ○ 모니터링 배포 도구
 # aipub_monitoring_helm_bin: "helm"   # ○ 모니터링이 쓰는 helm
+# aipub_monitoring_helmfile_bin: null # ○ 모니터링이 쓰는 helmfile (기본 aipub_app_helmfile_bin 과 같음)
+# aipub_monitoring_kustomize_bin: null # ○ 모니터링이 쓰는 kustomize (기본 helmfile 옆의 kustomize)
 # aipub_monitoring_helmfile_dry_run: false # ○ helmfile 을 dry-run 으로만
 
 ### 모니터링 ────────────────────────────────

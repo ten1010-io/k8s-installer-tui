@@ -302,3 +302,27 @@ func TestValidateControlPlane(t *testing.T) {
 		t.Errorf("jwks without an issuer: %s", got)
 	}
 }
+
+// The deploy tools and the edition are enums of the schema.
+func TestValidateDeployChoices(t *testing.T) {
+	s := valid()
+	s.AipubAppEdition = "lite"
+	s.AipubAppDeployTool = "helmfile"
+	s.AipubMonitoringDeployTool = "helmfile"
+	if errs := Validate(s); len(errs) != 0 {
+		t.Fatalf("valid choices refused: %v", errs)
+	}
+	s.AipubAppEdition = "pro"
+	s.AipubAppDeployTool = "kustomize"
+	s.AipubMonitoringDeployTool = "Helmfile"
+	if got, want := fields(Validate(s)), "aipub_app_deploy_tool aipub_app_edition aipub_monitoring_deploy_tool"; got != want {
+		t.Errorf("fields = %q, want %q", got, want)
+	}
+	// without AIPub the file is not written, so nothing is checked
+	s.AipubEnabled = false
+	for _, e := range Validate(s) {
+		if strings.HasPrefix(e.Field, "aipub_") && e.Field != "aipub_cp_nodes" {
+			t.Errorf("aipub variable checked without AIPub: %v", e)
+		}
+	}
+}

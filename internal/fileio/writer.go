@@ -415,7 +415,42 @@ func renderAipubVars(existing []byte, s *state.AppState) ([]byte, error) {
 	setKey(top, "aipub_harbor_redis_storage_size", quoted(s.HarborRedisStorageSize))
 	setKey(top, "aipub_harbor_trivy_storage_size", quoted(s.HarborTrivyStorageSize))
 
+	setOptionalAipub(top, s)
+
 	return encodeDoc(top)
+}
+
+// setOptionalAipub writes the variables the schema marks Optional only while the
+// state differs from their default: the installer defaults to the rest, and a
+// file that does not repeat it follows a new default of the installer. A key
+// that holds the default already is left as the site wrote it; one that holds
+// something else is taken out when the state is back at the default.
+func setOptionalAipub(top *yaml.Node, s *state.AppState) {
+	for _, v := range schema.ByFile(schema.FileAipub) {
+		if !v.Optional {
+			continue
+		}
+		if val, managed := schema.Value(s, v); managed {
+			setKey(top, v.Key, optionalNode(val))
+			continue
+		}
+		if cur := getKey(top, v.Key); cur != nil && (cur.Kind != yaml.ScalarNode || cur.Value != v.Default) {
+			deleteKey(top, v.Key)
+		}
+	}
+}
+
+// optionalNode is the node of a value of an Optional variable.
+func optionalNode(val any) *yaml.Node {
+	switch x := val.(type) {
+	case bool:
+		return boolNode(x)
+	case int:
+		return intNode(x)
+	case []string:
+		return quotedSeq(x)
+	}
+	return quoted(fmt.Sprint(val))
 }
 
 func lbEntry(name, vip string, nodes []string) *yaml.Node {

@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
@@ -40,6 +41,8 @@ type S7Preview struct {
 	loaded    *schema.Loaded      // what the site's files held when the wizard started; nil for a new site
 	missing   []state.CpExtraFile // files of k8s_cp_extra_files not under ansible/files
 	caNote    []string            // the authentication config of JWKS waiting for its CA
+	binNote   []string            // helmfile chosen and the package carries no helmfile/kustomize
+	installer plan.Options        // where the installer is, for what the preview reads of the package
 	// installerFiles is ansible/files of the installer (setup.sh), where
 	// k8s_cp_extra_files are read from when the settings are saved elsewhere
 	installerFiles string
@@ -68,6 +71,10 @@ func NewS7Preview(s *state.AppState, paths fileio.Paths, installerFiles string) 
 	}
 }
 
+// SetInstaller tells the preview where the installer is (its package record is
+// read for the warnings about it).
+func (s *S7Preview) SetInstaller(o plan.Options) { s.installer = o }
+
 func (s *S7Preview) Title() string { return "미리보기 & 저장" }
 func (s *S7Preview) SetSize(w, h int) {
 	s.width = w
@@ -86,6 +93,11 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.missing = fileio.MissingCpFiles(st, s.paths.FilesDir(), s.installerFiles)
 	s.saved = false
 	s.saveErr = ""
+
+	s.binNote = nil
+	if r := plan.CheckAipubBin(s.installer, st); r.Warn {
+		s.binNote = r.Lines
+	}
 
 	s.tabs = nil
 	r, err := fileio.Render(s.paths, st)
@@ -301,6 +313,9 @@ func (s *S7Preview) View() string {
 	}
 
 	for _, n := range s.caNote {
+		b.WriteString(styles.StyleWarning.Render("⚠ "+n) + "\n")
+	}
+	for _, n := range s.binNote {
 		b.WriteString(styles.StyleWarning.Render("⚠ "+n) + "\n")
 	}
 

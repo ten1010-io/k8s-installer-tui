@@ -70,6 +70,9 @@ func (s *S9Install) loadPrev() {
 	s.last = prev
 	if prev != nil && prev.Outcome != plan.OutcomeOK {
 		s.opts.Existing, s.opts.AipubInstalled = prev.Existing, prev.AipubInstalled
+		// and what the operator chose for it: 이어서 실행 runs that plan
+		s.opts.Monitoring, s.opts.ArchivePath = prev.Monitoring, prev.ArchivePath
+		s.archive.SetValue(prev.ArchivePath)
 	}
 }
 
@@ -173,8 +176,28 @@ func (s *S9Install) answer(yes bool) tea.Cmd {
 }
 
 // startRun runs the stages of the plan as it is shown, with resume from the
-// last run.
+// last run, whose 모니터링 and 아카이브 경로 a resume keeps (said when they were
+// changed on the screen since).
 func (s *S9Install) startRun(resume bool) tea.Cmd {
+	var kept []string
+	if resume && s.last != nil {
+		if s.opts.Monitoring != s.last.Monitoring {
+			mon := "설치 안 함"
+			if s.last.Monitoring {
+				mon = "설치"
+			}
+			kept = append(kept, "모니터링 "+mon)
+		}
+		if strings.TrimSpace(s.archive.Value()) != s.last.ArchivePath {
+			archive := s.last.ArchivePath
+			if archive == "" {
+				archive = "없음"
+			}
+			kept = append(kept, "아카이브 경로 "+archive)
+		}
+		s.opts.Monitoring = s.last.Monitoring
+		s.archive.SetValue(s.last.ArchivePath)
+	}
 	s.rebuild()
 	stages := plan.Stages(s.steps, s.opts, s.savedIn())
 	r := plan.NewRunner(s.opts, s.appState, stages, s.inputs())
@@ -189,6 +212,9 @@ func (s *S9Install) startRun(resume bool) tea.Cmd {
 		}
 	}
 	s.ex, s.message, s.showLog = ex, "", false
+	if len(kept) > 0 {
+		s.message = "이어서 실행은 지난 실행의 설정으로 합니다: " + strings.Join(kept, ", ") + " (바꾸려면 f 처음부터)"
+	}
 	done := make(chan runDoneMsg, 1)
 	go func() {
 		defer close(ex.ended)

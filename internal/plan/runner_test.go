@@ -45,8 +45,16 @@ func TestStages(t *testing.T) {
 	if got := StageIDs(stages); !strings.HasPrefix(got, "C1 | K1 |") {
 		t.Errorf("saved elsewhere: %s", got)
 	}
-	if !strings.Contains(Command(stages[0][0]), "sudo cp /home/ops/site/inventory.yml") {
+	// no terminal to ask a password on: sudo -n, in the runner only
+	if !strings.Contains(Command(stages[0][0]), "sudo -n cp /home/ops/site/inventory.yml") ||
+		!strings.Contains(Command(stages[0][0]), "&& sudo -n install -D") {
 		t.Errorf("copy step: %s", Command(stages[0][0]))
+	}
+	if a51 := stages[len(stages)-2][0]; a51.ID != "A5.1" || !strings.HasPrefix(Command(a51), "sudo -n ") {
+		t.Errorf("A5.1: %s", Command(a51))
+	}
+	if script := Script(Build(aipubState(), o), o, "/home/ops/site"); strings.Contains(script, "sudo -n cp") {
+		t.Errorf("the script asks no password:\n%s", script)
 	}
 	// no check runs in the stages
 	for _, stage := range stages {
@@ -126,6 +134,7 @@ type fakeSite struct {
 	started map[string]chan struct{}
 	classes map[string]bool // the StorageClasses there
 	checks  int
+	sudo    bool // sudo -n true fails: sudo wants a password
 	steps   map[string]Step
 	running int
 	overlap bool
@@ -187,6 +196,12 @@ func (f *fakeSite) cmd(ctx context.Context, dir, name string, args ...string) ([
 	script := args[len(args)-1]
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if name == "sudo" {
+		if f.sudo {
+			return []byte("sudo: a password is required\n"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
 	f.checks++
 	for c := range f.steps["M1"].classesSet() {
 		if strings.Contains(script, "get storageclass "+c+" ") {
@@ -383,6 +398,27 @@ func TestRunnerResumeCopiesTheSiteAgain(t *testing.T) {
 	}
 	if got := f2.ranIDs(); got != "C1 A3 A4 A5 A5.1 A5.2" {
 		t.Errorf("resume ran %s, want the copy first", got)
+	}
+}
+
+// A shell step that runs sudo here (C1, A5.1) has no terminal for a password:
+// the run does not start when sudo would ask one.
+func TestRunnerNeedsSudoWithoutAPassword(t *testing.T) {
+	r, f, _ := newTestRunner(t, aipubStages()) // A5.1
+	f.sudo = true
+	_, err := r.Run(context.Background(), false)
+	if err == nil || !strings.Contains(err.Error(), "A5.1 는 이 제어 노드에서 sudo 로 실행하는데") ||
+		!strings.Contains(err.Error(), "a password is required") || f.ranIDs() != "" {
+		t.Errorf("err %v, ran %q", err, f.ranIDs())
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, stateFile)); err == nil {
+		t.Error("state.json written by a run that did not start")
+	}
+	// none of them to run: not asked
+	r, f, _ = newTestRunner(t, [][]Step{{{ID: "X1", Kind: Shell, Shell: []string{"echo x1"}}}})
+	f.sudo = true
+	if o, err := r.Run(context.Background(), false); o != OutcomeOK || err != nil {
+		t.Errorf("%s %v", o, err)
 	}
 }
 

@@ -76,6 +76,10 @@ type StepState struct {
 	ExitCode *int       `json:"exit_code,omitempty"`
 	Log      string     `json:"log,omitempty"`
 	Note     string     `json:"note,omitempty"`
+	// PGID is the process group of the command while it runs (its session
+	// leads it): a program killed outright leaves it behind as running, and
+	// the next run refuses to start while that group is alive
+	PGID int `json:"pgid,omitempty"`
 }
 
 // Elapsed is how long the step ran, or runs so far.
@@ -104,12 +108,16 @@ type RunState struct {
 	// Existing and AipubInstalled are Options of the plan: what was there when
 	// the installation started. A resume plans with them, not with what the
 	// files say now (the run itself saved them)
-	Existing       bool        `json:"existing"`
-	AipubInstalled bool        `json:"aipub_installed"`
-	Started        time.Time   `json:"started"`
-	Updated        time.Time   `json:"updated"`
-	Outcome        Outcome     `json:"outcome,omitempty"` // empty while it runs, or when the program died
-	Steps          []StepState `json:"steps"`
+	Existing       bool `json:"existing"`
+	AipubInstalled bool `json:"aipub_installed"`
+	// Monitoring and ArchivePath are what the operator chose for the run; a
+	// resume keeps them too, so that it runs the plan it went on from
+	Monitoring  bool        `json:"monitoring"`
+	ArchivePath string      `json:"archive_path,omitempty"`
+	Started     time.Time   `json:"started"`
+	Updated     time.Time   `json:"updated"`
+	Outcome     Outcome     `json:"outcome,omitempty"` // empty while it runs, or when the program died
+	Steps       []StepState `json:"steps"`
 }
 
 // Step is the state of step id, nil when the run has none.
@@ -191,14 +199,23 @@ type StreamFunc func(ctx context.Context, dir string, out io.Writer, name string
 // killGrace is how long a cancelled step has after SIGINT before SIGKILL.
 var killGrace = 10 * time.Second
 
-// ExecStream is StreamFunc of the machine: the command leads a process group of
-// its own, and a cancel sends SIGINT to the whole group (ansible-playbook and
+type startedKey struct{}
+
+// withStarted has ExecStream tell started the pid of the command once it runs:
+// the leader of its session, so its process group too.
+func withStarted(ctx context.Context, started func(pid int)) context.Context {
+	return context.WithValue(ctx, startedKey{}, started)
+}
+
+// ExecStream is StreamFunc of the machine: the command leads a session of its
+// own, with no terminal (a sudo that would ask a password fails, not waits),
+// and a cancel sends SIGINT to its whole process group (ansible-playbook and
 // its ssh), then SIGKILL after killGrace.
 func ExecStream(ctx context.Context, dir string, out io.Writer, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = out, out
-	setGroup(cmd)
+	setSession(cmd)
 	var mu sync.Mutex
 	var kill *time.Timer
 	cmd.Cancel = func() error {
@@ -211,7 +228,13 @@ func ExecStream(ctx context.Context, dir string, out io.Writer, name string, arg
 	if env := EnvOf(ctx); len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		if started, ok := ctx.Value(startedKey{}).(func(int)); ok {
+			started(cmd.Process.Pid)
+		}
+		err = cmd.Wait()
+	}
 	mu.Lock()
 	if kill != nil {
 		kill.Stop()
@@ -345,14 +368,24 @@ func (r *Runner) Run(ctx context.Context, resume bool) (Outcome, error) {
 	}
 	defer lock.Close()
 
-	var prev *RunState
-	if resume {
-		if prev, err = LoadRunState(r.Dir); err != nil {
-			return "", err
-		}
+	prev, err := LoadRunState(r.Dir)
+	if err != nil && resume {
+		return "", err
+	}
+	// the lock went with a program killed outright, its step did not
+	if err := leftRunning(prev); err != nil {
+		return "", err
+	}
+	if !resume {
+		prev = nil
 	}
 	r.mu.Lock()
 	r.init(prev)
+	r.mu.Unlock()
+	if err := r.sudoReady(ctx); err != nil {
+		return "", err
+	}
+	r.mu.Lock()
 	err = r.save()
 	r.mu.Unlock()
 	if err != nil {
@@ -367,10 +400,61 @@ func (r *Runner) Run(ctx context.Context, resume bool) (Outcome, error) {
 	return outcome, nil
 }
 
+// StillRunningError: a step of the last run still runs, left by a program that
+// was killed outright (SIGKILL, out of memory) with the step in a session of
+// its own. Running it again beside itself would overwrite its files.
+type StillRunningError struct {
+	Step string
+	PGID int
+}
+
+func (e *StillRunningError) Error() string {
+	return fmt.Sprintf("지난 실행의 %s 가 아직 실행 중입니다 (프로세스 그룹 %d, pid %d). 끝나기를 기다리거나 kill -INT -- -%d 로 멈춘 뒤 다시 실행하세요",
+		e.Step, e.PGID, e.PGID, e.PGID)
+}
+
+// leftRunning is a StillRunningError for a step of prev recorded as running
+// whose process group is still alive.
+func leftRunning(prev *RunState) error {
+	if prev == nil {
+		return nil
+	}
+	for _, s := range prev.Steps {
+		if s.Status == StatusRunning && s.PGID > 0 && groupAlive(s.PGID) {
+			return &StillRunningError{Step: s.ID, PGID: s.PGID}
+		}
+	}
+	return nil
+}
+
+// sudoReady: the shell steps that run sudo on this control node (C1, A5.1) run
+// it as sudo -n in a session with no terminal, so a sudo that wants a password
+// fails there. It is found before the first step: sudo -n true here.
+func (r *Runner) sudoReady(ctx context.Context) error {
+	var ids []string
+	for _, stage := range r.Stages {
+		for _, st := range stage {
+			if usesSudo(st) && r.st.Step(st.ID).Status == StatusPending {
+				ids = append(ids, st.ID)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	out, err := r.Cmd(ctx, "/", "sudo", "-n", "true")
+	if err != nil {
+		return fmt.Errorf("%s 는 이 제어 노드에서 sudo 로 실행하는데, sudo 가 비밀번호를 묻습니다 (sudo -n true: %s). "+
+			"이 사용자에게 비밀번호 없는 sudo (NOPASSWD) 를 준 뒤 다시 실행하세요",
+			strings.Join(ids, ", "), firstLine(strings.TrimSpace(string(out)+" "+err.Error())))
+	}
+	return nil
+}
+
 func (r *Runner) init(prev *RunState) {
 	now := time.Now()
 	r.st = RunState{InputHash: InputHash(r.Inputs), Existing: r.Opts.Existing, AipubInstalled: r.Opts.AipubInstalled,
-		Started: now, Updated: now}
+		Monitoring: r.Opts.Monitoring, ArchivePath: r.Opts.ArchivePath, Started: now, Updated: now}
 	for i, stage := range r.Stages {
 		for _, st := range stage {
 			s := StepState{ID: st.ID, Title: st.Title, Stage: i, Status: StatusPending}
@@ -491,7 +575,15 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	r.set(st.ID, func(s *StepState) {
 		s.Status, s.Start, s.End, s.ExitCode, s.Log, s.Note = StatusRunning, now(), nil, nil, logPath, ""
 	})
-	err = r.Exec(ctx, r.Opts.AnsibleDir(), f, "bash", "-c", StepScript(r.Opts, st))
+	// its process group is recorded while it runs (leftRunning); no Notify, the
+	// step shows nothing new
+	started := withStarted(ctx, func(pid int) {
+		r.mu.Lock()
+		r.st.Step(st.ID).PGID = pid
+		_ = r.save()
+		r.mu.Unlock()
+	})
+	err = r.Exec(started, r.Opts.AnsibleDir(), f, "bash", "-c", StepScript(r.Opts, st))
 	code := 0
 	if err != nil {
 		code = -1
@@ -502,7 +594,7 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	}
 	fmt.Fprintf(f, "── %s %s 끝: 종료 코드 %d\n", time.Now().Format(time.RFC3339), st.ID, code)
 	r.set(st.ID, func(s *StepState) {
-		s.End, s.ExitCode = now(), &code
+		s.End, s.ExitCode, s.PGID = now(), &code, 0
 		switch {
 		case err == nil:
 			s.Status = StatusOK

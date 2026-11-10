@@ -1,6 +1,9 @@
 package plan
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // A stage is the steps that run at the same time; the next starts when every
 // one of them has succeeded.
@@ -28,13 +31,14 @@ import "strings"
 func Stages(steps []Step, o Options, savedIn string) [][]Step {
 	var stages [][]Step
 	if copies := CopyCommands(o, savedIn); len(copies) > 0 {
-		stages = append(stages, []Step{{ID: "C1", Title: "설정 복사", Kind: Shell, Shell: copies, AlwaysRun: true,
-			Note: "저장한 설정 파일을 " + o.AnsibleDir() + " 로 (sudo, 이어서 실행할 때도 다시 복사)"}})
+		stages = append(stages, []Step{noPrompt(Step{ID: "C1", Title: "설정 복사", Kind: Shell, Shell: copies, AlwaysRun: true,
+			Note: "저장한 설정 파일을 " + o.AnsibleDir() + " 로 (sudo, 이어서 실행할 때도 다시 복사)"})})
 	}
 	for _, st := range steps {
 		if st.Kind == Check {
 			continue
 		}
+		st = noPrompt(st)
 		if st.WithPrev && len(stages) > 0 {
 			stages[len(stages)-1] = append(stages[len(stages)-1], st)
 			continue
@@ -42,6 +46,38 @@ func Stages(steps []Step, o Options, savedIn string) [][]Step {
 		stages = append(stages, []Step{st})
 	}
 	return stages
+}
+
+// sudoWord is a sudo that starts a command of a shell line, with its -n if it has one.
+var sudoWord = regexp.MustCompile(`(^|[\s;&|(])sudo (-n )?`)
+
+// noPrompt is a shell step as the runner runs it: in a session of its own with
+// no terminal, so every sudo of it is sudo -n, which fails at once where a
+// password would be asked. The script (install-plan.sh) keeps plain sudo for
+// the person who runs it.
+func noPrompt(st Step) Step {
+	if st.Kind != Shell {
+		return st
+	}
+	shell := make([]string, len(st.Shell))
+	for i, l := range st.Shell {
+		shell[i] = sudoWord.ReplaceAllString(l, "${1}sudo -n ")
+	}
+	st.Shell = shell
+	return st
+}
+
+// usesSudo reports whether a shell step runs sudo on the control node.
+func usesSudo(st Step) bool {
+	if st.Kind != Shell {
+		return false
+	}
+	for _, l := range st.Shell {
+		if sudoWord.MatchString(l) {
+			return true
+		}
+	}
+	return false
 }
 
 // StageIDs is the stages as text: "K1 | A2+M1 | ...", skipped steps in brackets.

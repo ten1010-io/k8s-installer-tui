@@ -47,8 +47,12 @@ func main() {
 	install := flag.Bool("install", false, "화면 없이 설치를 실행: 사전 확인 (P1..P8, ✗ 이면 시작 안 함) 뒤 설치 계획의 단계를 차례로 실행하고 "+
 		"StorageClass 단계 (M1) 에서 Enter 를 기다림. 상태·로그는 <installer-root>/tui-install. "+
 		"Ctrl-C 한 번 실행 중인 단계 뒤 멈춤, 두 번 바로 멈춤. 종료 코드 0 완료, 1 실패, 2 시작 못 함, 130 중단")
-	resume := flag.Bool("resume", false, "--install 에서 지난 실행 (state.json) 의 성공한 단계는 건너뛰고 이어서 실행")
+	resume := flag.Bool("resume", false, "--install 에서 지난 실행 (state.json) 의 성공한 단계는 건너뛰고 이어서 실행 "+
+		"(계획은 지난 실행의 --existing·--aipub-installed·--archive·--no-monitoring 으로)")
+	fresh := flag.Bool("fresh", false, "--install: 끝나지 않은 지난 실행이 있어도 처음부터 모든 단계를 실행 (없으면 --install 은 시작하지 않음)")
 	existing := flag.Bool("existing", false, "--install: 클러스터가 이미 있는 사이트로 계획 (기본은 새 사이트. --resume 은 지난 실행의 것을 씀)")
+	aipubInstalled := flag.Bool("aipub-installed", false, "--install --existing: AIPub 도 이미 설치된 사이트로 계획 "+
+		"(setup-cert 의 CA 가 노드에 있고 JWKS issuer 가 응답함: 컨트롤 플레인 항목을 update-cluster 한 번에 적용). 기본은 AIPub 없음")
 	archive := flag.String("archive", "", "--install: K4 의 사용자 레지스트리 아카이브 경로 (비우면 K4 건너뜀)")
 	noMonitoring := flag.Bool("no-monitoring", false, "--install: 모니터링 (A4) 을 설치하지 않음")
 	showVersion := flag.Bool("version", false, "버전 출력")
@@ -90,14 +94,20 @@ func main() {
 		os.Exit(render(paths, s, *renderDir))
 	}
 	if *install {
+		switch {
+		case *resume && *fresh:
+			fmt.Fprintln(os.Stderr, "--resume 과 --fresh 는 함께 쓸 수 없습니다")
+			os.Exit(2)
+		case *aipubInstalled && !*existing:
+			fmt.Fprintln(os.Stderr, "--aipub-installed 는 --existing 과 함께 씁니다 (클러스터 없이 AIPub 이 있을 수 없음)")
+			os.Exit(2)
+		}
 		opts := plan.DefaultOptions()
 		opts.Root, opts.ArchivePath, opts.Monitoring = *installerRoot, *archive, !*noMonitoring
-		if *existing {
-			opts.Existing = true
-			_, err := os.Stat(paths.AipubVars)
-			opts.AipubInstalled = err == nil
-		}
-		os.Exit(installHeadless(paths, s, opts, *resume))
+		// said, not guessed: files/aipub/vars.yml is there on every AIPub site
+		// the wizard saved, installed or not
+		opts.Existing, opts.AipubInstalled = *existing, *aipubInstalled
+		os.Exit(installHeadless(paths, s, opts, *resume, *fresh))
 	}
 
 	opts := plan.DefaultOptions()

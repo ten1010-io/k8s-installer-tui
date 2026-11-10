@@ -41,10 +41,19 @@ func TerminateJob() {
 	}
 }
 
-// setGroup makes the command the leader of a process group of its own, which
-// interruptTree and killTree reach whole, and which Ctrl-C on the terminal does
-// not (this program decides what it stops).
-func setGroup(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
+// setSession makes the command the leader of a session of its own, so of a
+// process group whose id is its pid, which interruptTree and killTree reach
+// whole, and which Ctrl-C on the terminal does not (this program decides what
+// it stops). The session has no controlling terminal: a sudo or ssh that
+// would ask for a password fails instead of stopping on SIGTTIN for ever.
+func setSession(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} }
+
+// groupAlive reports whether a process of group pgid is still there (one of
+// another user counts: kill says EPERM).
+func groupAlive(pgid int) bool {
+	err := syscall.Kill(-pgid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
 
 // interruptTree sends SIGINT to the process group the command leads: ansible
 // stops as on Ctrl-C.

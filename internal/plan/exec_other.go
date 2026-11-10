@@ -16,8 +16,11 @@ func fileOwner(fi os.FileInfo) (int, bool) { return 0, false }
 // TerminateJob: no process groups here.
 func TerminateJob() {}
 
-// setGroup: no process groups here.
-func setGroup(cmd *exec.Cmd) {}
+// setSession: no sessions here.
+func setSession(cmd *exec.Cmd) {}
+
+// groupAlive: no process groups to ask about here.
+func groupAlive(pgid int) bool { return false }
 
 // interruptTree: no signals here; the command is killed.
 func interruptTree(cmd *exec.Cmd) error { return cmd.Process.Kill() }

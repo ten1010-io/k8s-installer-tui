@@ -422,6 +422,37 @@ func TestRunAfterTheSiteChangedRunsTheChecksAgain(t *testing.T) {
 	}
 }
 
+// A resume runs the plan of the run it goes on with: its 모니터링 (and 아카이브
+// 경로), shown when the screen comes back and kept, said so, when changed since.
+func TestResumeKeepsTheOptionsOfTheRun(t *testing.T) {
+	s9, f := newRunScreen(t)
+	f.classReady = true
+	f.fail["setup-base"] = 2
+	s9.opts.Monitoring = false
+	p := newPump(s9)
+	p.pressRun()
+	p.until(t, "the run ends", func() bool { return s9.ex != nil && s9.ex.done })
+	if st, _ := plan.LoadRunState(plan.StateDir(s9.opts)); st == nil || st.Monitoring {
+		t.Fatalf("state.json: %+v", st)
+	}
+
+	s9 = reopen(s9, f) // the program started again, 모니터링 설치 by default
+	if s9.opts.Monitoring || !strings.Contains(plainView(s9), "설치 안 함") {
+		t.Errorf("the screen does not show the run's 모니터링:\n%s", plainView(s9))
+	}
+	s9.opts.Monitoring = true // turned on on the screen
+	f.mu.Lock()
+	f.ran, f.fail = nil, map[string]int{}
+	f.mu.Unlock()
+	p = newPump(s9)
+	p.pressRun()
+	p.until(t, "the resume ends", func() bool { return s9.ex != nil && s9.ex.done })
+	if got := f.playbooks(); strings.Contains(got, "setup-monitoring") || s9.ex.outcome != plan.OutcomeOK ||
+		!strings.Contains(plainView(s9), "이어서 실행은 지난 실행의 설정으로 합니다: 모니터링 설치 안 함") {
+		t.Errorf("resumed %s, %s:\n%s", got, s9.ex.outcome, plainView(s9))
+	}
+}
+
 // Ctrl+C once lets the step finish and stops there; twice stops it now; the
 // third quits.
 func TestRunCtrlC(t *testing.T) {

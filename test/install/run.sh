@@ -9,7 +9,10 @@
 # Checks: the order and the one parallel stage (setup-cert beside the
 # StorageClass stop) in the stubs' timestamps, the stop answered on a terminal
 # (script, a pty), a failure and --install --resume running only from the
-# failed step, state.json and the logs, the lock, Ctrl-C once and twice.
+# failed step (with the copy again, and the options of the run it goes on
+# with), state.json and the logs, the lock, Ctrl-C once and twice, --install
+# refusing an unfinished run without --resume or --fresh, and a step left
+# running by a program killed outright keeping the next start out.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
@@ -70,6 +73,17 @@ esac
 EOF
 printf '#!/usr/bin/env bash\nwhile [ "${1#-}" != "$1" ]; do shift; done\nexec "$@"\n' > "${W}/stub/sudo"
 chmod +x "${W}/stub/"*
+# the stub sudo outside the venv too: the runner asks sudo -n true itself
+# before the steps that run sudo here (C1, A5.1); FAKE_SUDO_FAILS makes it refuse
+mkdir -p "${W}/bin"
+cat > "${W}/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+if [ -n "${FAKE_SUDO_FAILS:-}" ]; then echo "sudo: a password is required" >&2; exit 1; fi
+while [ "${1#-}" != "$1" ]; do shift; done
+exec "$@"
+EOF
+chmod +x "${W}/bin/sudo"
+export PATH="${W}/bin:${PATH}"
 
 # the site: new-site-non-ha with HA on a StorageClass, saved outside the
 # installer (the copy step C1 puts it there)
@@ -79,7 +93,7 @@ sed -i 's/^aipub_ha_mode: false/aipub_ha_mode: true\naipub_ha_mode_storage_class
 cd "${SITE}" || exit 1
 install_cmd="${TUI} --installer-root ${ROOT} --install"
 
-echo "── 1) a run that fails at setup-base, the StorageClass stop answered on a terminal"
+echo "── 1) a run (--no-monitoring) that fails at setup-base, the StorageClass stop answered on a terminal"
 mkfifo "${W}/keys"
 (
     # Enter once the stop is shown, the class there by then
@@ -89,7 +103,7 @@ mkfifo "${W}/keys"
     sleep 20
 ) > "${W}/keys" &
 feeder=$!
-FAKE_FAIL=setup-base FAKE_SLEEP_setup_cert=3 script -qfec "${install_cmd}" /dev/null < "${W}/keys" > "${W}/out1.txt" 2>&1
+FAKE_FAIL=setup-base FAKE_SLEEP_setup_cert=3 script -qfec "${install_cmd} --no-monitoring" /dev/null < "${W}/keys" > "${W}/out1.txt" 2>&1
 code=$?
 kill "${feeder}" 2>/dev/null
 sed 's/^/    /' "${W}/out1.txt"
@@ -113,13 +127,14 @@ verdict=$(awk -v cs="${cs}" -v ce="${ce}" -v ne="${ne}" -v bs="${bs}" -v checks=
 [ "${verdict}" = yes ] && ok "M1 checked at ${checks} while setup-cert ran ${cs}..${ce}; setup-base at ${bs}" ||
     bad "M1 checks ${checks} vs setup-cert ${cs}..${ce}, network end ${ne}, base ${bs}"
 grep -q '"id": "A3"' "${STATE}/state.json" && ok "state.json" || bad "no state.json"
-python3 - "${STATE}/state.json" <<'EOF' && ok "state: C1..A2, M1 ok, K4 skipped, A3 failed, the rest pending" || bad "state.json statuses"
+python3 - "${STATE}/state.json" <<'EOF' && ok "state: C1..A2, M1 ok, K4 A4 skipped, A3 failed, the rest pending; monitoring off" || bad "state.json statuses"
 import json, sys
-st = {s["id"]: s["status"] for s in json.load(open(sys.argv[1]))["steps"]}
-want = {"C1": "ok", "K1": "ok", "K3": "ok", "K4": "skipped", "A2": "ok", "M1": "ok", "A3": "failed", "A5": "pending"}
+run = json.load(open(sys.argv[1]))
+st = {s["id"]: s["status"] for s in run["steps"]}
+want = {"C1": "ok", "K1": "ok", "K3": "ok", "K4": "skipped", "A2": "ok", "M1": "ok", "A3": "failed", "A4": "skipped", "A5": "pending"}
 bad = {k: (st.get(k), v) for k, v in want.items() if st.get(k) != v}
-print("    statuses:", " ".join(f"{k}={v}" for k, v in st.items()))
-sys.exit(1 if bad else 0)
+print("    statuses:", " ".join(f"{k}={v}" for k, v in st.items()), "monitoring:", run.get("monitoring"))
+sys.exit(1 if bad or run.get("monitoring") is not False else 0)
 EOF
 for l in C1 K1 K3 A2 M1 A3; do [ -s "${STATE}/logs/${l}.log" ] || bad "no log ${l}.log"; done
 ok "logs: $(ls "${STATE}/logs" | paste -sd' ')"
@@ -133,10 +148,13 @@ code=$?
 sed 's/^/    /' "${W}/out2.txt"
 [ "${code}" = 0 ] && ok "exit 0" || bad "exit ${code}, want 0"
 order=$(awk '$2=="start"{printf "%s ", $3}' "${CALLS}")
+# the plan of the run it goes on with: no monitoring, though this start did not say --no-monitoring
 case "${order}" in
-"setup-base setup-monitoring setup-aipub "*) ok "resumed: ${order}" ;;
+"setup-base setup-aipub "*) ok "resumed without monitoring: ${order}" ;;
 *) bad "resumed: ${order}" ;;
 esac
+grep -q '이어서 실행은 지난 실행의 설정으로 계획합니다 (이번 플래그와 다름): --no-monitoring=true' "${W}/out2.txt" &&
+    ok "said the run's --no-monitoring is kept" || bad "no word of the kept --no-monitoring"
 grep -q '✓ C1' "${W}/out2.txt" && grep -q '# saved again' "${ROOT}/ansible/group_vars/all/vars.yml" &&
     ok "C1 ran again: the installer has the site as saved again" || bad "the resume did not copy the site again"
 grep -q '"outcome": "ok"' "${STATE}/state.json" && ok "state.json outcome ok" || bad "outcome"
@@ -155,6 +173,15 @@ code=$?
 wait
 grep -q '다른 k8s-installer-tui' "${W}/out4.txt" && [ "${code}" = 2 ] && ok "refused: exit 2" || bad "exit ${code}: $(tail -3 "${W}/out4.txt")"
 
+echo "── 4b) sudo here wants a password: refused before C1, state.json as it was"
+: > "${CALLS}"
+before=$(md5sum < "${STATE}/state.json")
+FAKE_SUDO_FAILS=1 ${install_cmd} < /dev/null > "${W}/out4b.txt" 2>&1
+code=$?
+[ "${code}" = 2 ] && grep -q 'C1 는 이 제어 노드에서 sudo 로 실행하는데, sudo 가 비밀번호를 묻습니다' "${W}/out4b.txt" &&
+    [ "$(md5sum < "${STATE}/state.json")" = "${before}" ] && [ ! -s "${CALLS}" ] &&
+    ok "refused: exit 2, nothing ran" || bad "exit ${code}: $(tail -3 "${W}/out4b.txt")"
+
 echo "── 5) Ctrl-C once: the running step finishes, nothing after it"
 : > "${CALLS}"
 FAKE_SLEEP_setup_k8s_installer=3 ${install_cmd} < /dev/null > "${W}/out5.txt" 2>&1 &
@@ -166,10 +193,17 @@ code=$?
 order=$(awk '$2=="end"{printf "%s ", $3}' "${CALLS}")
 [ "${code}" = 130 ] && [ "${order}" = "setup-k8s-installer " ] && ok "exit 130, ended: ${order}" || bad "exit ${code}, ended: ${order}"
 
-echo "── 6) Ctrl-C twice: the step is stopped now"
+echo "── 5b) --install over the stopped run, without --resume or --fresh: refused"
+: > "${CALLS}"
+${install_cmd} < /dev/null > "${W}/out5b.txt" 2>&1
+code=$?
+[ "${code}" = 2 ] && grep -q '이어서 하려면 --resume' "${W}/out5b.txt" && grep -q -- '--fresh' "${W}/out5b.txt" && [ ! -s "${CALLS}" ] &&
+    ok "refused: exit 2, nothing ran" || bad "exit ${code}: $(cat "${W}/out5b.txt")"
+
+echo "── 6) --fresh, Ctrl-C twice: the step is stopped now"
 : > "${CALLS}"
 start=$(date +%s)
-FAKE_SLEEP_setup_k8s_installer=30 ${install_cmd} < /dev/null > "${W}/out6.txt" 2>&1 &
+FAKE_SLEEP_setup_k8s_installer=30 ${install_cmd} --fresh < /dev/null > "${W}/out6.txt" 2>&1 &
 pid=$!
 for _ in $(seq 100); do grep -q 'start setup-k8s-installer' "${CALLS}" && break; sleep 0.1; done
 kill -INT "${pid}"; sleep 0.3; kill -INT "${pid}"
@@ -179,6 +213,27 @@ took=$(($(date +%s) - start))
 grep -q '"status": "cancelled"' "${STATE}/state.json"
 [ "${code}" = 130 ] && [ "${took}" -lt 20 ] && grep -q '"status": "cancelled"' "${STATE}/state.json" &&
     ok "exit 130 after ${took}s, K1 cancelled" || bad "exit ${code} after ${took}s"
+
+echo "── 7) the program killed outright (SIGKILL): its step, left running, keeps the next start out"
+: > "${CALLS}"
+FAKE_SLEEP_setup_k8s_installer=30 ${install_cmd} --fresh < /dev/null > "${W}/out7.txt" 2>&1 &
+pid=$!
+for _ in $(seq 100); do grep -q 'start setup-k8s-installer' "${CALLS}" && break; sleep 0.1; done
+sleep 0.3
+kill -KILL "${pid}"
+wait "${pid}" 2>/dev/null
+pgid=$(python3 -c 'import json, sys; print(next((s.get("pgid", 0) for s in json.load(open(sys.argv[1]))["steps"] if s["id"] == "K1"), 0))' "${STATE}/state.json")
+${install_cmd} --resume < /dev/null > "${W}/out7b.txt" 2>&1
+code=$?
+[ "${pgid}" -gt 0 ] && kill -0 -- "-${pgid}" 2>/dev/null && [ "${code}" = 2 ] && grep -q "pid ${pgid}" "${W}/out7b.txt" &&
+    ok "refused while K1 (group ${pgid}) still runs: exit 2" || bad "pgid ${pgid}, exit ${code}: $(tail -3 "${W}/out7b.txt")"
+[ "${pgid}" -gt 0 ] && kill -INT -- "-${pgid}" 2>/dev/null
+for _ in $(seq 50); do kill -0 -- "-${pgid}" 2>/dev/null || break; sleep 0.1; done
+: > "${CALLS}"
+${install_cmd} --resume < /dev/null > "${W}/out7c.txt" 2>&1
+code=$?
+[ "${code}" = 0 ] && grep -q 'start setup-k8s-installer' "${CALLS}" && ok "once it ended: --resume ran from K1, exit 0" ||
+    bad "exit ${code}: $(tail -3 "${W}/out7c.txt")"
 
 echo
 [ "${fails}" = 0 ] && echo "✓ --install end to end" || echo "✗ ${fails} check(s) failed"

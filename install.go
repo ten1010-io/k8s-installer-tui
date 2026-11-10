@@ -24,15 +24,33 @@ import (
 // progress a line per change of a step, the StorageClass stop asked on the
 // terminal (Enter). 0 when every step succeeded, 1 when one failed (or the
 // stop was left without an answer), 2 when it could not start (a check ✗, the
-// lock), 130 on Ctrl-C (129 SIGHUP, 143 SIGTERM).
-func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, resume bool) int {
+// lock, a run left unfinished without --resume or --fresh), 130 on Ctrl-C (129
+// SIGHUP, 143 SIGTERM).
+func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, resume, fresh bool) int {
 	in := bufio.NewReader(os.Stdin)
 	savedIn := filepath.Dir(paths.Inventory)
 	inputs := []string{paths.Inventory, paths.Vars, paths.AipubVars, paths.WebhookConfig()}
 	dir := plan.StateDir(opts)
 
+	prev, err := plan.LoadRunState(dir)
+	if !resume && !fresh {
+		// a run from K1 over one that did not finish is said, not taken
+		switch {
+		case err != nil:
+			fmt.Fprintln(os.Stderr, "state.json:", err, "— 처음부터 다시 하려면 --fresh")
+			return 2
+		case prev != nil && len(prev.Remaining()) > 0:
+			var left []string
+			for _, st := range prev.Remaining() {
+				left = append(left, st.ID)
+			}
+			fmt.Fprintf(os.Stderr, "지난 실행 (%s 에 시작) 이 끝나지 않았습니다. 남은 단계: %s\n"+
+				"이어서 하려면 --resume, 끝난 단계까지 처음부터 다시 하려면 --fresh 를 붙이세요\n",
+				prev.Started.Format("2006-01-02 15:04"), strings.Join(left, " "))
+			return 2
+		}
+	}
 	if resume {
-		prev, err := plan.LoadRunState(dir)
 		switch {
 		case err != nil:
 			fmt.Fprintln(os.Stderr, "state.json:", err)
@@ -41,8 +59,13 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 			fmt.Fprintln(os.Stderr, dir+"/state.json 이 없어 이어서 할 실행이 없습니다. --resume 없이 실행하세요")
 			return 2
 		}
-		// the plan of the run it goes on with
+		// the plan of the run it goes on with, whatever the flags say now
+		if differ := keptFromLast(prev, opts); len(differ) > 0 {
+			fmt.Println("! 이어서 실행은 지난 실행의 설정으로 계획합니다 (이번 플래그와 다름): " + strings.Join(differ, ", ") +
+				". 바꾸려면 --fresh 로 처음부터")
+		}
 		opts.Existing, opts.AipubInstalled = prev.Existing, prev.AipubInstalled
+		opts.Monitoring, opts.ArchivePath = prev.Monitoring, prev.ArchivePath
 		var done []string
 		for _, st := range prev.Steps {
 			if st.Status == plan.StatusOK {
@@ -176,6 +199,29 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 		return signalled()
 	}
 	return 1
+}
+
+// keptFromLast are the flags of this start that differ from the run a resume
+// goes on with, as that run had them.
+func keptFromLast(prev *plan.RunState, o plan.Options) []string {
+	var out []string
+	if o.Existing != prev.Existing {
+		out = append(out, fmt.Sprintf("--existing=%t", prev.Existing))
+	}
+	if o.AipubInstalled != prev.AipubInstalled {
+		out = append(out, fmt.Sprintf("--aipub-installed=%t", prev.AipubInstalled))
+	}
+	if o.Monitoring != prev.Monitoring {
+		out = append(out, fmt.Sprintf("--no-monitoring=%t", !prev.Monitoring))
+	}
+	if o.ArchivePath != prev.ArchivePath {
+		archive := prev.ArchivePath
+		if archive == "" {
+			archive = "(없음, K4 건너뜀)"
+		}
+		out = append(out, "--archive "+archive)
+	}
+	return out
 }
 
 func waiting(st plan.RunState) bool {

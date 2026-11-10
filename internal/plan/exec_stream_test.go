@@ -5,6 +5,8 @@ package plan
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -41,5 +43,19 @@ func TestExecStreamStopsTheGroup(t *testing.T) {
 	_ = ExecStream(ctx, t.TempDir(), &out, "bash", "-c", "sleep 30")
 	if time.Since(start) > 5*time.Second {
 		t.Errorf("SIGINT did not end it: %s", time.Since(start))
+	}
+}
+
+// The command leads a session of its own: no controlling terminal, so a sudo
+// that wants a password fails instead of stopping on SIGTTIN.
+func TestExecStreamRunsInASessionOfItsOwn(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc")
+	}
+	var out bytes.Buffer
+	err := ExecStream(context.Background(), t.TempDir(), &out, "bash", "-c", `read -r _ _ _ _ _ sid _ < /proc/$$/stat; echo "sid=$sid pid=$$"`)
+	var sid, pid int
+	if _, serr := fmt.Sscanf(strings.TrimSpace(out.String()), "sid=%d pid=%d", &sid, &pid); err != nil || serr != nil || sid != pid {
+		t.Errorf("err %v, %q", err, out.String())
 	}
 }

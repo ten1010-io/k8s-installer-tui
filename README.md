@@ -147,6 +147,7 @@ AIPub을 설치하지 않으면 AIPub 전용 화면(6·7단계)은 건너뜁니�
 | R2 | `ki_cp_ha_mode=true`이면 `ki_cp_ha_mode_vip` 필수 |
 | R5 | `aipub_ha_mode=true`이면 StorageClass 필수, 아니면 Harbor 데이터 노드 필수 |
 | R6 | AIPub 서비스 노드는 k8s control plane 노드의 부분집합이어야 함 |
+| R7 | AIPub LB VIP(인그레스, 별도 IP 모드의 게이트웨이)는 `internal_network_subnets` 안에 있고, `ki_cp_ha_mode_vip`(HA일 때)·노드의 `ansible_host`(IP일 때)와 다르며, 파드·서비스 서브넷 밖이어야 함 |
 
 그 밖에 형식(CIDR, IP, 크기 등)과 필수 항목(`k8s_node` 최소 1개 등)도 같은 곳에서 검사합니다.
 

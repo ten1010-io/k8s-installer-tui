@@ -113,6 +113,38 @@ func TestValidate(t *testing.T) {
 			s.K8sGatewayVIP = s.K8sIngressVIP
 			s.K8sIngressHostNetworkPort = 0
 		}, []string{"k8s_gateway_lb_name", "k8s_gateway_vip", "k8s_ingress_host_network_port"}},
+		{"lb vip outside the internal subnets", func(s *state.AppState) { s.K8sIngressVIP = "10.1.0.5" },
+			[]string{"k8s_ingress_vip"}},
+		{"lb vip in another internal subnet", func(s *state.AppState) {
+			s.InternalNetworkSubnets = []string{"192.168.0.0/24", "10.1.0.0/24"}
+			s.K8sIngressVIP = "10.1.0.5"
+		}, nil},
+		{"lb vip is the ki cp vip", func(s *state.AppState) { s.K8sIngressVIP = s.KiCpHaModeVIP },
+			[]string{"k8s_ingress_vip"}},
+		{"lb vip is the ki cp vip without ha", func(s *state.AppState) {
+			s.KiCpHaMode = false
+			s.K8sIngressVIP = s.KiCpHaModeVIP
+		}, nil},
+		{"lb vip is a node", func(s *state.AppState) { s.K8sIngressVIP = "192.168.0.12" },
+			[]string{"k8s_ingress_vip"}},
+		{"lb vip beside a node named by host name", func(s *state.AppState) {
+			s.Nodes[1].AnsibleHost = "node2.example.com"
+			s.K8sIngressVIP = "192.168.0.12"
+		}, nil},
+		{"gateway vip in the service subnet", func(s *state.AppState) {
+			s.K8sIngressMode = 1
+			s.K8sGatewayLBName = "gateway-lb"
+			s.K8sGatewayVIP = "10.96.0.10"
+		}, []string{"k8s_gateway_vip", "k8s_gateway_vip"}},
+		{"gateway vip in the internal subnet", func(s *state.AppState) {
+			s.K8sIngressMode = 1
+			s.K8sGatewayLBName = "gateway-lb"
+			s.K8sGatewayVIP = "192.168.0.201"
+		}, nil},
+		{"lb vip in the pod subnet", func(s *state.AppState) { s.K8sIngressVIP = "10.244.1.1" },
+			[]string{"k8s_ingress_vip", "k8s_ingress_vip"}},
+		{"lb vip beside a broken pod subnet", func(s *state.AppState) { s.K8sPodSubnet = "bad" },
+			[]string{"k8s_pod_subnet"}},
 		{"load balancer values", func(s *state.AppState) {
 			s.K8sIngressLBName = ""
 			s.K8sIngressVIP = "x"

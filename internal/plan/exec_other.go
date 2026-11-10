@@ -29,3 +29,6 @@ func interruptTree(cmd *exec.Cmd) error { return cmd.Process.Kill() }
 func lockFile(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 }
+
+// syncDir: a directory cannot be flushed here; the rename is what there is.
+func syncDir(dir string) error { return nil }

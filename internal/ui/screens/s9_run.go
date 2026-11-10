@@ -212,6 +212,7 @@ func (s *S9Install) startRun(resume bool) tea.Cmd {
 		}
 	}
 	s.ex, s.message, s.showLog = ex, "", false
+	s.active.Store(ex)
 	if len(kept) > 0 {
 		s.message = "이어서 실행은 지난 실행의 설정으로 합니다: " + strings.Join(kept, ", ") + " (바꾸려면 f 처음부터)"
 	}
@@ -243,10 +244,12 @@ func (s *S9Install) updateRun(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		s.ex.done, s.ex.outcome, s.ex.err = true, msg.outcome, msg.err
 		s.refresh()
-		if msg.err == nil {
+		// a run stopped before it began left state.json as it was
+		if msg.err == nil && len(s.ex.snap.Steps) > 0 {
 			snap := s.ex.snap
 			s.last = &snap
 		}
+		s.inputHash = plan.InputHash(s.inputs())
 		return nil, true
 	}
 	return nil, false
@@ -350,14 +353,22 @@ func (s *S9Install) interruptRun() bool {
 	return false
 }
 
-// stopRun ends a run before the program quits, in a bounded time.
+// stopRun ends a run before the program quits, in a bounded time. It runs off
+// the update loop (a tea.Cmd, or after the program ended), so it reads only
+// active and what of the run does not change (runner, ended), never s.ex.
 func (s *S9Install) stopRun() {
-	if !s.running() {
+	ex := s.active.Load()
+	if ex == nil {
 		return
 	}
-	s.ex.runner.Kill()
 	select {
-	case <-s.ex.ended:
+	case <-ex.ended:
+		return
+	default:
+	}
+	ex.runner.Kill()
+	select {
+	case <-ex.ended:
 	case <-time.After(20 * time.Second):
 	}
 }
@@ -459,6 +470,12 @@ func (s *S9Install) summary() string {
 	case ex.err != nil:
 		b.WriteString(styles.StyleError.Render("✗ 시작하지 못했습니다: "+ex.err.Error()) + "\n")
 		return b.String()
+	}
+	if err := ex.runner.SaveErr(); err != nil {
+		b.WriteString(styles.StyleWarning.Render("! "+plan.StateDir(s.opts)+"/state.json 을 쓰지 못했습니다 ("+err.Error()+
+			"). 기록이 실행보다 뒤처졌을 수 있습니다") + "\n")
+	}
+	switch {
 	case ex.outcome == plan.OutcomeOK:
 		b.WriteString(styles.StyleSuccess.Render("✓ 설치를 마쳤습니다") + "\n")
 		return b.String()
@@ -507,7 +524,7 @@ func (s *S9Install) viewPrev() string {
 		b.WriteString(styles.StyleMuted.Render("  모두 끝났습니다. f 처음부터 다시 실행") + "\n")
 	} else {
 		b.WriteString(styles.StyleWarning.Render("  남음: "+strings.Join(left, " ")+" — 실행 = 이어서 실행, f 처음부터") + "\n")
-		if s.last.InputHash != plan.InputHash(s.inputs()) {
+		if s.last.InputHash != s.inputHash {
 			b.WriteString(styles.StyleWarning.Render("  ! 지난 실행 뒤에 사이트 파일이 바뀌었습니다 (이어서 실행할 때 묻습니다)") + "\n")
 		}
 	}

@@ -88,3 +88,21 @@ func TestExecStreamTellsTheGroup(t *testing.T) {
 		t.Errorf("group %d alive after it ended", pid)
 	}
 }
+
+// The logs hold what the playbooks print: this user's alone.
+func TestRunnerKeepsTheLogsPrivate(t *testing.T) {
+	r, f, _ := newTestRunner(t, aipubStages())
+	f.classes["nfs-client"] = true
+	if o, err := r.Run(context.Background(), false); o != OutcomeOK || err != nil {
+		t.Fatalf("%s %v", o, err)
+	}
+	for p, want := range map[string]os.FileMode{r.Dir: 0700, filepath.Join(r.Dir, "logs"): 0700,
+		filepath.Join(r.Dir, "logs", "K1.log"): 0600, filepath.Join(r.Dir, "logs", "M1.log"): 0600} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Error(err)
+		} else if fi.Mode().Perm() != want {
+			t.Errorf("%s: %v, want %v", p, fi.Mode().Perm(), want)
+		}
+	}
+}

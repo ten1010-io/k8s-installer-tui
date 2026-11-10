@@ -84,3 +84,13 @@ func lockFile(path string) (*os.File, error) {
 	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 	return f, nil
 }
+
+// syncDir flushes the directory dir, where a file was just renamed in.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}

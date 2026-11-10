@@ -453,6 +453,29 @@ func TestResumeKeepsTheOptionsOfTheRun(t *testing.T) {
 	}
 }
 
+// The Ctrl+C that quits stops the run off the update loop (a tea.Cmd) while
+// the loop takes the end of the run: no data race (go test -race).
+func TestStopRunOffTheUpdateLoop(t *testing.T) {
+	s9, f := newRunScreen(t)
+	f.block["setup-k8s-installer"] = make(chan struct{})
+	p := newPump(s9)
+	p.pressRun()
+	p.until(t, "K1 runs", func() bool { return s9.stepStatus("K1") == plan.StatusRunning })
+	// the run has ended (the second Ctrl+C), its end not yet taken by the loop
+	s9.ex.runner.Kill()
+	<-s9.ex.ended
+	stopped := make(chan struct{})
+	go func() {
+		s9.Stop()
+		close(stopped)
+	}()
+	p.until(t, "the run ends", func() bool { return s9.ex.done })
+	<-stopped
+	if s9.stepStatus("K1") != plan.StatusCancelled {
+		t.Errorf("K1 %s", s9.stepStatus("K1"))
+	}
+}
+
 // Ctrl+C once lets the step finish and stops there; twice stops it now; the
 // third quits.
 func TestRunCtrlC(t *testing.T) {

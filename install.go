@@ -192,6 +192,9 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 	}
 	snap := r.Snapshot()
 	printSummary(os.Stdout, snap, outcome, time.Since(start))
+	if err := r.SaveErr(); err != nil {
+		fmt.Fprintln(os.Stderr, "! "+dir+"/state.json 을 쓰지 못했습니다 ("+err.Error()+"). 기록이 실행보다 뒤처졌을 수 있습니다")
+	}
 	switch {
 	case outcome == plan.OutcomeOK:
 		return 0

@@ -52,8 +52,16 @@ func ReadStorageVars(path string) map[string]string {
 	return out
 }
 
+// DefaultClass stands among the classes of StorageNeeds for the default class
+// of the cluster, which a claim with no class name gets: what is checked is
+// that some class is marked default.
+const DefaultClass = "(클러스터 기본 StorageClass)"
+
+// isDefaultClass is the annotation that marks the default StorageClass.
+const isDefaultClass = "storageclass.kubernetes.io/is-default-class"
+
 // StorageNeeds are the StorageClasses the site claims volumes on, with the steps
-// that claim them, by class name.
+// that claim them, by class name (DefaultClass for the default one).
 func StorageNeeds(s *state.AppState, o Options) map[string][]string {
 	needs := map[string][]string{}
 	if !s.AipubEnabled {
@@ -77,8 +85,11 @@ func StorageNeeds(s *state.AppState, o Options) map[string][]string {
 		if s.AipubHaMode {
 			def = "dynamic"
 		}
-		// an empty name takes the default class of the cluster, which has no name to ask for
-		if c := v("aipub_monitoring_storage_class_name", ha); v("aipub_monitoring_storage_type", def) == "dynamic" && c != "" {
+		if c := v("aipub_monitoring_storage_class_name", ha); v("aipub_monitoring_storage_type", def) == "dynamic" {
+			if c == "" {
+				// an empty name takes the default class of the cluster
+				c = DefaultClass
+			}
 			needs[c] = append(needs[c], "A4 setup-monitoring")
 		}
 	}
@@ -122,6 +133,14 @@ func CheckClasses(ctx context.Context, o Options, s *state.AppState, run RunFunc
 	}
 	node := s.K8sCpNodes[0]
 	for _, c := range classes {
+		if c == DefaultClass {
+			line, ok := checkDefaultClass(ctx, o, run, node)
+			lines = append(lines, line)
+			if !ok {
+				missing = append(missing, c)
+			}
+			continue
+		}
 		if !storageClassName.MatchString(c) {
 			missing = append(missing, c)
 			lines = append(lines, "StorageClass 이름 "+c+" 이(가) 올바르지 않습니다")
@@ -147,4 +166,25 @@ func CheckClasses(ctx context.Context, o Options, s *state.AppState, run RunFunc
 	}
 	sort.Strings(missing)
 	return missing, lines
+}
+
+// checkDefaultClass asks node for the classes marked default (is-default-class),
+// read only like the rest of CheckClasses; ok when there is one.
+func checkDefaultClass(ctx context.Context, o Options, run RunFunc, node string) (string, bool) {
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	// the jsonpath in single quotes for the split of the command module
+	res, out, err := adhoc(cctx, o, run, node, true, "command",
+		"kubectl --kubeconfig "+adminKubeconfig+" get storageclass -o "+
+			`'jsonpath={.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}'`)
+	got, found := res[node]
+	switch {
+	case found && got.ok() && strings.TrimSpace(got.Stdout) != "":
+		return node + ": 기본 StorageClass " + strings.TrimSpace(got.Stdout) + " 있음", true
+	case found && got.ok():
+		return node + ": 기본 StorageClass 가 없습니다 (" + isDefaultClass + ": \"true\" 인 클래스 없음)", false
+	case found:
+		return node + ": 기본 StorageClass 를 확인하지 못했습니다 (" + firstLine(strings.TrimSpace(got.Raw)) + ")", false
+	}
+	return "기본 StorageClass 를 확인하지 못했습니다: " + couldNotRun(out, err), false
 }

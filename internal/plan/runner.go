@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -177,7 +178,11 @@ func writeAtomic(p string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), p)
+	if err := os.Rename(tmp.Name(), p); err != nil {
+		return err
+	}
+	// the rename itself survives a crash once the directory is on disk
+	return syncDir(filepath.Dir(p))
 }
 
 // InputHash is of the site files a run is made from: a resume compares it to
@@ -253,6 +258,9 @@ func StepScript(o Options, st Step) string {
 		Command(st) + "\n"
 }
 
+// removing is a reset-/remove- playbook named in a shell line.
+var removing = regexp.MustCompile(`(^|[\s/'"])(reset|remove)-[\w.-]*\.ya?ml\b`)
+
 // forbidden: the runner never runs what removes things, whatever the plan says.
 func forbidden(st Step) bool {
 	base := path.Base(st.Playbook)
@@ -261,6 +269,11 @@ func forbidden(st Step) bool {
 	}
 	for _, a := range append(append([]string{}, st.Args...), st.Shell...) {
 		if strings.Contains(a, "delete_data") || strings.Contains(a, "delete_namespace") {
+			return true
+		}
+	}
+	for _, l := range st.Shell {
+		if removing.MatchString(l) {
 			return true
 		}
 	}
@@ -298,6 +311,7 @@ type Runner struct {
 	stopOnce sync.Once
 	kill     context.CancelFunc
 	killed   bool
+	saveErr  error // the first state.json that could not be written
 }
 
 func NewRunner(o Options, s *state.AppState, stages [][]Step, inputs []string) *Runner {
@@ -337,6 +351,14 @@ func (r *Runner) stopping() bool {
 	}
 }
 
+// SaveErr is the first error writing state.json during the run, nil when every
+// write went through: with one, state.json may be behind what ran.
+func (r *Runner) SaveErr() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.saveErr
+}
+
 // Snapshot is the state as it is now.
 func (r *Runner) Snapshot() RunState {
 	r.mu.Lock()
@@ -354,10 +376,12 @@ func (r *Runner) Run(ctx context.Context, resume bool) (Outcome, error) {
 	defer cancel()
 	r.mu.Lock()
 	r.kill = cancel
-	if r.killed {
-		cancel()
-	}
+	killed := r.killed
 	r.mu.Unlock()
+	// stopped before it started: state.json stays as the last run left it
+	if killed || r.stopping() || ctx.Err() != nil {
+		return OutcomeStopped, nil
+	}
 
 	if err := ensureDir(ctx, r.Dir, r.Cmd); err != nil {
 		return "", fmt.Errorf("상태 디렉터리 %s: %w", r.Dir, err)
@@ -395,7 +419,7 @@ func (r *Runner) Run(ctx context.Context, resume bool) (Outcome, error) {
 	r.mu.Lock()
 	r.st.Outcome = outcome
 	r.st.Updated = time.Now()
-	_ = r.save()
+	r.persist()
 	r.mu.Unlock()
 	return outcome, nil
 }
@@ -480,13 +504,21 @@ func (r *Runner) save() error {
 	return writeAtomic(filepath.Join(r.Dir, stateFile), data)
 }
 
+// persist saves once the run is under way, where a failure stops nothing: the
+// first is kept (SaveErr) for the end of the run to say; r.mu is held.
+func (r *Runner) persist() {
+	if err := r.save(); err != nil && r.saveErr == nil {
+		r.saveErr = err
+	}
+}
+
 // set changes step id and saves the state.
 func (r *Runner) set(id string, change func(*StepState)) {
 	r.mu.Lock()
 	s := r.st.Step(id)
 	change(s)
 	r.st.Updated = time.Now()
-	_ = r.save()
+	r.persist()
 	got := *s
 	r.mu.Unlock()
 	if r.Notify != nil {
@@ -565,7 +597,7 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 		return false
 	}
 	// appended: the log of every attempt is kept
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		r.set(st.ID, func(s *StepState) { s.Status, s.Note = StatusFailed, "로그 파일: "+err.Error() })
 		return false
@@ -580,7 +612,7 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	started := withStarted(ctx, func(pid int) {
 		r.mu.Lock()
 		r.st.Step(st.ID).PGID = pid
-		_ = r.save()
+		r.persist()
 		r.mu.Unlock()
 	})
 	err = r.Exec(started, r.Opts.AnsibleDir(), f, "bash", "-c", StepScript(r.Opts, st))
@@ -626,7 +658,7 @@ func knownFailure(st Step, logPath string) string {
 // stops waiting on Stop, on Kill, and when a step beside it failed (waits).
 func (r *Runner) manual(ctx, waits context.Context, st Step) {
 	logPath := filepath.Join(r.Dir, "logs", st.ID+".log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err == nil {
 		defer f.Close()
 	}
@@ -651,6 +683,11 @@ func (r *Runner) manual(ctx, waits context.Context, st Step) {
 		if len(missing) == 0 {
 			r.set(st.ID, func(s *StepState) { s.Status, s.End, s.Note = StatusOK, now(), strings.Join(lines, "; ") })
 			return
+		}
+		// an Enter pressed before this question does not answer it
+		select {
+		case <-r.cont:
+		default:
 		}
 		r.set(st.ID, func(s *StepState) {
 			s.Status, s.Note = StatusWaiting, "없음: "+strings.Join(missing, ", ")+" — "+strings.Join(lines, "; ")
@@ -706,19 +743,20 @@ func TailLines(p string, n int) []string {
 	return lines
 }
 
-// ensureDir makes dir and its logs. The installer root is root's (setup.sh):
-// when this user may not write there, dir is made with sudo (NOPASSWD, P2)
-// and given to this user, once.
+// ensureDir makes dir and its logs, this user's alone (the logs hold what the
+// playbooks print). The installer root is root's (setup.sh): when this user may
+// not write there, dir is made with sudo (NOPASSWD, P2) and given to this user,
+// once.
 func ensureDir(ctx context.Context, dir string, run RunFunc) error {
 	logs := filepath.Join(dir, "logs")
-	err := os.MkdirAll(logs, 0755)
+	err := os.MkdirAll(logs, 0700)
 	if err == nil || !errors.Is(err, fs.ErrPermission) {
 		return err
 	}
-	out, serr := run(ctx, "/", "sudo", "-n", "install", "-d", "-m", "0755",
+	out, serr := run(ctx, "/", "sudo", "-n", "install", "-d", "-m", "0700",
 		"-o", strconv.Itoa(os.Getuid()), "-g", strconv.Itoa(os.Getgid()), dir)
 	if serr != nil {
 		return fmt.Errorf("%w (sudo: %s)", err, firstLine(strings.TrimSpace(string(out))+" "+serr.Error()))
 	}
-	return os.MkdirAll(logs, 0755)
+	return os.MkdirAll(logs, 0700)
 }

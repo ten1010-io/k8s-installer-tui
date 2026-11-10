@@ -97,6 +97,13 @@ func TestStorageNeeds(t *testing.T) {
 	if st := m1(aipubState(), o); strings.Join(st.Classes, ",") != "fast,nfs-client" || strings.Contains(st.Note, "A5") {
 		t.Errorf("HA with classes of their own: %+v", st)
 	}
+	// monitoring on a dynamic volume with no class name: the default class of the cluster
+	s = aipubState()
+	s.AipubHaMode = false
+	o.StorageVars = map[string]string{"aipub_monitoring_storage_type": "dynamic"}
+	if st := m1(s, o); st.Skip || strings.Join(st.Classes, ",") != DefaultClass || !strings.Contains(st.Note, DefaultClass+" ← A4 setup-monitoring") {
+		t.Errorf("monitoring on the default class: %+v", st)
+	}
 	// AIPub off: no stop at all
 	for _, st := range Build(state.DefaultState(), testOptions()) {
 		if st.Kind == Manual {
@@ -107,6 +114,28 @@ func TestStorageNeeds(t *testing.T) {
 	script := Script(Build(aipubState(), testOptions()), testOptions(), "/opt/k8s-installer/ansible")
 	if !strings.Contains(script, "read -r -p '── M1 스토리지클래스 드라이버를 설치하세요 — 위저드가 쓰는 클래스: nfs-client. 설치했으면 Enter: ' _ || true") {
 		t.Errorf("script:\n%s", script)
+	}
+}
+
+// The default class is there when a class is marked default, whatever its name.
+func TestCheckClassesDefault(t *testing.T) {
+	marked := ""
+	var asked string
+	run := func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+		asked = args[len(args)-1]
+		return []byte("node1 | CHANGED | rc=0 | (stdout) " + marked + "\n"), nil
+	}
+	missing, lines := CheckClasses(context.Background(), testOptions(), aipubState(), run, []string{DefaultClass})
+	if strings.Join(missing, ",") != DefaultClass || !strings.Contains(strings.Join(lines, " "), "기본 StorageClass 가 없습니다") {
+		t.Errorf("none marked: %v %v", missing, lines)
+	}
+	if !strings.Contains(asked, `storageclass\.kubernetes\.io/is-default-class=="true"`) {
+		t.Errorf("asked %s", asked)
+	}
+	marked = "local-path"
+	if missing, lines := CheckClasses(context.Background(), testOptions(), aipubState(), run, []string{DefaultClass}); len(missing) != 0 ||
+		!strings.Contains(strings.Join(lines, " "), "기본 StorageClass local-path 있음") {
+		t.Errorf("one marked: %v %v", missing, lines)
 	}
 }
 
@@ -554,6 +583,72 @@ func TestRunnerNeverRunsAReset(t *testing.T) {
 		if outcome != OutcomeFailed || f.ranIDs() != "" || !strings.Contains(r.Snapshot().Steps[0].Note, "실행하지 않습니다") {
 			t.Errorf("%s ran: %s %+v", st[0].ID, f.ranIDs(), r.Snapshot().Steps[0])
 		}
+	}
+}
+
+// A reset or remove playbook named in a shell line is refused like a playbook step.
+func TestRunnerNeverRunsAResetInAShellLine(t *testing.T) {
+	for _, line := range []string{"ansible-playbook -i inventory.yml playbooks/reset-cluster.yml",
+		"cd x && ansible-playbook 'aipub-playbooks/remove-aipub.yaml'"} {
+		r, f, _ := newTestRunner(t, [][]Step{{{ID: "X1", Kind: Shell, Shell: []string{line}}}})
+		if outcome, _ := r.Run(context.Background(), false); outcome != OutcomeFailed || f.ranIDs() != "" {
+			t.Errorf("%q ran: %s %s", line, outcome, f.ranIDs())
+		}
+	}
+	// the copy of a site in a directory that happens to be called so is no reset
+	if forbidden(Step{Kind: Shell, Shell: []string{"sudo -n cp /home/ops/reset-site/inventory.yml /opt/k8s-installer/ansible/inventory.yml"}}) {
+		t.Error("a path is taken for a reset playbook")
+	}
+}
+
+// Kill before Run starts: nothing runs and state.json stays as the last run left it.
+func TestRunnerKilledBeforeItStarts(t *testing.T) {
+	r, f, _ := newTestRunner(t, aipubStages())
+	r.Kill()
+	if o, err := r.Run(context.Background(), false); o != OutcomeStopped || err != nil || f.ranIDs() != "" {
+		t.Errorf("%s %v, ran %q", o, err, f.ranIDs())
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, stateFile)); err == nil {
+		t.Error("state.json written by a run killed before it started")
+	}
+}
+
+// An Enter pressed before the StorageClass stop asks does not answer it.
+func TestRunnerStopIgnoresAnEarlierEnter(t *testing.T) {
+	r, f, _ := newTestRunner(t, aipubStages())
+	r.Continue() // pressed early
+	done := make(chan Outcome)
+	go func() { o, _ := r.Run(context.Background(), false); done <- o }()
+	waitStatus(t, r, "M1", StatusWaiting)
+	time.Sleep(200 * time.Millisecond)
+	snap := r.Snapshot()
+	if n := f.checksDone(); n != 1 || snap.Step("M1").Status != StatusWaiting {
+		t.Errorf("%d checks, M1 %s: the early Enter answered", n, snap.Step("M1").Status)
+	}
+	r.Kill()
+	<-done
+}
+
+// A state.json that cannot be written once the run is under way stops nothing,
+// and the first error is kept for the end of the run.
+func TestRunnerKeepsTheFirstSaveError(t *testing.T) {
+	stages := [][]Step{{{ID: "X1", Kind: Shell, Shell: []string{"x1"}}}, {{ID: "X2", Kind: Shell, Shell: []string{"x2"}}}}
+	r, f, _ := newTestRunner(t, stages)
+	release := make(chan struct{})
+	f.block["X1"] = release
+	done := make(chan Outcome)
+	go func() { o, _ := r.Run(context.Background(), false); done <- o }()
+	<-f.started["X1"]
+	// a directory where state.json was: the rename onto it fails, for root too
+	p := filepath.Join(r.Dir, stateFile)
+	os.Remove(p)
+	os.MkdirAll(filepath.Join(p, "x"), 0700)
+	close(release)
+	if o := <-done; o != OutcomeOK || f.ranIDs() != "X1 X2" {
+		t.Errorf("%s, ran %s", o, f.ranIDs())
+	}
+	if err := r.SaveErr(); err == nil {
+		t.Error("no save error kept")
 	}
 }
 

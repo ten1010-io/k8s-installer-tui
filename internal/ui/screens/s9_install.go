@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -116,8 +117,12 @@ type S9Install struct {
 
 	// the run (s9_run.go): ex while it runs and after, until Esc; last the last
 	// run (state.json); confirm the y/n asked before one ("resume", "fresh")
-	ex             *execRun
+	ex *execRun
+	// active is the last run started, for stopRun, which runs off the update
+	// loop (Ctrl+C, quitting) and may not read ex
+	active         atomic.Pointer[execRun]
 	last           *plan.RunState
+	inputHash      string // of the site files when the screen was entered (viewPrev)
 	confirm        string
 	runAfterChecks bool // 실행 (or f) waits for the checks, then goes on (gate)
 	fresh          bool // the run that waits is from the first step (f)
@@ -199,6 +204,8 @@ func (s *S9Install) SyncFromState(st *state.AppState) {
 		s.ex, s.selMoved = nil, false
 		s.loadPrev()
 	}
+	// hashed once here, not on every frame
+	s.inputHash = plan.InputHash(s.inputs())
 	if s.checksFor != s.checkKey() && !s.checking {
 		// of another site, or other options: not shown, and run again before a run
 		s.checks, s.ssh = map[string]plan.CheckResult{}, nil

@@ -143,6 +143,9 @@ func build(s *state.AppState, o Options) []Step {
 		steps = append(steps, Step{ID: "P7", Title: "DNS", Kind: Check,
 			Note: "AIPub·Harbor 호스트 (<접두사>.<aipub_ingress_zone>) 가 인그레스 VIP " + s.K8sIngressVIP + " 로 풀리는지 " +
 				"control node 에서 getent hosts 로 확인. DNS 는 설치 뒤에 등록하는 경우가 많아 경고만"})
+		steps = append(steps, Step{ID: "P8", Title: "StorageClass", Kind: Check,
+			Note: "기존 사이트: 첫 컨트롤 플레인 노드에서 kubectl get storageclass " + s.AipubHaModeStorageClass +
+				" 로 있는지 읽기만 확인 (없으면 경고). 새 사이트는 클러스터를 만든 뒤에 만들어져 건너뜀"})
 	}
 	steps = append(steps,
 		Step{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",

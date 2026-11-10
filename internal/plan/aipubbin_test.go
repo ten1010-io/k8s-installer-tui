@@ -78,7 +78,7 @@ func TestBuildP4OnlyWithHelmfile(t *testing.T) {
 	if got := ids(Build(aipubState(), o)); strings.Contains(got, "P4") {
 		t.Errorf("P4 without helmfile: %s", got)
 	}
-	if got, want := ids(Build(helmfileState(), o)), "P1 P2 P4 P5 P6 P7 K1 K2 K3 K4 A1 A2 A3 A4 A5 A5.1 A5.2"; got != want {
+	if got, want := ids(Build(helmfileState(), o)), "P1 P2 P4 P5 P6 P7 P8 K1 K2 K3 K4 A1 A2 A3 A4 A5 A5.1 A5.2"; got != want {
 		t.Errorf("with helmfile: %s, want %s", got, want)
 	}
 	s := state.DefaultState() // no AIPub: the tool is not used

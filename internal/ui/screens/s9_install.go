@@ -153,6 +153,9 @@ func (s *S9Install) runChecks() tea.Cmd {
 	if s.appState.AipubEnabled {
 		s.checks["P7"] = plan.CheckResult{Lines: []string{"확인 중... (getent hosts " + strings.Join(plan.AccessHosts(s.appState), " ") + ")"}}
 	}
+	if s.appState.AipubEnabled {
+		s.checks["P8"] = plan.CheckResult{Lines: []string{"확인 중... (kubectl get storageclass " + s.appState.AipubHaModeStorageClass + ")"}}
+	}
 	s.checks["P6"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n /bin/sh -c true')"}}
 	opts, run, st := s.opts, s.run, s.appState
 	if opts.Existing {
@@ -165,6 +168,8 @@ func (s *S9Install) runChecks() tea.Cmd {
 		r["P6"], shell = plan.CheckBecomeShell(context.Background(), opts, run)
 		if st.AipubEnabled {
 			r["P7"] = plan.CheckDNS(context.Background(), opts, st, run)
+			opts.ShellExecutable = shell // the kubectl of P8 is a become
+			r["P8"] = plan.CheckStorageClass(context.Background(), opts, st, run)
 		}
 		if opts.Existing {
 			// after P6: the slurp is a become, too
@@ -318,7 +323,7 @@ func (s *S9Install) View() string {
 			icon = "!"
 		case checked && res.OK:
 			icon = "✓"
-		case checked && !res.OK && !((st.ID == "P2" || st.ID == "P3" || st.ID == "P6" || st.ID == "P7") && s.checking):
+		case checked && !res.OK && !((st.ID == "P2" || st.ID == "P3" || st.ID == "P6" || st.ID == "P7" || st.ID == "P8") && s.checking):
 			icon = "✗"
 		}
 		line := fmt.Sprintf("  %s %-3s %-30s", icon, st.ID, st.Title)

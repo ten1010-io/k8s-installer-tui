@@ -235,7 +235,7 @@ func TestBuildP5(t *testing.T) {
 		t.Fatalf("P5: %+v", p5)
 	}
 	// after the checks of the machine, before anything runs
-	if !strings.HasPrefix(ids(steps), "P1 P2 P5 P6 P7 K1") {
+	if !strings.HasPrefix(ids(steps), "P1 P2 P5 P6 P7 P8 K1") {
 		t.Errorf("order: %s", ids(steps))
 	}
 }

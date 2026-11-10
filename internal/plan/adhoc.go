@@ -12,6 +12,7 @@ type adhocOut struct {
 	Status string // CHANGED, SUCCESS, FAILED, UNREACHABLE
 	RC     string
 	Stdout string
+	Raw    string // what follows the return code: stdout and stderr, as printed
 }
 
 func (a adhocOut) ok() bool {
@@ -29,7 +30,8 @@ func parseAdhoc(out []byte) map[string]adhocOut {
 		if m == nil {
 			continue
 		}
-		stdout := m[4]
+		raw := m[4]
+		stdout := raw
 		if i := strings.Index(stdout, "(stdout) "); i >= 0 {
 			stdout = stdout[i+len("(stdout) "):]
 			if j := strings.Index(stdout, " (stderr)"); j >= 0 {
@@ -38,7 +40,7 @@ func parseAdhoc(out []byte) map[string]adhocOut {
 		} else {
 			stdout = ""
 		}
-		res[m[1]] = adhocOut{Status: m[2], RC: m[3], Stdout: strings.TrimSpace(stdout)}
+		res[m[1]] = adhocOut{Status: m[2], RC: m[3], Stdout: strings.TrimSpace(stdout), Raw: raw}
 	}
 	return res
 }

@@ -38,7 +38,8 @@ import (
 //
 // Off the text inputs, on an existing site: c reads what the apiserver of the
 // first control plane node was given by hand (read only) and turns on the
-// presets that stand for it.
+// presets that stand for it; o on the audit log says the default audit policy
+// may replace the nodes' (when theirs could not be read).
 
 // The kinds of focus stop.
 const (
@@ -246,9 +247,27 @@ func (s *S4bControlPlane) applyLegacy(l *plan.Legacy) {
 	if l.WebhookURL != "" && strings.TrimSpace(s.url.Value()) == "" {
 		s.url.SetValue(l.WebhookURL)
 	}
+	// the audit policy: the node's taken into files/aipub, or none on the node
+	// for the default to replace
+	if !l.Presets[state.PresetAudit] {
+		s.cp.AuditDefaultOK = true
+	} else if l.Audit.Taken {
+		s.cp.AuditFrom = l.Node
+	}
 	if v := strings.TrimSpace(s.issuer.Value()); l.Issuer != "" && (v == "" || v == s.derived) {
 		s.issuer.SetValue(l.Issuer)
 	}
+}
+
+// auditPlan is what saving would do with the audit policy, with the presets of
+// the screen.
+func (s *S4bControlPlane) auditPlan() fileio.AuditPolicyPlan {
+	st := state.AppState{}
+	if s.site != nil {
+		st = *s.site
+	}
+	st.Existing, st.ControlPlane = s.opts.Existing, s.cp
+	return fileio.PlanAuditPolicy(s.opts.AuditPolicy, &st)
 }
 
 // issuerOverride is the issuer typed in, empty when it is the derived one: that
@@ -535,6 +554,11 @@ func (s *S4bControlPlane) key(msg tea.KeyMsg) (cmd tea.Cmd, done bool) {
 		if !inInput && s.opts.Existing {
 			return s.checkLegacy(), true
 		}
+	case "o":
+		if f == s4bAudit && s.opts.Existing {
+			s.cp.AuditDefaultOK = !s.cp.AuditDefaultOK
+			return nil, true
+		}
 	case "up":
 		if p > 0 {
 			s.focus = st[p-1]
@@ -641,10 +665,21 @@ func (s *S4bControlPlane) caStatus() string {
 func (s *S4bControlPlane) help(kind int) []string {
 	switch kind {
 	case s4bAudit:
-		return []string{
+		out := []string{
 			"audit-policy-file, audit-log-path=/var/log/aipub/usage/audit.log, 30일·30개·100MB. 첫 설치부터",
-			"정책 파일 ansible/files/aipub/audit-policy.yaml 은 사이트가 둡니다 (AIPub 모니터링/python 팀 제공)",
+			"정책 ansible/files/" + state.AuditPolicyFile + ": 없을 때만 위저드가 기본 정책(AIP-2611)을 씀, 있는 파일은 덮어쓰지 않음",
 		}
+		if a := s.auditPlan(); a.Note != "" {
+			out = append(out, "지금: "+a.Note)
+		}
+		if s.opts.Existing {
+			ok := "꺼짐"
+			if s.cp.AuditDefaultOK {
+				ok = "켜짐"
+			}
+			out = append(out, "기존 사이트: c 로 노드의 정책을 가져옴. o: 노드의 정책 대신 기본 정책 쓰기 확인 (지금 "+ok+")")
+		}
+		return out
 	case s4bRuntime:
 		return []string{"runtime-config=admissionregistration.k8s.io/v1beta1=true. 첫 설치부터"}
 	case s4bJWKS:
@@ -717,6 +752,12 @@ func (s *S4bControlPlane) legacyView() string {
 		for _, r := range l.Refused {
 			b.WriteString(styles.StyleWarning.Render("   가져오지 않음: "+r) + "\n")
 		}
+		if l.Audit.Note != "" {
+			b.WriteString(styles.StyleMuted.Render("   감사 정책: "+l.Audit.Note) + "\n")
+		}
+		if l.AuditUnread != "" && !l.Audit.Kept && !s.cp.AuditDefaultOK {
+			b.WriteString(styles.StyleWarning.Render("   감사 정책을 읽지 못함 ("+l.AuditUnread+"): 기본 정책을 쓰지 않습니다. 파일을 직접 두거나 감사 로그 줄에서 o 로 확인") + "\n")
+		}
 		b.WriteString(styles.StyleWarning.Render("   update-cluster 가 손으로 고친 것을 설치기가 관리하는 같은 플래그로 바꿉니다 (이제 업그레이드·노드 변경에도 유지)") + "\n")
 		b.WriteString(styles.StyleWarning.Render("   감지된 프리셋을 끄면 update-cluster 뒤 그 기능이 클러스터에서 사라집니다") + "\n")
 	}
@@ -786,7 +827,11 @@ func (s *S4bControlPlane) View() string {
 	b.WriteString("\n")
 
 	b.WriteString(styles.StylePrimary.Render("프리셋") + styles.StyleMuted.Render("  Space/Enter: 켜기/끄기") + "\n")
-	preset(s4bAudit, "", state.PresetAudit, "AIPub 감사 로그", "AIPub 사용 기록용 apiserver 감사 로그 (정책 파일은 사이트가 둠)")
+	audit := "AIPub 사용 기록용 apiserver 감사 로그"
+	if s.cp.Audit {
+		audit += " (" + s.auditPlan().Short() + ")"
+	}
+	preset(s4bAudit, "", state.PresetAudit, "AIPub 감사 로그", audit)
 	preset(s4bRuntime, "", state.PresetRuntimeConfig, "runtime-config", "admissionregistration v1beta1 API 를 켭니다")
 	preset(s4bJWKS, "", state.PresetJWKS, "AIPub 인증 (JWKS)", "AIPub 이 발급한 토큰을 apiserver 가 믿게 합니다 (AIPub 설치 시만)")
 	if s.cp.JWKS {

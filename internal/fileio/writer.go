@@ -2,7 +2,9 @@ package fileio
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -85,6 +87,8 @@ func DefaultPaths(ansibleDir string) Paths {
 // the webhook preset of the control plane and AuthConfig the authentication
 // config of the JWKS preset, each nil while it is off (a file written before is
 // left alone); AuthConfig is nil as well while there is no CA (CA says why).
+// AuditPolicy is the default audit policy when it is written (Audit.Source is
+// AuditDefault), nil otherwise; Audit says which policy is used.
 type Rendered struct {
 	Inventory     []byte
 	Vars          []byte
@@ -92,6 +96,7 @@ type Rendered struct {
 	WebhookConfig []byte
 	AuthConfig    []byte
 	AuditPolicy   []byte
+	Audit         AuditPolicyPlan
 	CA            CA
 }
 
@@ -119,36 +124,39 @@ func Render(p Paths, s *state.AppState) (*Rendered, error) {
 	r.WebhookConfig = WebhookConfig(s)
 	r.CA = LookupCA(s)
 	r.AuthConfig = AuthConfig(s, r.CA.PEM)
-	r.AuditPolicy = AuditPolicy(s)
+	r.Audit = PlanAuditPolicy(p.AuditPolicy(), s)
+	if r.Audit.Source == AuditDefault {
+		r.AuditPolicy = r.Audit.Data
+	}
 	return &r, nil
 }
 
 // WriteAll renders and writes the files, keeping the previous version of each as
-// <file>.bak.
+// <file>.bak. A file marked keepIfExists is written only where nothing is (not
+// even a dangling symlink): the audit policy of a site is never written over.
 func WriteAll(p Paths, s *state.AppState) error {
 	r, err := Render(p, s)
 	if err != nil {
 		return err
 	}
 	files := []struct {
-		path string
-		data []byte
+		path         string
+		data         []byte
+		keepIfExists bool
 	}{
-		{p.Inventory, r.Inventory},
-		{p.Vars, r.Vars},
-		{p.AipubVars, r.AipubVars},
-		{p.WebhookConfig(), r.WebhookConfig},
-		{p.AuthConfig(), r.AuthConfig},
-		{p.AuditPolicy(), r.AuditPolicy},
+		{p.Inventory, r.Inventory, false},
+		{p.Vars, r.Vars, false},
+		{p.AipubVars, r.AipubVars, false},
+		{p.WebhookConfig(), r.WebhookConfig, false},
+		{p.AuthConfig(), r.AuthConfig, false},
+		{p.AuditPolicy(), r.AuditPolicy, true},
 	}
 	for _, f := range files {
 		if f.data == nil {
 			continue
 		}
-		if f.path == p.AuditPolicy() {
-			if _, err := os.Stat(f.path); err == nil {
-				continue // keep existing audit-policy.yaml if already placed
-			}
+		if _, err := os.Lstat(f.path); f.keepIfExists && !errors.Is(err, fs.ErrNotExist) {
+			continue
 		}
 		if err := writeWithBackup(f.path, f.data); err != nil {
 			return err
@@ -382,19 +390,6 @@ func WebhookConfig(s *state.AppState) []byte {
 	return out
 }
 
-// AuditPolicy is the audit policy for kube-apiserver (--audit-policy-file), nil
-// when the audit preset is off. It is the template of aipub-installer
-// (templates/audit-policy.yaml), copied to every control plane node in the clear
-// (k8s_cp_extra_files).
-func AuditPolicy(s *state.AppState) []byte {
-	if !s.AppliedControlPlane().Audit {
-		return nil
-	}
-	header := "# Written by k8s-installer-tui (AIPub 감사 로그) from the template of aipub-installer.\n" +
-		"# Copied to every control plane node in the clear by k8s_cp_extra_files.\n"
-	return append([]byte(header), auditPolicyTemplate...)
-}
-
 // addMissingKeys appends to cur, with their comments, the keys of the template it
 // does not have: variables a newer installer added since the file was written.
 func addMissingKeys(cur, tpl *yaml.Node) {
@@ -599,18 +594,22 @@ func hostMap(hosts *yaml.Node, name string) *yaml.Node {
 }
 
 // MissingCpFiles lists the files of k8s_cp_extra_files that are in none of the
-// files directories given (ansible/files next to the saved settings, of the
-// installer). The kubeconfig of the webhook preset is left out while the wizard
-// writes it, and the authentication config of the JWKS preset while it has an
-// issuer: written now, or waiting for the CA, which the plan fills in
-// (--fill-auth-config) before it applies the preset; the preview says which.
-// k8s-installer stops on such a file before it touches a node; the preview warns
-// sooner.
+// files directories given (ansible/files next to the saved settings, first, then
+// of the installer) as a regular file that is not empty. The kubeconfig of the
+// webhook preset is left out while the wizard writes it, the authentication
+// config of the JWKS preset while it has an issuer: written now, or waiting for
+// the CA, which the plan fills in (--fill-auth-config) before it applies the
+// preset; the preview says which. The audit policy is left out when saving
+// writes the default to the first directory (PlanAuditPolicy). k8s-installer
+// stops on such a file before it touches a node; the preview warns sooner.
 func MissingCpFiles(s *state.AppState, filesDirs ...string) []state.CpExtraFile {
 	generated := map[string]bool{
 		state.WebhookConfigFile: WebhookConfig(s) != nil,
 		state.JWKSConfigFile:    s.AppliedControlPlane().JWKS && s.JWKSIssuer() != "",
-		state.AuditPolicyFile:   AuditPolicy(s) != nil,
+	}
+	if len(filesDirs) > 0 {
+		audit := PlanAuditPolicy(filepath.Join(filesDirs[0], filepath.FromSlash(state.AuditPolicyFile)), s)
+		generated[state.AuditPolicyFile] = audit.Source == AuditDefault
 	}
 	var out []state.CpExtraFile
 	for _, f := range s.AppliedControlPlane().ExtraFiles(state.StageAll) {
@@ -619,7 +618,7 @@ func MissingCpFiles(s *state.AppState, filesDirs ...string) []state.CpExtraFile 
 		}
 		found := false
 		for _, dir := range filesDirs {
-			if st, err := os.Stat(filepath.Join(dir, filepath.FromSlash(f.Src))); err == nil && !st.IsDir() {
+			if st, err := os.Stat(filepath.Join(dir, filepath.FromSlash(f.Src))); err == nil && st.Mode().IsRegular() && st.Size() > 0 {
 				found = true
 				break
 			}

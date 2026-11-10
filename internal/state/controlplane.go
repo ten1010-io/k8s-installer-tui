@@ -199,6 +199,16 @@ type ControlPlane struct {
 	// Empty: JWKSCAPath. Not written to any file; the CA itself is, inline
 	JWKSCAFile string
 
+	// What is known of the audit policy of the audit preset; read again on each
+	// run, never saved. AuditDefaultOK: on an existing site, the default policy
+	// may be written to files/aipub: the check found no policy on the node, or
+	// the operator said so (o on 4b). AuditFrom: the node the policy at
+	// files/aipub was taken from (c on 4b). AuditNote: which policy saving leaves
+	// at files/aipub (fileio.PlanAuditPolicy), for the site-values view
+	AuditDefaultOK bool
+	AuditFrom      string
+	AuditNote      string
+
 	// Entries typed in by hand, by component (CpComponents)
 	Args    map[string][]ExtraArg
 	Volumes map[string][]ExtraVolume

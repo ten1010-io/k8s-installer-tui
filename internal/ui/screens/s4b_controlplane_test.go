@@ -1,6 +1,8 @@
 package screens
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -75,7 +77,7 @@ func TestS4bNewSiteCollapsed(t *testing.T) {
 		}
 	}
 	// the help is of the focused row only: the audit log's now, not JWKS's
-	if !strings.Contains(view, "audit-policy.yaml 은 사이트가 둡니다") || strings.Contains(view, "A5.2 update-cluster") {
+	if !strings.Contains(view, "없을 때만 위저드가 기본 정책(AIP-2611)을 씀") || strings.Contains(view, "A5.2 update-cluster") {
 		t.Errorf("help not of the focused row:\n%s", view)
 	}
 	want := []s4bStop{{kind: s4bAudit}, {kind: s4bRuntime}, {kind: s4bJWKS}, {kind: s4bIssuer}, {kind: s4bCA},
@@ -357,5 +359,46 @@ func TestS4bValidateShowsEntryInput(t *testing.T) {
 	s.RevealErrors() // what the wizard does when it refuses the move
 	if view := s.plain(); !s.advanced || !strings.Contains(view, "항목 (Enter: 추가)") || !strings.Contains(view, "zzq") {
 		t.Errorf("the input named is not in sight:\n%s", view)
+	}
+}
+
+// The audit log says which policy saving leaves under ansible/files: the default
+// on a new site; on an existing one, nothing until the nodes' is read or o says
+// the default may replace it; the site's file when there is one.
+func TestS4bAuditPolicySource(t *testing.T) {
+	s := newS4b(s4bState(), false)
+	s4bKeys(s, " ") // the audit log on
+	view := s.plain()
+	if !strings.Contains(view, "(정책: 위저드가 기본 정책을 씀)") || !strings.Contains(view, "지금: 위저드가 기본 AIPub 감사 정책을 씁니다") ||
+		strings.Contains(view, "사이트가 둡니다") || strings.Contains(view, "python 팀") || strings.Contains(view, "o: 노드의 정책 대신") {
+		t.Errorf("new site:\n%s", view)
+	}
+
+	path := filepath.Join(t.TempDir(), "aipub", "audit-policy.yaml")
+	s = newS4b(s4bState(), true)
+	s.opts.AuditPolicy = path
+	s4bKeys(s, " ")
+	view = s.plain()
+	if !strings.Contains(view, "(⚠ 정책: 노드의 정책을 읽기 전이라 쓰지 않음)") || !strings.Contains(view, "o: 노드의 정책 대신 기본 정책 쓰기 확인 (지금 꺼짐)") {
+		t.Errorf("existing site:\n%s", view)
+	}
+	s4bKeys(s, "o")
+	if view := s.plain(); !strings.Contains(view, "(정책: 위저드가 기본 정책을 씀)") || !strings.Contains(view, "(지금 켜짐)") {
+		t.Errorf("after o:\n%s", view)
+	}
+	back := s4bState()
+	s.SyncToState(back)
+	if !back.ControlPlane.AuditDefaultOK {
+		t.Error("o did not reach the state")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("apiVersion: audit.k8s.io/v1\nkind: Policy\nrules:\n- level: Metadata\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if view := s.plain(); !strings.Contains(view, "(정책: 사이트 파일을 그대로 둠)") || !strings.Contains(view, "사이트의 정책 파일을 그대로 둡니다") {
+		t.Errorf("site file:\n%s", view)
 	}
 }

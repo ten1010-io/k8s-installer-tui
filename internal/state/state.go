@@ -12,6 +12,10 @@ import "strings"
 // aipub-installer refuses anything but aipub_* in its file, so no variable is
 // written to the other file.
 type AppState struct {
+	// Existing: the site had its files when the wizard started (fileio.LoadSite),
+	// so its cluster is there. Not saved
+	Existing bool
+
 	// S1: Nodes (inventory.yml → all.hosts)
 	Nodes []NodeConfig
 

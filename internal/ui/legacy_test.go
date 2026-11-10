@@ -45,6 +45,7 @@ spec:
 			"users:\n- name: kube-apiserver\n  user: {}\n",
 		"/etc/kubernetes/authentication-config.yaml": "apiVersion: apiserver.config.k8s.io/v1\nkind: AuthenticationConfiguration\n" +
 			"jwt:\n  - issuer:\n      url: https://login.lkjh.local\n",
+		"/etc/kubernetes/audit-policy.yaml": nodeAuditPolicy,
 	}
 	return func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		script := args[len(args)-1]
@@ -61,6 +62,12 @@ spec:
 		return []byte(`node1 | FAILED! => {"msg": "file not found"}` + "\n"), fmt.Errorf("exit status 2")
 	}
 }
+
+// nodeAuditPolicy is the audit policy of a site installed by aipub-installer
+// 4_8_x: older than the wizard's default, which must not replace it.
+const nodeAuditPolicy = "apiVersion: audit.k8s.io/v1\nkind: Policy\nomitStages:\n  - \"RequestReceived\"\n" +
+	"omitManagedFields: true\nrules:\n  - level: RequestResponse\n    verbs: [\"create\", \"delete\"]\n" +
+	"    resources:\n    - group: \"project.aipub.ten1010.io\"\n      resources: [\"projects\"]\n"
 
 // An old site: AIPub installed, the apiserver flags only in the manifests edited
 // by hand, none in vars.yml. c on the control plane screen reads them, turns the
@@ -120,6 +127,8 @@ func TestWizardLegacySite(t *testing.T) {
 		"https://login.lkjh.local",
 		"https://aipub.lkjh.local/api/v1/token-review",
 		"✓ CA 있음",
+		"감사 정책: 노드의 감사 정책을 가져와 그대로 씁니다",
+		"(정책: 노드에서 가져온 것을 그대로 씀)",
 	} {
 		if !strings.Contains(d.screen(), want) {
 			t.Errorf("S4b does not show %q", want)
@@ -164,6 +173,13 @@ func TestWizardLegacySite(t *testing.T) {
 		!strings.Contains(string(ac), "        "+strings.Split(ca, "\n")[1]+"\n") || strings.Contains(string(ac), "REPLACE_ME") {
 		t.Errorf("authentication config:\n%s", ac)
 	}
+	// the node's audit policy, as it was on the node: not the wizard's default
+	if got, err := os.ReadFile(paths.AuditPolicy()); err != nil || string(got) != nodeAuditPolicy {
+		t.Errorf("audit policy is not the node's: %v\n%s", err, got)
+	}
+	if _, err := os.Stat(paths.AuditPolicy() + ".bak"); err == nil {
+		t.Error("the node's audit policy was written over on save")
+	}
 	kc, err := os.ReadFile(paths.WebhookConfig())
 	if err != nil || !strings.Contains(string(kc), "https://aipub.lkjh.local/api/v1/token-review") {
 		t.Errorf("webhook kubeconfig: %v\n%s", err, kc)
@@ -177,7 +193,7 @@ func TestWizardLegacySite(t *testing.T) {
 	d.keys("c")
 	t.Logf("S9:\n%s", d.screen())
 	for _, want := range []string{"P3  apiserver 수동 설정 확인", "A2.5 update-cluster (컨트롤 플레인 항목 적용)",
-		"모두 켜져 있음: update-cluster 가 손으로 고친 것을"} {
+		"모두 켜져 있음: update-cluster 가 손으로 고친 것을", "노드의 정책과 같습니다: 그대로 씁니다"} {
 		if !strings.Contains(d.screen(), want) {
 			t.Errorf("9.설치 does not show %q", want)
 		}

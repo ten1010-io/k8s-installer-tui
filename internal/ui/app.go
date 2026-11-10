@@ -33,8 +33,10 @@ func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version st
 	// plane in one update-cluster.yml once nothing waits for a later step
 	if loaded, _ := fileio.LoadSite(paths); loaded != nil {
 		opts.Existing = true
+		s.Existing = true // the default audit policy waits for the nodes' to be read
 		_, opts.AipubInstalled = loaded.Values[schema.FileAipub]
 	}
+	opts.AuditPolicy = paths.AuditPolicy()
 	s1 := screens.NewS1Nodes()
 	s2 := screens.NewS2Groups()
 	s3 := screens.NewS3Network()

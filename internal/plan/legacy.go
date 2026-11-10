@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -21,6 +23,9 @@ import (
 // manifest again from the cluster configuration, so a flag the wizard does not
 // declare is gone after it. The check here reads the manifest of a control plane
 // node - read only, with slurp - and says which presets stand for what is there.
+// The audit policy the node runs with is read too and kept under ansible/files
+// where none is, so that k8s_cp_extra_files copies the node's own policy back
+// rather than the wizard's default over it.
 
 // APIServerManifest is the static pod of the apiserver on a control plane node.
 const APIServerManifest = "/etc/kubernetes/manifests/kube-apiserver.yaml"
@@ -41,6 +46,12 @@ type Legacy struct {
 	Issuer     string
 	// Refused says what was not copied and why
 	Refused []string
+	// AuditPolicy is the policy the node runs with (--audit-policy-file), when it
+	// could be read and held nothing that looks like a credential; AuditUnread
+	// says why it was not. Audit is what became of it at Options.AuditPolicy
+	AuditPolicy []byte
+	AuditUnread string
+	Audit       fileio.AuditAdoption
 }
 
 // Any reports whether a preset was found.
@@ -172,6 +183,19 @@ func looksSecret(data []byte) bool {
 	return false
 }
 
+// policyLooksSecret reports whether an audit policy holds something that looks
+// like a credential. A policy names the resource secrets, so the word alone is
+// not one.
+func policyLooksSecret(data []byte) bool {
+	t := strings.ToLower(string(data))
+	for _, w := range []string{"private key", "token:", "token-data", "password:", "client-key-data", "client-certificate-data"} {
+		if strings.Contains(t, w) {
+			return true
+		}
+	}
+	return false
+}
+
 // plainURL is a URL fit to copy: https, no credential, no query.
 func plainURL(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
@@ -265,8 +289,9 @@ func slurp(ctx context.Context, o Options, node, path string, run RunFunc) ([]by
 }
 
 // ReadLegacy is the check of an existing site: the apiserver of the first k8s
-// control plane node, and the webhook URL and the issuer from the files its
-// flags name. Nothing is written anywhere.
+// control plane node, the webhook URL and the issuer from the files its flags
+// name, and its audit policy. Nothing is written on the node; the audit policy is
+// written to o.AuditPolicy as it is when nothing is there (never over a file).
 func ReadLegacy(ctx context.Context, o Options, s *state.AppState, run RunFunc) (*Legacy, error) {
 	if len(s.K8sCpNodes) == 0 {
 		return nil, errors.New("k8s 컨트롤 플레인 노드가 없습니다")
@@ -300,6 +325,27 @@ func ReadLegacy(ctx context.Context, o Options, s *state.AppState, run RunFunc) 
 			l.Refused = append(l.Refused, why)
 		} else {
 			l.Issuer = u
+		}
+	}
+	if l.Presets[state.PresetAudit] {
+		path := flags[legacyFlag[state.PresetAudit]]
+		b, err := slurp(ctx, o, node, path, run)
+		switch {
+		case err != nil:
+			l.AuditUnread = err.Error()
+		case len(bytes.TrimSpace(b)) == 0:
+			l.AuditUnread = path + " 가 비어 있습니다"
+		case policyLooksSecret(b):
+			l.AuditUnread = "자격 증명(토큰·키)으로 보이는 것이 있어 가져오지 않았습니다"
+		default:
+			l.AuditPolicy = b
+		}
+		if o.AuditPolicy != "" {
+			a, err := fileio.AdoptAuditPolicy(o.AuditPolicy, l.AuditPolicy)
+			if err != nil {
+				a.Note = "⚠ 노드의 감사 정책을 " + o.AuditPolicy + " 에 쓰지 못했습니다: " + err.Error()
+			}
+			l.Audit = a
 		}
 	}
 	return l, nil
@@ -340,6 +386,25 @@ func LegacyResult(l *Legacy, s *state.AppState) CheckResult {
 	}
 	if r.OK {
 		r.Lines = append(r.Lines, "모두 켜져 있음: update-cluster 가 손으로 고친 것을 설치기가 관리하는 같은 플래그로 바꿉니다")
+	}
+	if !l.Presets[state.PresetAudit] || !s.ControlPlane.Audit {
+		return r
+	}
+	// the policy k8s_cp_extra_files copies over the node's
+	if l.Audit.Note != "" {
+		r.Lines = append(r.Lines, "감사 정책: "+l.Audit.Note)
+	}
+	if l.AuditUnread != "" {
+		switch {
+		case l.Audit.Kept:
+			r.Lines = append(r.Lines, "⚠ 노드의 감사 정책을 읽지 못했습니다 ("+l.AuditUnread+"): ansible/files 의 사이트 파일을 씁니다")
+		case s.ControlPlane.AuditDefaultOK:
+			r.Lines = append(r.Lines, "⚠ 노드의 감사 정책을 읽지 못했지만 기본 정책으로 바꾸기로 했습니다 (4b 의 o): update-cluster 가 노드의 정책을 바꿉니다")
+		default:
+			r.OK = false
+			r.Lines = append(r.Lines, "✗ 노드의 감사 정책을 읽지 못했습니다 ("+l.AuditUnread+"): 기본 정책이 읽지 못한 정책을 바꾸게 됩니다. "+
+				"정책 파일을 ansible/files/"+state.AuditPolicyFile+" 에 직접 두거나, 4b 감사 로그 줄에서 o 로 기본 정책 쓰기를 확인하고 다시 저장하세요")
+		}
 	}
 	return r
 }

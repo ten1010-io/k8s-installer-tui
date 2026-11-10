@@ -1,9 +1,12 @@
 package plan
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -183,8 +186,11 @@ func TestReadLegacy(t *testing.T) {
 		"/etc/kubernetes/webhook-token-auth.yaml": "clusters:\n- cluster:\n    server: https://aipub.univ.ac.kr/api/v1/token-review\n" +
 			"users:\n- name: kube-apiserver\n  user:\n    token: secret-value\n",
 		"/etc/kubernetes/authentication-config.yaml": "jwt:\n  - issuer:\n      url: https://aipub.univ.ac.kr\n",
+		"/etc/kubernetes/audit-policy.yaml":          oldAuditPolicy,
 	}, &calls)
-	l, err := ReadLegacy(context.Background(), testOptions(), s, run)
+	o := testOptions()
+	o.AuditPolicy = filepath.Join(t.TempDir(), "files", "aipub", "audit-policy.yaml")
+	l, err := ReadLegacy(context.Background(), o, s, run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,8 +210,12 @@ func TestReadLegacy(t *testing.T) {
 			t.Errorf("not a slurp of the node: %s", c)
 		}
 	}
-	if len(calls) != 3 {
+	if len(calls) != 4 {
 		t.Errorf("calls: %q", calls)
+	}
+	// the node's audit policy, taken as it is where none was
+	if got, err := os.ReadFile(o.AuditPolicy); err != nil || string(got) != oldAuditPolicy || !l.Audit.Taken {
+		t.Errorf("policy not taken: %v %+v\n%s", err, l.Audit, got)
 	}
 
 	// the saved presets against it: the webhook off is a feature taken away
@@ -215,7 +225,7 @@ func TestReadLegacy(t *testing.T) {
 		t.Errorf("webhook off: %+v", r)
 	}
 	s.ControlPlane.Webhook = true
-	if r := LegacyResult(l, s); !r.OK {
+	if r := LegacyResult(l, s); !r.OK || !strings.Contains(strings.Join(r.Lines, "\n"), "감사 정책: 노드의 감사 정책을 가져와 그대로 씁니다") {
 		t.Errorf("all on: %+v", r)
 	}
 
@@ -223,5 +233,81 @@ func TestReadLegacy(t *testing.T) {
 	none := fakeSlurp("node1", nil, &calls)
 	if r := CheckLegacy(context.Background(), testOptions(), s, none); r.OK || !strings.Contains(r.Lines[0], "file not found") {
 		t.Errorf("unreadable: %+v", r)
+	}
+}
+
+// oldAuditPolicy is the policy sites installed by aipub-installer 4_8_x/5_0_x run
+// with: older than the default the wizard writes.
+const oldAuditPolicy = `apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - "RequestReceived"
+  - "ResponseStarted"
+  - "Panic"
+omitManagedFields: true
+rules:
+  - level: RequestResponse
+    verbs: ["create", "patch", "update", "delete"]
+    resources:
+    - group: ""
+      resources: ["pods", "pods/status"]
+  - level: RequestResponse
+    verbs: ["create", "delete"]
+    resources:
+    - group: "project.aipub.ten1010.io"
+      resources: ["projects"]
+`
+
+// P3 on a site whose audit policy can not be read: not OK, and nothing written
+// in its place, until the operator confirms the default or puts a file there.
+func TestCheckLegacyAuditPolicyUnread(t *testing.T) {
+	s := aipubState()
+	s.ControlPlane.Audit = true
+	var calls []string
+	run := fakeSlurp("node1", map[string]string{
+		APIServerManifest: apiserverManifest(allLegacyFlags[:3], allLegacyMounts[:2]),
+	}, &calls)
+	o := testOptions()
+	o.AuditPolicy = filepath.Join(t.TempDir(), "files", "aipub", "audit-policy.yaml")
+	r := CheckLegacy(context.Background(), o, s, run)
+	lines := strings.Join(r.Lines, "\n")
+	if r.OK || !strings.Contains(lines, "✗ 노드의 감사 정책을 읽지 못했습니다") || !strings.Contains(lines, "file not found") {
+		t.Errorf("unread policy passed: %+v", r)
+	}
+	if _, err := os.Lstat(o.AuditPolicy); err == nil {
+		t.Error("a policy was written for a node whose policy was not read")
+	}
+	// the operator confirms the default (o on 4b)
+	s.ControlPlane.AuditDefaultOK = true
+	if r := CheckLegacy(context.Background(), o, s, run); !r.OK || !strings.Contains(strings.Join(r.Lines, "\n"), "기본 정책으로 바꾸기로 했습니다") {
+		t.Errorf("confirmed: %+v", r)
+	}
+	// or puts the site's file there
+	s.ControlPlane.AuditDefaultOK = false
+	site := []byte("apiVersion: audit.k8s.io/v1\nkind: Policy\nrules:\n- level: Metadata\n")
+	if err := os.MkdirAll(filepath.Dir(o.AuditPolicy), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(o.AuditPolicy, site, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if r := CheckLegacy(context.Background(), o, s, run); !r.OK || !strings.Contains(strings.Join(r.Lines, "\n"), "사이트 파일을 씁니다") {
+		t.Errorf("site file: %+v", r)
+	}
+	if got, _ := os.ReadFile(o.AuditPolicy); !bytes.Equal(got, site) {
+		t.Errorf("the site's file changed:\n%s", got)
+	}
+	// a policy that holds a key is not copied
+	run = fakeSlurp("node1", map[string]string{
+		APIServerManifest:                   apiserverManifest(allLegacyFlags[:3], allLegacyMounts[:2]),
+		"/etc/kubernetes/audit-policy.yaml": oldAuditPolicy + "# -----BEGIN PRIVATE KEY-----\n",
+	}, &calls)
+	l, err := ReadLegacy(context.Background(), testOptions(), s, run)
+	if err != nil || l.AuditPolicy != nil || !strings.Contains(l.AuditUnread, "자격 증명") {
+		t.Errorf("a key copied: %v %+v", err, l)
+	}
+	// a policy names the resource secrets: not a credential
+	if policyLooksSecret([]byte(oldAuditPolicy + "  - level: Metadata\n    resources:\n    - group: \"\"\n      resources: [\"secrets\"]\n")) {
+		t.Error("the resource secrets taken for a credential")
 	}
 }

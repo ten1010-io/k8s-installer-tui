@@ -40,10 +40,10 @@ type Step struct {
 	// Sees is what a check looks at, one line, shown on the plan screen in
 	// place of the longer Note (which stays in the script). Var is the schema
 	// variable the check stands behind, whose Preflight hint is shown with it
-	Sees string
-	Var  string
-	Optional bool     // the operator may leave it out
-	Skip     bool     // left out: optional and turned off, or missing what it needs
+	Sees     string
+	Var      string
+	Optional bool // the operator may leave it out
+	Skip     bool // left out: optional and turned off, or missing what it needs
 	SkipWhy  string
 }
 
@@ -75,6 +75,10 @@ type Options struct {
 	// sudo refusing /bin/sh and dash usable: every playbook of the plan gets
 	// -e ansible_shell_executable=<it>. Empty: ansible's default
 	ShellExecutable string
+	// AuditPolicy is where the wizard keeps the audit policy of the audit preset
+	// (fileio.Paths.AuditPolicy): the check of an existing site puts the policy of
+	// the node there when nothing is. Empty: the check writes nothing
+	AuditPolicy string
 }
 
 func DefaultOptions() Options {

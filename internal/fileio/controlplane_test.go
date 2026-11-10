@@ -245,7 +245,8 @@ func TestControlPlanePresetOff(t *testing.T) {
 }
 
 // The files the presets copy have to be under ansible/files; the kubeconfig of
-// the webhook and the audit policy are not looked for, the wizard writes them.
+// the webhook is not looked for, the wizard writes it, nor the audit policy while
+// saving writes the default.
 func TestMissingCpFiles(t *testing.T) {
 	p := DefaultPaths(t.TempDir())
 	installer := t.TempDir()
@@ -257,6 +258,19 @@ func TestMissingCpFiles(t *testing.T) {
 	if got := strings.Join(srcs, " "); got != "site/oidc-ca.crt" {
 		t.Errorf("missing: %s", got)
 	}
+	// an existing site: the default waits, the policy is missing until it is there
+	s.Existing = true
+	if got := MissingCpFiles(s, p.FilesDir(), installer); len(got) != 2 || got[0].Src != state.AuditPolicyFile {
+		t.Errorf("held policy: %v", got)
+	}
+	must(t, os.MkdirAll(installer+"/aipub", 0755))
+	must(t, os.WriteFile(installer+"/aipub/audit-policy.yaml", []byte("apiVersion: audit.k8s.io/v1\n"), 0644))
+	for _, f := range MissingCpFiles(s, p.FilesDir(), installer) {
+		if f.Src == state.AuditPolicyFile {
+			t.Errorf("the policy is reported missing once it is under the installer: %v", f)
+		}
+	}
+	s.Existing = false
 	s.ControlPlane.WebhookURL = "" // nothing to write the kubeconfig from
 	if got := MissingCpFiles(s, p.FilesDir(), installer); len(got) != 2 || got[0].Src != state.WebhookConfigFile {
 		t.Errorf("webhook without a URL: %v", got)

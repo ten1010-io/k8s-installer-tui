@@ -107,6 +107,9 @@ func main() {
 		// said, not guessed: files/aipub/vars.yml is there on every AIPub site
 		// the wizard saved, installed or not
 		opts.Existing, opts.AipubInstalled = *existing, *aipubInstalled
+		// as the wizard does: P3 of an existing site keeps its nodes' audit policy
+		// under files/aipub where none is, so that C1 copies it to the installer
+		opts.AuditPolicy = paths.AuditPolicy()
 		os.Exit(installHeadless(paths, s, opts, *resume, *fresh))
 	}
 

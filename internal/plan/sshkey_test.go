@@ -84,13 +84,22 @@ Host key verification failed.
 		{"ssh: connect to host 10.0.0.9 port 22: Connection timed out\n", KeyUnreachable},
 		{"ssh: Could not resolve hostname n-down: Name or service not known\n", KeyUnreachable},
 		{changed, KeyHostChanged},
+		// the key of the control node itself unreadable: no node had a say
+		{"Load key \"/home/ops/.ssh/id_rsa\": Permission denied\nops@10.0.0.2: Permission denied (publickey,password).\n", KeyUnreadable},
+		{"Permissions 0644 for '/home/ops/.ssh/id_rsa' are too open.\nLoad key \"/home/ops/.ssh/id_rsa\": bad permissions\nops@10.0.0.2: Permission denied (publickey).\n", KeyUnreadable},
+		// the methods are those of the last "Permission denied (" line
+		{"Warning: Permission denied while reading ~/.ssh/config\nops@10.0.0.2: Permission denied (publickey).\n", KeyNoPassword},
 	} {
 		got, detail := classifySSH([]byte(c.out))
 		if got != c.want || detail == "" || strings.ContainsAny(detail, "\r\n") || strings.HasPrefix(detail, "Disconnected") {
 			t.Errorf("%q: %v %q, want %v", c.out, got, detail, c.want)
 		}
 	}
-	if Refusing([]NodeSSH{{Key: KeyNoPassword}, {Key: KeyNotProbed}, {Key: KeyHostChanged}}) != nil {
+	unreadable := NodeSSH{Key: KeyUnreadable, Detail: "Load key \"/home/ops/.ssh/id_rsa\": Permission denied"}
+	if unreadable.Label() != "제어 노드 키 읽기 실패" || !strings.Contains(unreadable.Note(), "권한·소유자") {
+		t.Errorf("%s: %s", unreadable.Label(), unreadable.Note())
+	}
+	if Refusing([]NodeSSH{{Key: KeyNoPassword}, {Key: KeyNotProbed}, {Key: KeyHostChanged}, unreadable}) != nil {
 		t.Error("offered to send to a node that cannot take it by password")
 	}
 }
@@ -450,7 +459,7 @@ func TestAskPassHelperPlaces(t *testing.T) {
 	}
 	err = SendKeyWithPassword(context.Background(), noexec, DefaultSSHKey(), []SSHNode{{"a", "10.0.0.2", "22", "ops"}}, []byte("pw"),
 		func(NodeSSH) { t.Error("a result without a send") })
-	if err == nil || !strings.Contains(err.Error(), "SSH_ASKPASS 도우미를 실행할 수 있는 디렉터리가 없어") || !strings.Contains(err.Error(), "noexec") {
+	if err == nil || !strings.Contains(err.Error(), "SSH_ASKPASS 도우미를 안전하게 실행할 수 있는 디렉터리가 없어") || !strings.Contains(err.Error(), "noexec") {
 		t.Errorf("%v", err)
 	}
 
@@ -574,4 +583,79 @@ func TestPrepareKey(t *testing.T) {
 	if _, err := os.Stat(k.Public); err == nil {
 		t.Error("a public key was made")
 	}
+}
+
+// The key gets in and sudo does not answer in time: not ready, a label of its
+// own, and a note that does not say sudo works.
+func TestProbeNodeSudoNotInTime(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	run := func(c context.Context, dir, name string, args ...string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			cancel() // the time runs out after the key got in
+			return nil, nil
+		}
+		<-c.Done()
+		return nil, errors.New("signal: killed")
+	}
+	r := ProbeNode(ctx, run, SSHKey{Private: "/k"}, SSHNode{"n", "10.0.0.1", "22", "ops"}, "")
+	if r.Ready() || r.Key != KeyOK || r.Label() != "sudo 미확인" ||
+		strings.Contains(r.Note(), "sudo 가 됨") || !strings.Contains(r.Note(), "sudo 는 시간 안에 확인하지 못했습니다") {
+		t.Errorf("%+v label %q note %q", r, r.Label(), r.Note())
+	}
+	if table := SSHTable([]NodeSSH{r}); !strings.Contains(table, "ops@10.0.0.1  ok  미확인") {
+		t.Errorf("table:\n%s", table)
+	}
+}
+
+// The helper receives the password in its environment: a directory on its way
+// that is a symbolic link, or that others can write to, is never used.
+func TestAskPassHelperRefusesUnsafeDirectories(t *testing.T) {
+	ok := func(context.Context, string, string, ...string) ([]byte, error) { return []byte("\n"), nil }
+	cases := []struct {
+		name  string
+		setup func(home string)
+		want  string
+	}{
+		{"symlinked parent", func(home string) {
+			other := t.TempDir()
+			os.MkdirAll(filepath.Join(home, ".cache"), 0700)
+			os.Symlink(other, filepath.Join(home, ".cache", "k8s-installer-tui"))
+		}, "심볼릭 링크"},
+		{"group-writable parent", func(home string) {
+			os.MkdirAll(filepath.Join(home, ".cache", "k8s-installer-tui"), 0700)
+			os.Chmod(filepath.Join(home, ".cache", "k8s-installer-tui"), 0770)
+		}, "그룹이나 다른 사용자가 쓸 수 있습니다"},
+		{"world-writable cache", func(home string) {
+			os.MkdirAll(filepath.Join(home, ".cache"), 0700)
+			os.Chmod(filepath.Join(home, ".cache"), 0777)
+		}, "그룹이나 다른 사용자가 쓸 수 있습니다"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_RUNTIME_DIR", "")
+			c.setup(home)
+			dir, _, err := askPassHelper(context.Background(), ok)
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "안전하게") {
+				t.Errorf("used %q: %v", dir, err)
+			}
+		})
+	}
+
+	// an XDG_RUNTIME_DIR others can write to: on to ~/.cache
+	home, xdg := t.TempDir(), t.TempDir()
+	os.Chmod(xdg, 0777)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_RUNTIME_DIR", xdg)
+	dir, _, err := askPassHelper(context.Background(), ok)
+	if err != nil || filepath.Dir(dir) != filepath.Join(home, ".cache", "k8s-installer-tui") {
+		t.Errorf("%s %v", dir, err)
+	}
+	if fi, err := os.Lstat(dir); err != nil || fi.Mode().Perm() != 0700 {
+		t.Errorf("the helper's directory: %v %v", fi, err)
+	}
+	os.RemoveAll(dir)
 }

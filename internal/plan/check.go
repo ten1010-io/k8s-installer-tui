@@ -103,7 +103,11 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 	if len(unreachable) > 0 {
 		probed, warnings = probeUnreachable(parent, o, run, unreachable)
 		for _, p := range probed {
-			results[p.Node.Name] = "접속 안 됨 — " + p.Label() + ": " + p.Note()
+			label := p.Label()
+			if label == "" {
+				label = "ssh 로는 준비됨" // ansible alone fails: its note says where to look
+			}
+			results[p.Node.Name] = "접속 안 됨 — " + label + ": " + p.Note()
 		}
 	}
 	if len(results) == 0 {

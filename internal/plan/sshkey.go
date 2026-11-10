@@ -181,6 +181,9 @@ const (
 	KeyNoPassword
 	// KeyNotProbed: the probe did not run (or was cut short) in the time it had
 	KeyNotProbed
+	// KeyUnreadable: ssh could not load the key of the control node itself
+	// (permissions, owner, format): the same for every node, fixed here
+	KeyUnreadable
 )
 
 // SudoState is whether the user of a node runs sudo without a password.
@@ -218,6 +221,10 @@ func (r NodeSSH) Label() string {
 		return "비밀번호 로그인 꺼짐"
 	case r.Key == KeyNotProbed:
 		return "확인 못 함"
+	case r.Key == KeyUnreadable:
+		return "제어 노드 키 읽기 실패"
+	case r.Sudo == SudoNotChecked:
+		return "sudo 미확인"
 	case r.Sudo == SudoNeedsPassword:
 		return "sudo 비밀번호 필요"
 	}
@@ -241,6 +248,10 @@ func (r NodeSSH) Note() string {
 		fix = "제어 노드의 키를 받지 않고 비밀번호 로그인이 꺼져 있음 — 키를 직접 넣어야 함 (configure-control-node-ssh.sh 가 출력하는 안내)"
 	case r.Key == KeyNotProbed:
 		fix = "시간 안에 확인하지 못했습니다. --check-ssh 로 다시 확인하세요"
+	case r.Key == KeyUnreadable:
+		fix = "이 제어 노드의 키 (~/.ssh/id_rsa) 를 ssh 가 읽지 못함. 파일 권한·소유자를 확인하세요 (이 사용자 소유, chmod 600)"
+	case r.Sudo == SudoNotChecked:
+		fix = "제어 노드 키로 접속은 됨. sudo 는 시간 안에 확인하지 못했습니다. 다시 확인하세요 (설치 화면 c, 또는 --check-ssh)"
 	case r.Sudo == SudoNeedsPassword:
 		fix = "사용자 " + r.Node.User + " 에 비밀번호 없는 sudo (NOPASSWD) 가 필요합니다"
 	default:
@@ -297,7 +308,7 @@ func ProbeNode(ctx context.Context, run RunFunc, k SSHKey, n SSHNode, knownHosts
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	out, err := run(ctx, "", "ssh", keyArgs(k, n, knownHosts, "true")...)
-	if ctx.Err() != nil {
+	if err != nil && ctx.Err() != nil {
 		r.Key = KeyNotProbed
 		return r
 	}
@@ -306,9 +317,8 @@ func ProbeNode(ctx context.Context, run RunFunc, k SSHKey, n SSHNode, knownHosts
 		return r
 	}
 	out, err = run(ctx, "", "ssh", keyArgs(k, n, knownHosts, "sudo -n true")...)
-	if ctx.Err() != nil {
+	if err != nil && ctx.Err() != nil {
 		r.Sudo = SudoNotChecked
-		r.Detail = "sudo 를 시간 안에 확인하지 못함"
 		return r
 	}
 	if err != nil {
@@ -337,19 +347,31 @@ func classifySSH(out []byte) (KeyState, string) {
 	switch {
 	case strings.Contains(text, "REMOTE HOST IDENTIFICATION HAS CHANGED") || strings.Contains(text, "Host key verification failed"):
 		return KeyHostChanged, line("Host key verification failed", "IDENTIFICATION HAS CHANGED")
+	case strings.Contains(text, "Load key "):
+		// the key of the control node could not be read (`Load key "...":
+		// Permission denied`, `bad permissions`, `invalid format`), before any
+		// node had a say
+		return KeyUnreadable, line("Load key ")
 	case strings.Contains(text, "Too many authentication failures"):
 		return KeyRefused, line("Too many authentication failures")
-	case strings.Contains(text, "Permission denied"):
-		l := line("Permission denied")
-		// the methods sshd offers, as ssh lists them: "Permission denied (publickey,password)."
-		methods := l
-		if i := strings.LastIndex(l, "("); i >= 0 {
-			methods = l[i:]
+	}
+	// the methods sshd offers, as ssh lists them on its last word:
+	// "Permission denied (publickey,password)."
+	denied := ""
+	for _, l := range strings.Split(text, "\n") {
+		if strings.Contains(l, "Permission denied (") {
+			denied = strings.ReplaceAll(strings.TrimSpace(l), "|", "/")
 		}
+	}
+	if denied != "" {
+		methods := denied[strings.LastIndex(denied, "("):]
 		if !strings.Contains(methods, "password") && !strings.Contains(methods, "keyboard-interactive") {
-			return KeyNoPassword, l
+			return KeyNoPassword, denied
 		}
-		return KeyRefused, l
+		return KeyRefused, denied
+	}
+	if strings.Contains(text, "Permission denied") {
+		return KeyRefused, line("Permission denied")
 	}
 	return KeyUnreachable, lastLine(out)
 }
@@ -474,29 +496,51 @@ const askPassVar = "K8S_INSTALLER_TUI_SSH_PASSWORD"
 
 // askPassHelper writes the helper ssh runs for the password into a new 0700
 // directory where the user can run it: $XDG_RUNTIME_DIR when set, else
-// ~/.cache/k8s-installer-tui (/tmp is noexec on hardened sites). The helper is
-// run once, without the password, to see that it can be; the directory is
-// removed when it cannot.
+// ~/.cache/k8s-installer-tui (/tmp is noexec on hardened sites). The helper
+// gets the password in its environment, so whoever could swap it would get the
+// password: every directory on the way that this user owns is checked first
+// (ownDir), and a place that fails is skipped, never used. The helper is run
+// once, without the password, to see that it can be; the directory is removed
+// when it cannot.
 func askPassHelper(ctx context.Context, run RunFunc) (dir, helper string, err error) {
-	var bases, why []string
+	var why []string
+	var bases []func() (string, error)
 	if x := os.Getenv("XDG_RUNTIME_DIR"); x != "" {
-		bases = append(bases, x)
+		bases = append(bases, func() (string, error) { return x, ownDir(x, false) })
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		bases = append(bases, filepath.Join(home, ".cache", "k8s-installer-tui"))
+		bases = append(bases, func() (string, error) {
+			base := filepath.Join(home, ".cache", "k8s-installer-tui")
+			for _, d := range []struct {
+				path   string
+				create bool
+			}{{home, false}, {filepath.Join(home, ".cache"), true}, {base, true}} {
+				if err := ownDir(d.path, d.create); err != nil {
+					return base, err
+				}
+			}
+			return base, nil
+		})
 	}
-	for _, base := range bases {
-		if err := os.MkdirAll(base, 0700); err != nil {
-			why = append(why, err.Error())
-			continue
-		}
-		dir, err := os.MkdirTemp(base, "ssh-askpass-")
+	for _, place := range bases {
+		base, err := place()
 		if err != nil {
 			why = append(why, err.Error())
 			continue
 		}
+		dir, err := os.MkdirTemp(base, "ssh-askpass-")
+		if err == nil {
+			err = ownDir(dir, false)
+		}
+		if err != nil {
+			if dir != "" {
+				os.RemoveAll(dir)
+			}
+			why = append(why, err.Error())
+			continue
+		}
 		helper := filepath.Join(dir, "askpass.sh")
-		err = os.WriteFile(helper, []byte("#!/bin/sh\nprintf '%s\\n' \"$"+askPassVar+"\"\n"), 0700)
+		err = os.WriteFile(helper, []byte("#!/bin/sh\nprintf '%s\n' \"$"+askPassVar+"\"\n"), 0700)
 		if err == nil {
 			var out []byte
 			if out, err = run(ctx, "", helper); err != nil {
@@ -510,8 +554,34 @@ func askPassHelper(ctx context.Context, run RunFunc) (dir, helper string, err er
 		}
 		return dir, helper, nil
 	}
-	return "", "", fmt.Errorf("SSH_ASKPASS 도우미를 실행할 수 있는 디렉터리가 없어 키를 보내지 않았습니다 (noexec 마운트인지 확인): %s",
+	return "", "", fmt.Errorf("SSH_ASKPASS 도우미를 안전하게 실행할 수 있는 디렉터리가 없어 키를 보내지 않았습니다 (noexec 마운트, 소유자·권한 확인): %s",
 		strings.Join(why, "; "))
+}
+
+// ownDir checks that path is a directory of this user that nobody else can write
+// to, and no symbolic link; create: make it (0700) when it is not there.
+func ownDir(path string, create bool) error {
+	fi, err := os.Lstat(path)
+	if create && errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(path, 0700); err != nil {
+			return err
+		}
+		fi, err = os.Lstat(path)
+	}
+	switch {
+	case err != nil:
+		return err
+	case fi.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%s 가 심볼릭 링크입니다", path)
+	case !fi.IsDir():
+		return fmt.Errorf("%s 가 디렉터리가 아닙니다", path)
+	case fi.Mode().Perm()&0o022 != 0:
+		return fmt.Errorf("%s 를 그룹이나 다른 사용자가 쓸 수 있습니다 (%v)", path, fi.Mode().Perm())
+	}
+	if uid, ok := fileOwner(fi); ok && uid != os.Geteuid() {
+		return fmt.Errorf("%s 의 소유자 (uid %d) 가 이 사용자 (uid %d) 가 아닙니다", path, uid, os.Geteuid())
+	}
+	return nil
 }
 
 // SendKeyWithPassword sends the key to each node with one password, then probes
@@ -566,8 +636,11 @@ func SSHTable(rs []NodeSSH) string {
 			addr += ":" + r.Node.Port
 		}
 		key := map[KeyState]string{KeyOK: "ok", KeyRefused: "거부", KeyUnreachable: "접속불가", KeyHostChanged: "호스트키변경",
-			KeyNoPassword: "비밀번호로그인꺼짐", KeyNotProbed: "미확인"}[r.Key]
+			KeyNoPassword: "비밀번호로그인꺼짐", KeyNotProbed: "미확인", KeyUnreadable: "키읽기실패"}[r.Key]
 		sudo := map[SudoState]string{SudoNotChecked: "-", SudoOK: "ok", SudoNeedsPassword: "비밀번호필요"}[r.Sudo]
+		if r.Key == KeyOK && r.Sudo == SudoNotChecked {
+			sudo = "미확인"
+		}
 		note := ""
 		if !r.Ready() {
 			note = r.Note()

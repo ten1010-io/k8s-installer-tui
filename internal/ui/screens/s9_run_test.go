@@ -261,6 +261,9 @@ func TestRunShowsProgressAndWaitsForTheStorageClass(t *testing.T) {
 	if v := plainView(s9); s9.ex.outcome != plan.OutcomeOK || !strings.Contains(v, "✓ 설치를 마쳤습니다") || after != checks+1 {
 		t.Errorf("outcome %s, %d checks after Enter:\n%s", s9.ex.outcome, after-checks, v)
 	}
+	if v := plainView(s9); strings.Contains(v, "다시 확인합니다") {
+		t.Errorf("the word of Enter at the stop outlived it:\n%s", v)
+	}
 	if got, want := f.playbooks(), "shell setup-k8s-installer setup-control-node setup-cluster setup-network setup-cert setup-base setup-monitoring setup-aipub shell update-cluster"; got != want {
 		t.Errorf("ran %s\nwant %s", got, want)
 	}

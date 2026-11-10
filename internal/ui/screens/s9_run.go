@@ -259,6 +259,10 @@ func (s *S9Install) updateRun(msg tea.Msg) (tea.Cmd, bool) {
 // runs, waits or failed, until the operator moves it.
 func (s *S9Install) refresh() {
 	s.ex.snap = s.ex.runner.Snapshot()
+	// the word of Enter at the StorageClass stop, gone once nothing waits
+	if _, waiting := s.waitingStep(); !waiting && s.message == recheckMessage {
+		s.message = ""
+	}
 	for i, st := range s.ex.snap.Steps {
 		if st.Status == plan.StatusRunning || st.Status == plan.StatusWaiting || st.Status == plan.StatusFailed {
 			if !s.selMoved {
@@ -268,6 +272,10 @@ func (s *S9Install) refresh() {
 		}
 	}
 }
+
+// recheckMessage is shown from Enter at the StorageClass stop until the step
+// no longer waits.
+const recheckMessage = "StorageClass 를 다시 확인합니다..."
 
 // waitingStep is the Manual step that waits for the operator, if any.
 func (s *S9Install) waitingStep() (plan.StepState, bool) {
@@ -313,7 +321,7 @@ func (s *S9Install) runKey(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		if _, ok := s.waitingStep(); ok && !s.ex.done {
 			s.ex.runner.Continue()
-			s.message = "StorageClass 를 다시 확인합니다..."
+			s.message = recheckMessage
 		}
 	case "esc":
 		if s.ex.done {

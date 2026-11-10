@@ -101,6 +101,12 @@ func Build(s *state.AppState, o Options) []Step {
 		{ID: "P2", Title: "SSH·sudo 접속", Kind: Check,
 			Note: "configure-control-node-ssh.sh 안내대로 키를 등록한 뒤, 모든 노드에 비밀번호 없이 접속·sudo"},
 	}
+	if o.Existing {
+		// read only, and only offered: a new site has no apiserver to look at
+		steps = append(steps, Step{ID: "P3", Title: "apiserver 수동 설정 확인", Kind: Check,
+			Note: "첫 k8s 컨트롤 플레인 노드의 " + APIServerManifest + " 를 읽기만 함 (slurp). 손으로 넣은 감사 로그·runtime-config·" +
+				"인증 플래그가 켜진 프리셋과 맞는지. 감지된 것을 끄고 update-cluster 하면 그 기능이 사라짐"})
+	}
 	steps = append(steps,
 		Step{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",
 			Note: "모든 노드에 설치본 배포"},
@@ -183,13 +189,13 @@ func Build(s *state.AppState, o Options) []Step {
 
 // applyAll is the update-cluster.yml of an existing site: every entry of the
 // control plane as vars.yml holds it, no -e. Where the apiserver was edited by
-// hand, kubeadm writes the manifest again from the cluster
+// hand (P3 says so), kubeadm writes the manifest again from the cluster
 // configuration: the same flags, kept from then on.
 func applyAll(id string) Step {
 	return Step{ID: id, Title: "update-cluster (컨트롤 플레인 항목 적용)", Kind: Playbook,
 		Playbook: "playbooks/update-cluster.yml",
 		Note: "기존 사이트: 컨트롤 플레인 항목을 한 번에 적용 (-e 없음). 손으로 고친 kube-apiserver.yaml 은 설치기가 관리하는 같은 " +
-			"플래그로 바뀜. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"}
+			"플래그로 바뀜 (P3 로 먼저 확인). 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"}
 }
 
 // jwksSteps apply the JWKS preset where aipub-installer applies JWKS: its k8s-jwks

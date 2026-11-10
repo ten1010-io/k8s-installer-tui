@@ -35,7 +35,7 @@ const (
 )
 
 // checkDoneMsg carries the results of the checks that run ansible and take a
-// while (P2), by step id.
+// while: P2, and P3 on an existing site, by step id.
 type checkDoneMsg struct{ results map[string]plan.CheckResult }
 
 type S9Install struct {
@@ -138,9 +138,17 @@ func (s *S9Install) runChecks() tea.Cmd {
 	s.checks["P1"] = plan.CheckInstalled(s.opts)
 	s.checks["P2"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n true')"}}
 	s.checking = true
-	opts, run := s.opts, s.run
+	opts, run, st := s.opts, s.run, s.appState
+	if opts.Existing {
+		// read only: the apiserver manifest of the first control plane node
+		s.checks["P3"] = plan.CheckResult{Lines: []string{"확인 중... (ansible -m slurp " + plan.APIServerManifest + ")"}}
+	}
 	return func() tea.Msg {
-		return checkDoneMsg{map[string]plan.CheckResult{"P2": plan.CheckSSH(context.Background(), opts, run)}}
+		r := map[string]plan.CheckResult{"P2": plan.CheckSSH(context.Background(), opts, run)}
+		if opts.Existing {
+			r["P3"] = plan.CheckLegacy(context.Background(), opts, st, run)
+		}
+		return checkDoneMsg{r}
 	}
 }
 
@@ -279,7 +287,7 @@ func (s *S9Install) View() string {
 			icon = "-"
 		case checked && res.OK:
 			icon = "✓"
-		case checked && !res.OK && !(st.ID == "P2" && s.checking):
+		case checked && !res.OK && !((st.ID == "P2" || st.ID == "P3") && s.checking):
 			icon = "✗"
 		}
 		line := fmt.Sprintf("  %s %-3s %-30s", icon, st.ID, st.Title)

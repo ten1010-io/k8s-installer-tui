@@ -297,7 +297,7 @@ func TestJWKSAppliedAfterAipub(t *testing.T) {
 	}
 }
 
-// A site that existed before: once AIPub is there with the CA of
+// A site that existed before: P3 offered, and once AIPub is there with the CA of
 // JWKS in its config, one update-cluster.yml applies the control plane, no -e,
 // no A5.1. A new site keeps its sequence.
 func TestExistingSitePlan(t *testing.T) {
@@ -313,7 +313,7 @@ func TestExistingSitePlan(t *testing.T) {
 
 	o.Existing, o.AipubInstalled, o.JWKSCAReady = true, true, true
 	steps := Build(s, o)
-	if got, want := ids(steps), "P1 P2 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
+	if got, want := ids(steps), "P1 P2 P3 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
 		t.Errorf("existing site with the CA: %s, want %s", got, want)
 	}
 	for _, st := range steps {
@@ -327,12 +327,12 @@ func TestExistingSitePlan(t *testing.T) {
 
 	// the CA not there: as a new site, the CA filled after setup-aipub
 	o.JWKSCAReady = false
-	if got, want := ids(Build(s, o)), "P1 P2 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P3 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
 		t.Errorf("existing site without the CA: %s, want %s", got, want)
 	}
 	// JWKS off: nothing waits for a CA
 	s.ControlPlane.JWKS = false
-	if got, want := ids(Build(s, o)), "P1 P2 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P3 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
 		t.Errorf("existing site without JWKS: %s, want %s", got, want)
 	}
 	// AIPub not installed yet on the existing cluster: as a new site
@@ -343,7 +343,7 @@ func TestExistingSitePlan(t *testing.T) {
 	// without AIPub: the control plane applied by itself
 	s = state.DefaultState()
 	s.ControlPlane.Audit = true
-	if got, want := ids(Build(s, o)), "P1 P2 K1 K2 K3 K4 K5"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P3 K1 K2 K3 K4 K5"; got != want {
 		t.Errorf("existing site without AIPub: %s, want %s", got, want)
 	}
 }

@@ -25,8 +25,9 @@ type App struct {
 
 func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version string) *App {
 	// An existing site (its files were there before anything is saved): the
-	// cluster is there, and maybe AIPub: the plan applies the control plane in
-	// one update-cluster.yml once nothing waits for a later step
+	// cluster is there, and maybe AIPub. The control plane screen offers to read
+	// what its apiserver was given by hand, and the plan applies the control
+	// plane in one update-cluster.yml once nothing waits for a later step
 	if loaded, _ := fileio.LoadSite(paths); loaded != nil {
 		opts.Existing = true
 		_, opts.AipubInstalled = loaded.Values[schema.FileAipub]
@@ -36,6 +37,7 @@ func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version st
 	s3 := screens.NewS3Network()
 	s4 := screens.NewS4Kubernetes()
 	s4b := screens.NewS4bControlPlane()
+	s4b.SetSite(opts)
 	s5 := screens.NewS5Aipub()
 	s6 := screens.NewS6AipubLB()
 	s7 := screens.NewS6CertMode()

@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 	"github.com/ten1010-io/k8s-installer-tui/internal/validator"
@@ -33,6 +35,10 @@ import (
 //   8  : 추가할 항목 (Enter: 추가)
 //   9… : 직접 넣은 항목 (d: 삭제)
 //   last: nav slot (←/→: 이전/다음)
+//
+// Off the text inputs, on an existing site: c reads what the apiserver of the
+// first control plane node was given by hand (read only) and turns on the
+// presets that stand for it.
 
 const (
 	s4bFocusAudit = iota
@@ -85,10 +91,24 @@ type S4bControlPlane struct {
 	target   int
 	entryErr string
 
+	// the check of an existing site (c)
+	opts      plan.Options
+	run       plan.RunFunc
+	site      *state.AppState // the state the check reads the nodes of
+	legacy    *plan.Legacy
+	legacyErr string
+	checking  bool
+
 	focusIdx int
 	navIdx   int
 	width    int
 	height   int
+}
+
+// legacyDoneMsg carries what the check of the apiserver of an existing site read.
+type legacyDoneMsg struct {
+	legacy *plan.Legacy
+	err    error
 }
 
 func NewS4bControlPlane() *S4bControlPlane {
@@ -103,8 +123,15 @@ func NewS4bControlPlane() *S4bControlPlane {
 	caFile.CharLimit = 256
 	entry := textinput.New()
 	entry.CharLimit = 256
-	return &S4bControlPlane{issuer: issuer, caFile: caFile, url: url, entry: entry}
+	return &S4bControlPlane{issuer: issuer, caFile: caFile, url: url, entry: entry, run: plan.ExecRun}
 }
+
+// SetSite tells the screen where k8s-installer is and whether the site existed
+// before: only then is there an apiserver to read.
+func (s *S4bControlPlane) SetSite(o plan.Options) { s.opts = o }
+
+// SetRunner replaces how the check runs commands (tests).
+func (s *S4bControlPlane) SetRunner(r plan.RunFunc) { s.run = r }
 
 func (s *S4bControlPlane) Title() string { return "컨트롤플레인" }
 func (s *S4bControlPlane) SetSize(w, h int) {
@@ -148,6 +175,7 @@ func (s *S4bControlPlane) SyncFromState(st *state.AppState) {
 	s.url.SetValue(s.cp.WebhookURL)
 	s.entry.SetValue("")
 	s.entryErr = ""
+	s.site = st
 	s.focusIdx = 0
 	s.navIdx = 0
 	s.syncFocus()
@@ -174,6 +202,36 @@ func (s *S4bControlPlane) ca() fileio.CA {
 	cp := s.cp
 	cp.JWKSCAFile = s.caOverride()
 	return fileio.LookupCA(&state.AppState{ControlPlane: cp})
+}
+
+// checkLegacy reads the apiserver of the first control plane node, read only.
+func (s *S4bControlPlane) checkLegacy() tea.Cmd {
+	if !s.opts.Existing || s.checking || s.site == nil {
+		return nil
+	}
+	s.checking, s.legacy, s.legacyErr = true, nil, ""
+	o, run, st := s.opts, s.run, *s.site
+	return func() tea.Msg {
+		l, err := plan.ReadLegacy(context.Background(), o, &st, run)
+		return legacyDoneMsg{l, err}
+	}
+}
+
+// applyLegacy turns on the presets the node runs with, and fills the webhook URL
+// and the issuer from its files where they are not set: what update-cluster.yml
+// then applies is what the node runs with now.
+func (s *S4bControlPlane) applyLegacy(l *plan.Legacy) {
+	for _, p := range state.Presets {
+		if l.Presets[p.ID] {
+			s.cp.Set(p.ID, true)
+		}
+	}
+	if l.WebhookURL != "" && strings.TrimSpace(s.url.Value()) == "" {
+		s.url.SetValue(l.WebhookURL)
+	}
+	if v := strings.TrimSpace(s.issuer.Value()); l.Issuer != "" && (v == "" || v == s.derived) {
+		s.issuer.SetValue(l.Issuer)
+	}
 }
 
 // issuerOverride is the issuer typed in, empty when it is the derived one: that
@@ -353,10 +411,24 @@ func contains(l []string, x string) bool {
 }
 
 func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := msg.(legacyDoneMsg); ok {
+		s.checking = false
+		if msg.err != nil {
+			s.legacyErr = msg.err.Error()
+			return s, nil
+		}
+		s.legacy = msg.legacy
+		s.applyLegacy(msg.legacy)
+		return s, nil
+	}
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		nav := s.navFocus()
 		inInput := s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusIssuer || s.focusIdx == s4bFocusCA || s.focusIdx == s4bFocusEntry
 		switch msg.String() {
+		case "c":
+			if !inInput && s.opts.Existing {
+				return s, s.checkLegacy()
+			}
 		case "up":
 			if s.focusIdx > 0 {
 				s.focusIdx--
@@ -438,6 +510,17 @@ func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return s, cmd
 }
 
+// detected marks a preset the check found on the node, and warns when it is off.
+func (s *S4bControlPlane) detected(id string) string {
+	if s.legacy == nil || !s.legacy.Presets[id] {
+		return ""
+	}
+	if !s.cp.On(id) {
+		return "  ⚠ 노드에서 감지됨 — 끄면 update-cluster 뒤 이 기능이 사라짐"
+	}
+	return "  (노드에서 감지됨)"
+}
+
 // caView says whether the authentication config of JWKS is written now.
 func (s *S4bControlPlane) caView() string {
 	if !s.cp.JWKS {
@@ -460,6 +543,40 @@ func (s *S4bControlPlane) caView() string {
 	return strings.Join(out, "\n") + "\n"
 }
 
+// legacyView is what the check of an existing site found.
+func (s *S4bControlPlane) legacyView() string {
+	var b strings.Builder
+	switch {
+	case s.checking:
+		b.WriteString(styles.StyleMuted.Render("확인 중... (ansible -m slurp "+plan.APIServerManifest+")") + "\n")
+	case s.legacyErr != "":
+		b.WriteString(styles.StyleError.Render("✗ apiserver 설정을 읽지 못했습니다: "+s.legacyErr) + "\n")
+	case s.legacy != nil && !s.legacy.Any():
+		b.WriteString(styles.StyleSuccess.Render("✓ "+s.legacy.Node+": 손으로 넣은 AIPub apiserver 설정 없음") + "\n")
+	case s.legacy != nil:
+		l := s.legacy
+		b.WriteString(styles.StyleWarning.Render("⚠ "+l.Node+" 의 kube-apiserver.yaml 에 손으로 넣은 설정이 있습니다. 맞는 프리셋을 켰습니다:") + "\n")
+		for _, f := range l.Found {
+			b.WriteString(styles.StyleWarning.Render("   • "+f) + "\n")
+		}
+		for _, d := range l.Differs {
+			b.WriteString(styles.StyleMuted.Render("   값이 다름 (update-cluster 뒤 프리셋 값): "+d) + "\n")
+		}
+		if l.WebhookURL != "" {
+			b.WriteString(styles.StyleMuted.Render("   웹훅 URL 을 노드의 kubeconfig 에서 가져옴") + "\n")
+		}
+		if l.Issuer != "" {
+			b.WriteString(styles.StyleMuted.Render("   issuer 를 노드의 authentication-config.yaml 에서 가져옴") + "\n")
+		}
+		for _, r := range l.Refused {
+			b.WriteString(styles.StyleWarning.Render("   가져오지 않음: "+r) + "\n")
+		}
+		b.WriteString(styles.StyleWarning.Render("   update-cluster 가 손으로 고친 것을 설치기가 관리하는 같은 플래그로 바꿉니다 (이제 업그레이드·노드 변경에도 유지)") + "\n")
+		b.WriteString(styles.StyleWarning.Render("   감지된 프리셋을 끄면 update-cluster 뒤 그 기능이 클러스터에서 사라집니다") + "\n")
+	}
+	return b.String()
+}
+
 func checkbox(on bool) string {
 	if on {
 		return "[x]"
@@ -474,15 +591,19 @@ func (s *S4bControlPlane) View() string {
 	b.WriteString(styles.StyleTitle.Render("컨트롤플레인") + "\n")
 	b.WriteString(styles.StyleMuted.Render("kube-apiserver 등에 더할 인자·볼륨·파일 (vars.yml). kubeadm 이 클러스터 설정으로 보관해 노드 추가·업그레이드에도") + "\n")
 	b.WriteString(styles.StyleMuted.Render("다시 적용합니다. 바꾸면 update-cluster.yml 이 컨트롤 플레인 노드를 한 대씩 재시작합니다. 매니페스트를 손으로 고치지 마세요") + "\n")
+	if s.opts.Existing {
+		b.WriteString(styles.StyleMuted.Render("기존 사이트: c 로 첫 컨트롤 플레인 노드의 kube-apiserver.yaml 에 손으로 넣은 설정을 읽습니다 (읽기만 함, 입력 칸 밖에서)") + "\n")
+	}
+	b.WriteString(s.legacyView())
 	b.WriteString("\n")
 
 	b.WriteString(styles.StylePrimary.Render("프리셋") + styles.StyleMuted.Render("  Space/Enter: 켜기/끄기") + "\n")
-	b.WriteString(RenderRow(checkbox(s.cp.Audit)+" AIPub 감사 로그", f == s4bFocusAudit, w) + "\n")
+	b.WriteString(RenderRow(checkbox(s.cp.Audit)+" AIPub 감사 로그"+s.detected(state.PresetAudit), f == s4bFocusAudit, w) + "\n")
 	b.WriteString(styles.StyleMuted.Render("    audit-policy-file, audit-log-path=/var/log/aipub/usage/audit.log, 30일·30개·100MB. 첫 설치부터") + "\n")
 	b.WriteString(styles.StyleMuted.Render("    정책 파일 ansible/files/aipub/audit-policy.yaml 은 사이트가 둡니다 (AIPub 모니터링/python 팀 제공)") + "\n")
-	b.WriteString(RenderRow(checkbox(s.cp.RuntimeConfig)+" runtime-config (admissionregistration.k8s.io/v1beta1=true)", f == s4bFocusRuntime, w) + "\n")
+	b.WriteString(RenderRow(checkbox(s.cp.RuntimeConfig)+" runtime-config (admissionregistration.k8s.io/v1beta1=true)"+s.detected(state.PresetRuntimeConfig), f == s4bFocusRuntime, w) + "\n")
 	b.WriteString(styles.StyleMuted.Render("    첫 설치부터") + "\n")
-	b.WriteString(RenderRow(checkbox(s.cp.JWKS)+" AIPub 인증 (JWKS) (authentication-config, 새 사이트 기본)", f == s4bFocusJWKS, w) + "\n")
+	b.WriteString(RenderRow(checkbox(s.cp.JWKS)+" AIPub 인증 (JWKS) (authentication-config, 새 사이트 기본)"+s.detected(state.PresetJWKS), f == s4bFocusJWKS, w) + "\n")
 	b.WriteString(styles.StyleMuted.Render("    AIPub 설치 시에만 적용. aipub-installer k8s-jwks 와 같은 플래그·볼륨·파일을 kubeadm 이 보관하게 함") + "\n")
 	b.WriteString(styles.StyleMuted.Render("    새 사이트: issuer 는 AIPub 백엔드라 클러스터 생성(K3)에서는 빼고, A5 setup-aipub 뒤 A5.1 이 CA 를 넣어") + "\n")
 	b.WriteString(styles.StyleMuted.Render("    파일을 만들고 A5.2 update-cluster 로 적용합니다 (노드 한 대씩 재시작)") + "\n")
@@ -491,7 +612,7 @@ func (s *S4bControlPlane) View() string {
 	b.WriteString(RenderSectionHeader("  CA 파일", f == s4bFocusCA) + "  " + s.caFile.View() + "\n")
 	b.WriteString(styles.StyleMuted.Render("    setup-cert 가 두는 공개 CA. 있을 때만 ansible/files/"+state.JWKSConfigFile+" 를 만듭니다 (CA 인라인, 평문 복사)") + "\n")
 	b.WriteString(s.caView())
-	b.WriteString(RenderRow(checkbox(s.cp.Webhook)+" AIPub 인증 웹훅 (레거시 — JWKS 로 옮기기 전 사이트)", f == s4bFocusWebhook, w) + "\n")
+	b.WriteString(RenderRow(checkbox(s.cp.Webhook)+" AIPub 인증 웹훅 (레거시 — JWKS 로 옮기기 전 사이트)"+s.detected(state.PresetWebhook), f == s4bFocusWebhook, w) + "\n")
 	b.WriteString(styles.StyleMuted.Render("    authentication-token-webhook, cache-ttl 2m. 웹훅을 쓰던 사이트만. JWKS 와 함께 켤 수 있음") + "\n")
 	b.WriteString(styles.StyleMuted.Render("    (옮기는 동안 둘 다 돌리고, 확인 뒤 aipub-installer 의") + "\n")
 	b.WriteString(styles.StyleMuted.Render("    scripts/aipub/migration/jwks-auth/migrate-webhook-to-jwks.sh 로 웹훅을 뺀 다음 여기서도 끔)") + "\n")

@@ -278,14 +278,19 @@ func (s *S3Network) View() string {
 	var b strings.Builder
 	b.WriteString(styles.StyleTitle.Render("네트워크 설정") + "\n\n")
 
+	// the focused part stays in sight on a low screen
+	fs := focusSpan{b: &b}
+	fs.mark(s.focusIdx == s3FocusSubnet)
 	s.renderListSection(&b, "내부 서브넷 (CIDR)", s.subnets, s.focusIdx == s3FocusSubnet, editSubnet)
 
 	haStr := styles.RadioOff() + " 비활성"
 	if s.haMode {
 		haStr = styles.RadioOn() + " 활성"
 	}
+	fs.mark(s.focusIdx == s3FocusHaMode)
 	b.WriteString(RenderSectionHeader("Control Plane HA 모드", s.focusIdx == s3FocusHaMode) + "  " + haStr + "\n\n")
 
+	fs.mark(s.focusIdx == s3FocusVIP)
 	b.WriteString(RenderSectionHeader("HA VIP", s.focusIdx == s3FocusVIP) + "\n")
 	b.WriteString("    " + s.vip.View() + "\n")
 	if !s.haMode {
@@ -297,15 +302,19 @@ func (s *S3Network) View() string {
 	if s.dnssec {
 		dnssecStr = styles.RadioOn() + " 활성"
 	}
+	fs.mark(s.focusIdx == s3FocusDNSSEC)
 	b.WriteString(RenderSectionHeader("DNSSEC 검증", s.focusIdx == s3FocusDNSSEC) + "  " + dnssecStr + "\n\n")
 
+	fs.mark(s.focusIdx == s3FocusDNS)
 	s.renderListSection(&b, "DNS upstream 서버", s.dnsServers, s.focusIdx == s3FocusDNS, editDNS)
+	fs.mark(s.focusIdx == s3FocusNTP)
 	s.renderListSection(&b, "NTP upstream 서버", s.ntpServers, s.focusIdx == s3FocusNTP, editNTP)
 
 	internalDNSStr := styles.RadioOff() + " 비활성"
 	if s.internalDNS {
 		internalDNSStr = styles.RadioOn() + " 활성"
 	}
+	fs.mark(s.focusIdx == s3FocusInternalDNS)
 	b.WriteString(RenderSectionHeader("내부 DNS 서버 활성화 여부", s.focusIdx == s3FocusInternalDNS) + "  " + internalDNSStr + "\n")
 	if s.internalDNS {
 		b.WriteString(styles.StyleMuted.Render("    활성화 시 인그레스 도메인/VIP(4~5단계에서 입력)가 내부 DNS 존에 자동 반영됩니다") + "\n")
@@ -314,7 +323,9 @@ func (s *S3Network) View() string {
 
 	prevFocused := s.focusIdx == s3FocusNav && s.navIdx == 0
 	nextFocused := s.focusIdx == s3FocusNav && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString("\n")
+	fs.mark(s.focusIdx == s3FocusNav)
+	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
-	return b.String()
+	return fs.fit(s.width, s.height)
 }

@@ -309,7 +309,10 @@ func (s *S1Nodes) viewList() string {
 	if len(s.nodes) == 0 {
 		b.WriteString(styles.StyleMuted.Render("  (노드 없음)") + "\n")
 	}
+	// the focused row stays in sight on a low screen
+	fs := focusSpan{b: &b}
 	for i, n := range s.nodes {
+		fs.mark(s.focusIdx == i)
 		port := n.AnsiblePort
 		if port == "" {
 			port = "22"
@@ -321,16 +324,20 @@ func (s *S1Nodes) viewList() string {
 		b.WriteString(renderNodeRow(n.Name, n.AnsibleHost, port, user, colW, s.focusIdx == i) + "\n")
 	}
 
+	fs.mark(false)
 	b.WriteString("\n")
 	addFocused := s.focusIdx == len(s.nodes)
+	fs.mark(addFocused)
 	b.WriteString("  " + RenderButton("추가", addFocused) +
 		styles.StyleMuted.Render("  (a: 추가  d: 삭제  Enter: 편집)") + "\n")
 
 	prevFocused := s.focusIdx == s.navFocus() && s.navIdx == 0
 	nextFocused := s.focusIdx == s.navFocus() && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString("\n")
+	fs.mark(s.focusIdx == s.navFocus())
+	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
-	return b.String()
+	return fs.fit(s.width, s.height)
 }
 
 func (s *S1Nodes) viewForm() string {

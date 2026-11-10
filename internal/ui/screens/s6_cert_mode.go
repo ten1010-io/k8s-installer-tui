@@ -105,8 +105,11 @@ func (s *S6CertMode) View() string {
 	b.WriteString(styles.StyleTitle.Render("인증서 모드 선택") + "\n")
 	b.WriteString(styles.StyleMuted.Render("aipub_cert_mode: "+short("aipub_cert_mode")) + "\n\n")
 
+	// the focused option stays in sight on a low screen
+	fs := focusSpan{b: &b}
 	for i, m := range certModes {
 		optFocused := s.focusIdx == i
+		fs.mark(optFocused)
 		radio := styles.RadioOff()
 		labelStyle := styles.StyleMuted
 		if i == s.selected {
@@ -120,7 +123,9 @@ func (s *S6CertMode) View() string {
 
 	prevFocused := s.focusIdx == len(certModes) && s.navIdx == 0
 	nextFocused := s.focusIdx == len(certModes) && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString("\n")
+	fs.mark(s.focusIdx == len(certModes))
+	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
-	return b.String()
+	return fs.fit(s.width, s.height)
 }

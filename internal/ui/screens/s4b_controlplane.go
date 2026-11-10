@@ -266,7 +266,6 @@ func (s *S4bControlPlane) issuerOverride() string {
 // from a zone, are checked on the preview, once AIPub is chosen.
 func (s *S4bControlPlane) Validate() []string {
 	if strings.TrimSpace(s.entry.Value()) != "" {
-		s.advanced = true // the input the message names is shown
 		return []string{"추가할 항목에 입력한 것이 있습니다. Enter 로 추가하거나 지워주세요"}
 	}
 	cp := copyControlPlane(s.cp)
@@ -282,6 +281,14 @@ func (s *S4bControlPlane) Validate() []string {
 		msgs = append(msgs, "JWKS CA 파일: "+ca.Err.Error())
 	}
 	return msgs
+}
+
+// RevealErrors expands 고급 when the refusal names text left in its input, so
+// the input is in sight.
+func (s *S4bControlPlane) RevealErrors() {
+	if strings.TrimSpace(s.entry.Value()) != "" {
+		s.advanced = true
+	}
 }
 
 func (s *S4bControlPlane) Init() tea.Cmd { return nil }
@@ -839,58 +846,5 @@ func (s *S4bControlPlane) View() string {
 	b.WriteString("\n")
 	at(s4bStop{kind: s4bNav})
 	b.WriteString(RenderNavButtons("이전", "다음", s.focus.kind == s4bNav && s.navIdx == 0, s.focus.kind == s4bNav && s.navIdx == 1, w))
-	return s.fit(b.String(), focusLine, focusEnd)
-}
-
-// fit cuts a view taller than the screen to the lines around the focused row:
-// the row, its status and help (up to end) and a few lines under it, and says
-// that there is more. Help taller than the screen keeps the row at the top; a
-// screen too low for the marks has none. The focused row is never cut.
-func (s *S4bControlPlane) fit(view string, focusLine, end int) string {
-	lines := strings.Split(view, "\n")
-	h := s.height
-	if h <= 0 || len(lines) <= h {
-		return view
-	}
-	marks := h >= 3
-	room := h // the lines of the view shown whatever the marks
-	if marks {
-		room = h - 2
-	}
-	last := focusLine + min(4, h/2)
-	if end-1 > last {
-		last = end - 1
-	}
-	start := last - room + 1
-	if start > focusLine {
-		start = focusLine
-	}
-	if start > len(lines)-room {
-		start = len(lines) - room
-	}
-	if start < 0 {
-		start = 0
-	}
-	// a mark only where there is more; a line not taken by one shows the view
-	top := marks && start > 0
-	stop := start + h
-	if top {
-		stop--
-	}
-	if stop > len(lines) {
-		stop = len(lines)
-	}
-	bottom := marks && stop < len(lines)
-	if bottom {
-		stop--
-	}
-	var win []string
-	if top {
-		win = append(win, styles.StyleMuted.Render("  ↑ 위에 더 있음"))
-	}
-	win = append(win, lines[start:stop]...)
-	if bottom {
-		win = append(win, styles.StyleMuted.Render("  ↓ 아래에 더 있음"))
-	}
-	return strings.Join(win, "\n")
+	return FitView(b.String(), focusLine, focusEnd, w, s.height)
 }

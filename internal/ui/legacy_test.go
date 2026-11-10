@@ -172,7 +172,8 @@ func TestWizardLegacySite(t *testing.T) {
 	// the plan: P3, one update-cluster for the control plane, no A5.1
 	d.keys("enter")
 	d.at("9.설치")
-	d.keys("down", "down") // off the archive path
+	d.send(tea.WindowSizeMsg{Width: 110, Height: 200}) // the whole plan in sight, not scrolled
+	d.keys("down", "down")                             // off the archive path
 	d.keys("c")
 	t.Logf("S9:\n%s", d.screen())
 	for _, want := range []string{"P3  apiserver 수동 설정 확인", "A2.5 update-cluster (컨트롤 플레인 항목 적용)",

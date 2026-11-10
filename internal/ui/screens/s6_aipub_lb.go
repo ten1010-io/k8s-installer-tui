@@ -272,13 +272,18 @@ func (s *S6AipubLB) View() string {
 	if f == s6FocusMode {
 		modeHint = styles.StyleMuted.Render("  ← → 또는 Enter")
 	}
+	// the focused part stays in sight on a low screen
+	fs := focusSpan{b: &b}
+	fs.mark(f == s6FocusMode)
 	b.WriteString(RenderSectionHeader("인그레스 모드", f == s6FocusMode) + modeHint + "\n")
 	b.WriteString("    " + mode1Radio + styles.StyleMuted.Render("  — Ingress/Gateway 개별 VIP") + "\n")
 	b.WriteString("    " + mode2Radio + styles.StyleMuted.Render("  — Ingress/Gateway 동일 VIP") + "\n\n")
 
+	fs.mark(f == s6FocusIngressLBName)
 	b.WriteString(RenderSectionHeader("Ingress LB명", f == s6FocusIngressLBName) + "\n")
 	b.WriteString("    " + s.ingressLBName.View() + "\n\n")
 
+	fs.mark(f == s6FocusIngressVIP)
 	if s.mode == 2 {
 		b.WriteString(RenderSectionHeader("Ingress/Gateway 공유 VIP", f == s6FocusIngressVIP) + "\n")
 	} else {
@@ -287,19 +292,24 @@ func (s *S6AipubLB) View() string {
 	b.WriteString("    " + s.ingressVIP.View() + "\n\n")
 
 	if s.mode == 1 {
+		fs.mark(f == s6FocusGatewayLBName)
 		b.WriteString(RenderSectionHeader("Gateway LB명", f == s6FocusGatewayLBName) + "\n")
 		b.WriteString("    " + s.gatewayLBName.View() + "\n\n")
 
+		fs.mark(f == s6FocusGatewayVIP)
 		b.WriteString(RenderSectionHeader("Gateway VIP", f == s6FocusGatewayVIP) + "\n")
 		b.WriteString("    " + s.gatewayVIP.View() + "\n\n")
 	}
 
+	fs.mark(f == s6FocusHostPort)
 	b.WriteString(RenderSectionHeader("Host Network Port", f == s6FocusHostPort) +
 		"  " + s.hostPort.View() + "\n\n")
 
 	prevFocused := f == s6FocusNav && s.navIdx == 0
 	nextFocused := f == s6FocusNav && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString("\n")
+	fs.mark(f == s6FocusNav)
+	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
-	return b.String()
+	return fs.fit(s.width, s.height)
 }

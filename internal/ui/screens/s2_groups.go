@@ -174,16 +174,22 @@ func (s *S2Groups) View() string {
 	b.WriteString(header + "\n")
 	b.WriteString(strings.Repeat("─", s.width) + "\n")
 
+	// the focused row stays in sight on a low screen
+	fs := focusSpan{b: &b}
 	for rowIdx, r := range s.rows {
 		isSelectedRow := !s.focusNav && rowIdx == s.curRow
+		fs.mark(isSelectedRow)
 		b.WriteString(renderGroupRow(r, colW, isSelectedRow, s.curCol) + "\n")
 	}
 
 	prevFocused := s.focusNav && s.navIdx == 0
 	nextFocused := s.focusNav && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	fs.mark(false)
+	b.WriteString("\n")
+	fs.mark(s.focusNav)
+	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
-	return b.String()
+	return fs.fit(s.width, s.height)
 }
 
 func renderGroupRow(r groupRow, colW []int, selected bool, curCol int) string {

@@ -391,6 +391,8 @@ func (s *S5Aipub) View() string {
 	b.WriteString(styles.StyleTitle.Render("AIPub 설정") + "\n\n")
 
 	f := s.focusIdx
+	// the focused part stays in sight on a low screen
+	fs := focusSpan{b: &b}
 
 	// AIPub 설치 여부
 	enabledStr := styles.RadioOff() + " 미설치"
@@ -401,16 +403,19 @@ func (s *S5Aipub) View() string {
 	if f == s5FocusEnabled {
 		hint = styles.StyleMuted.Render("  Enter")
 	}
+	fs.mark(f == s5FocusEnabled)
 	b.WriteString(RenderSectionHeader("AIPub 설치", f == s5FocusEnabled) + hint + "\n")
 	b.WriteString("    " + enabledStr + "\n\n")
 
 	if !s.enabled {
 		prevFocused := f == s5FocusNav && s.navIdx == 0
 		nextFocused := f == s5FocusNav && s.navIdx == 1
+		fs.mark(f == s5FocusNav)
 		b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
-		return b.String()
+		return fs.fit(s.width, s.height)
 	}
 
+	fs.mark(f == s5FocusIngressZone)
 	b.WriteString(RenderSectionHeader("인그레스 도메인", f == s5FocusIngressZone) +
 		"  " + s.ingressZone.View() + "\n")
 
@@ -418,9 +423,11 @@ func (s *S5Aipub) View() string {
 	if s.haMode {
 		haStr = styles.RadioOn() + " 활성"
 	}
+	fs.mark(f == s5FocusHaMode)
 	b.WriteString(RenderSectionHeader("AIPub HA 모드", f == s5FocusHaMode) +
 		"  " + haStr + "\n")
 
+	fs.mark(f == s5FocusStorageClass)
 	if s.haMode {
 		b.WriteString(RenderSectionHeader("StorageClass", f == s5FocusStorageClass) +
 			"  " + s.storageClass.View() + styles.StyleMuted.Render("  "+short("aipub_ha_mode_storage_class")) + "\n\n")
@@ -430,6 +437,7 @@ func (s *S5Aipub) View() string {
 		b.WriteString(styles.StyleMuted.Render("    HA가 아니면 Harbor 데이터가 이 노드의 디렉터리에 저장됩니다. 노드를 잃으면 데이터도 잃습니다") + "\n\n")
 	}
 
+	fs.mark(f == s5FocusCpNodes)
 	b.WriteString(RenderSectionHeader("AIPub CP 노드", f == s5FocusCpNodes) + "\n")
 	for i, n := range s.k8sNodeNames {
 		nodeFocused := f == s5FocusCpNodes && s.cpNodeCursor == i
@@ -446,32 +454,37 @@ func (s *S5Aipub) View() string {
 	b.WriteString("\n")
 
 	b.WriteString(styles.StylePrimary.Render("Harbor 설정") + "\n")
-	b.WriteString(RenderSectionHeader("서브도메인", f == s5FocusHarborSubdomain) + "  " + s.harborSubdomain.View() + "\n")
-	b.WriteString(RenderSectionHeader("레플리카 수", f == s5FocusHarborReplicas) + "  " + s.harborReplicas.View() + "\n")
-	b.WriteString(RenderSectionHeader("레지스트리 스토리지", f == s5FocusHarborRegistry) + "  " + s.harborRegistry.View() + "\n")
-	b.WriteString(RenderSectionHeader("PostgreSQL 스토리지", f == s5FocusHarborPg) + "  " + s.harborPg.View() + "\n")
-	b.WriteString(RenderSectionHeader("Redis 스토리지", f == s5FocusHarborRedis) + "  " + s.harborRedis.View() + "\n")
-	b.WriteString(RenderSectionHeader("Trivy 스토리지", f == s5FocusHarborTrivy) + "  " + s.harborTrivy.View() + "\n")
-
-	b.WriteString("\n" + styles.StylePrimary.Render("에디션과 배포 도구") + "\n")
-	b.WriteString(RenderSectionHeader("에디션", f == s5FocusEdition) + "  " +
-		choiceView("aipub_app_edition", s.edition) + styles.StyleMuted.Render("  lite 는 aipub-nav 를 뺍니다") + "\n")
-	b.WriteString(RenderSectionHeader("AIPub 배포 도구", f == s5FocusAppTool) + "  " +
-		choiceView("aipub_app_deploy_tool", s.appTool) + "\n")
-	if s.appTool == helmfileTool {
-		b.WriteString(RenderSectionHeader("  helmfile 경로", f == s5FocusAppBin) + "  " + s.appBin.View() + "\n")
+	row := func(idx int, line string) {
+		fs.mark(f == idx)
+		b.WriteString(line + "\n")
 	}
-	b.WriteString(RenderSectionHeader("모니터링 배포 도구", f == s5FocusMonTool) + "  " +
-		choiceView("aipub_monitoring_deploy_tool", s.monTool) + "\n")
+	row(s5FocusHarborSubdomain, RenderSectionHeader("서브도메인", f == s5FocusHarborSubdomain)+"  "+s.harborSubdomain.View())
+	row(s5FocusHarborReplicas, RenderSectionHeader("레플리카 수", f == s5FocusHarborReplicas)+"  "+s.harborReplicas.View())
+	row(s5FocusHarborRegistry, RenderSectionHeader("레지스트리 스토리지", f == s5FocusHarborRegistry)+"  "+s.harborRegistry.View())
+	row(s5FocusHarborPg, RenderSectionHeader("PostgreSQL 스토리지", f == s5FocusHarborPg)+"  "+s.harborPg.View())
+	row(s5FocusHarborRedis, RenderSectionHeader("Redis 스토리지", f == s5FocusHarborRedis)+"  "+s.harborRedis.View())
+	row(s5FocusHarborTrivy, RenderSectionHeader("Trivy 스토리지", f == s5FocusHarborTrivy)+"  "+s.harborTrivy.View())
+
+	fs.mark(false)
+	b.WriteString("\n" + styles.StylePrimary.Render("에디션과 배포 도구") + "\n")
+	row(s5FocusEdition, RenderSectionHeader("에디션", f == s5FocusEdition)+"  "+
+		choiceView("aipub_app_edition", s.edition)+styles.StyleMuted.Render("  lite 는 aipub-nav 를 뺍니다"))
+	row(s5FocusAppTool, RenderSectionHeader("AIPub 배포 도구", f == s5FocusAppTool)+"  "+
+		choiceView("aipub_app_deploy_tool", s.appTool))
+	if s.appTool == helmfileTool {
+		row(s5FocusAppBin, RenderSectionHeader("  helmfile 경로", f == s5FocusAppBin)+"  "+s.appBin.View())
+	}
+	row(s5FocusMonTool, RenderSectionHeader("모니터링 배포 도구", f == s5FocusMonTool)+"  "+
+		choiceView("aipub_monitoring_deploy_tool", s.monTool))
 	if s.monTool == helmfileTool {
-		b.WriteString(RenderSectionHeader("  helmfile 경로", f == s5FocusMonHelmfileBin) + "  " + s.monHelmfileBin.View() + "\n")
-		b.WriteString(RenderSectionHeader("  kustomize 경로", f == s5FocusMonKustomizeBin) + "  " + s.monKustomizeBin.View() + "\n")
-		b.WriteString(RenderSectionHeader("  helm 경로", f == s5FocusMonHelmBin) + "  " + s.monHelmBin.View() + "\n")
+		row(s5FocusMonHelmfileBin, RenderSectionHeader("  helmfile 경로", f == s5FocusMonHelmfileBin)+"  "+s.monHelmfileBin.View())
+		row(s5FocusMonKustomizeBin, RenderSectionHeader("  kustomize 경로", f == s5FocusMonKustomizeBin)+"  "+s.monKustomizeBin.View())
+		row(s5FocusMonHelmBin, RenderSectionHeader("  helm 경로", f == s5FocusMonHelmBin)+"  "+s.monHelmBin.View())
 		dry := styles.RadioOff() + " 실제 배포"
 		if s.monDryRun {
 			dry = styles.RadioOn() + " dry-run (클러스터에 쓰지 않음)"
 		}
-		b.WriteString(RenderSectionHeader("  helmfile dry-run", f == s5FocusMonDryRun) + "  " + dry + "\n")
+		row(s5FocusMonDryRun, RenderSectionHeader("  helmfile dry-run", f == s5FocusMonDryRun)+"  "+dry)
 	}
 	if s.appTool == helmfileTool || s.monTool == helmfileTool {
 		b.WriteString(styles.StyleMuted.Render("    helmfile 은 패키지가 aipub-bin 을 실었을 때 설치기가 깔아 줍니다. 비워 두면 그 경로를 씁니다") + "\n")
@@ -479,9 +492,11 @@ func (s *S5Aipub) View() string {
 
 	prevFocused := f == s5FocusNav && s.navIdx == 0
 	nextFocused := f == s5FocusNav && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString("\n")
+	fs.mark(f == s5FocusNav)
+	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
 
-	return b.String()
+	return fs.fit(s.width, s.height)
 }
 
 // helmfileTool is the value of a deploy tool that asks for the helmfile binaries.

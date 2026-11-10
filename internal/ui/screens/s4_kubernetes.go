@@ -169,18 +169,27 @@ func (s *S4Kubernetes) View() string {
 	b.WriteString(styles.StyleMuted.Render("k8s-installer가 클러스터를 만들 때 쓰는 값입니다 (group_vars/all/vars.yml).") + "\n\n")
 
 	f := s.focusIdx
+	// the focused part stays in sight on a low screen
+	fs := focusSpan{b: &b}
+	fs.mark(f == s4FocusMinor)
 	b.WriteString(RenderSectionHeader("마이너 버전", f == s4FocusMinor) + "  " + s.minorVersion.View() +
 		styles.StyleMuted.Render("  "+short("k8s_minor_version")) + "\n\n")
+	fs.mark(f == s4FocusPodSubnet)
 	b.WriteString(RenderSectionHeader("파드 서브넷", f == s4FocusPodSubnet) + "  " + s.podSubnet.View() + "\n")
+	fs.mark(f == s4FocusServiceSubnet)
 	b.WriteString(RenderSectionHeader("서비스 서브넷", f == s4FocusServiceSubnet) + "  " + s.serviceSubnet.View() + "\n")
 	b.WriteString(styles.StyleMuted.Render("    노드·서비스가 쓰는 망과 겹치면 안 됩니다. 클러스터를 만든 뒤에는 바꿀 수 없습니다") + "\n\n")
+	fs.mark(f == s4FocusCert)
 	b.WriteString(RenderSectionHeader("인증서 유효기간", f == s4FocusCert) + "  " + s.certValidity.View() +
 		styles.StyleMuted.Render("  (예: 26280h = 3년)") + "\n\n")
 
+	fs.mark(false)
 	b.WriteString(styles.StyleMuted.Render(short("k8s_kube_proxy_enabled")+". 5단계에서 정해집니다") + "\n")
 
 	prevFocused := f == s4FocusNav && s.navIdx == 0
 	nextFocused := f == s4FocusNav && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
-	return b.String()
+	b.WriteString("\n")
+	fs.mark(f == s4FocusNav)
+	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	return fs.fit(s.width, s.height)
 }

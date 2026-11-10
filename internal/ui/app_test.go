@@ -253,6 +253,7 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	// 9.설치: the plan of what was saved
 	d.keys("enter")
 	d.at("9.설치")
+	d.send(tea.WindowSizeMsg{Width: 110, Height: 200}) // the whole plan in sight, not scrolled
 	s9 := d.app.screenList[10].(*screens.S9Install)
 	s9.SetRunner(func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		return []byte("node1 | CHANGED | rc=0 | (stdout) \nnode2 | CHANGED | rc=0 | (stdout) \n" +
@@ -351,6 +352,54 @@ func TestPreviewSiteValuesTab(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(paths.Inventory), "site-values.yml")); err == nil {
 		t.Error("site-values.yml saved with the files")
+	}
+}
+
+// What the preview reports is in a tab of its own, the first and the one shown;
+// ←/→ go to the files and back, and once saved it lists the files written. A
+// preview with nothing to report has no such tab.
+func TestPreviewNotesTab(t *testing.T) {
+	d, paths := newDriver(t)
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("4b.컨트롤플레인")
+	d.keys(" ", "ctrl+n") // AIPub 감사 로그: its policy file is not there
+	d.at("5.AIPub")
+	d.keys("ctrl+n")
+	d.at("8.저장")
+	for _, want := range []string{"[ 확인할 점 ]", "inventory.yml", "⚠ 확인할 점 1건 — '확인할 점' 탭", "audit-policy.yaml"} {
+		if !strings.Contains(d.screen(), want) {
+			t.Errorf("the preview lacks %q:\n%s", want, d.screen())
+		}
+	}
+	d.keys("right")
+	if !strings.Contains(d.screen(), "[ inventory.yml ]") || !strings.Contains(d.screen(), "k8s_node:") {
+		t.Errorf("→ is not on inventory.yml:\n%s", d.screen())
+	}
+	d.keys("left")
+	if !strings.Contains(d.screen(), "[ 확인할 점 ]") {
+		t.Errorf("← is not back on 확인할 점:\n%s", d.screen())
+	}
+	d.keys("s")
+	for _, want := range []string{"✓ 저장 완료 — 기존 파일은 .bak 으로 백업", "저장한 파일 (기존 파일은 .bak 으로 백업)", paths.Inventory, paths.Vars} {
+		if !strings.Contains(d.screen(), want) {
+			t.Errorf("after saving the preview lacks %q:\n%s", want, d.screen())
+		}
+	}
+
+	// nothing to report: the files first
+	n, npaths := newDriver(t)
+	n.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	n.at("8.저장")
+	if strings.Contains(n.screen(), "확인할 점") || !strings.Contains(n.screen(), "[ inventory.yml ]") {
+		t.Errorf("a preview with nothing to report:\n%s", n.screen())
+	}
+	n.keys("s") // saved: the files written are listed in a 확인할 점 tab, the file shown stays
+	if !strings.Contains(n.screen(), "  확인할 점  ") || !strings.Contains(n.screen(), "[ inventory.yml ]") {
+		t.Errorf("after saving with nothing to report:\n%s", n.screen())
+	}
+	n.keys("tab", "left") // from the buttons to the files, then the tab before
+	if !strings.Contains(n.screen(), "[ 확인할 점 ]") || !strings.Contains(n.screen(), npaths.Inventory) {
+		t.Errorf("the files written are not listed:\n%s", n.screen())
 	}
 }
 
@@ -459,10 +508,12 @@ func TestWizardControlPlane(t *testing.T) {
 	d.at("5.AIPub")
 	d.keys("ctrl+n")
 	d.at("8.저장")
-	// the audit policy is the site's to provide; the preview says so, and saves
-	for _, want := range []string{"컨트롤플레인 파일 1건이 ansible/files 에 없습니다",
+	// the audit policy is the site's to provide; the preview says so, first, and
+	// saves (the tab is wrapped to the screen: the words compared, not the lines)
+	words := strings.Join(strings.Fields(d.screen()), " ")
+	for _, want := range []string{"[ 확인할 점 ]", "⚠ 확인할 점 1건", "컨트롤플레인 파일 1건이 ansible/files 에 없습니다",
 		"/opt/k8s-installer/ansible/files/aipub/audit-policy.yaml", "AIPub 모니터링/python 팀 제공"} {
-		if !strings.Contains(d.screen(), want) {
+		if !strings.Contains(words, want) {
 			t.Errorf("preview does not warn %q:\n%s", want, d.screen())
 		}
 	}
@@ -713,6 +764,29 @@ func TestNavHeldBySubEdit(t *testing.T) {
 	d.at("2.그룹")
 }
 
+// The message of a sub-edit that held the move goes when the edit closes, though
+// the screen would still refuse to be left: that is said on the next move.
+func TestBusyMessageClearsWhenEditCloses(t *testing.T) {
+	s := state.DefaultState()
+	s.Nodes = nil
+	d := &driver{t: t, app: NewApp(s, fileio.DefaultPaths(t.TempDir()), plan.DefaultOptions(), "test")}
+	d.send(tea.WindowSizeMsg{Width: 110, Height: 60})
+	d.keys("a", "node4", "ctrl+n")
+	d.at("1.노드")
+	if !strings.Contains(strings.Join(d.app.screenErrors, ""), "저장하거나 취소한 뒤") {
+		t.Fatalf("not held by the form: %v", d.app.screenErrors)
+	}
+	d.keys("esc")
+	if len(d.app.screenErrors) != 0 {
+		t.Errorf("the message stays after the form closed: %v", d.app.screenErrors)
+	}
+	d.keys("ctrl+n")
+	d.at("1.노드")
+	if !strings.Contains(strings.Join(d.app.screenErrors, ""), "노드를 최소 1개") {
+		t.Errorf("the next move is not refused with its reason: %v", d.app.screenErrors)
+	}
+}
+
 var (
 	nextFocused = regexp.MustCompile(`▶\s*< 다음 >`)
 	prevFocused = regexp.MustCompile(`▶\s*< 이전 >`)
@@ -775,6 +849,26 @@ func TestPreviewSaveKeys(t *testing.T) {
 	}
 	e.keys("ctrl+n")
 	e.at("9.설치")
+}
+
+// Ctrl+N before saving is refused with a message, which goes once the save
+// makes the move possible.
+func TestPreviewRefusalClearsOnSave(t *testing.T) {
+	d, _ := newDriver(t)
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("8.저장")
+	d.keys("ctrl+n")
+	d.at("8.저장")
+	if !strings.Contains(strings.Join(d.app.screenErrors, ""), "저장(s)한 뒤에") {
+		t.Fatalf("Ctrl+N before saving was not refused with a message: %v", d.app.screenErrors)
+	}
+	d.keys("s")
+	if !strings.Contains(d.screen(), "저장 완료") {
+		t.Fatalf("not saved:\n%s", d.screen())
+	}
+	if len(d.app.screenErrors) != 0 {
+		t.Fatalf("the refusal is still shown after saving: %v", d.app.screenErrors)
+	}
 }
 
 // Saving twice keeps the .bak of the file that was there before the first save.

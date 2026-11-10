@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
@@ -28,16 +29,31 @@ const (
 
 // previewTab is one file of the preview. A file AIPub does not need is not shown.
 // The last tab is the site-values view, which has no path: it is not saved.
+// The first tab is 확인할 점 when there is anything to report; no path either.
 type previewTab struct {
 	name    string
 	path    string
 	content string
 }
 
+// notesTab is the name of the tab of what the preview reports: validation
+// errors, warnings and notes, and the files once saved.
+const notesTab = "확인할 점"
+
+// note is one line of the 확인할 점 tab, wrapped to the width of the viewport
+// in its style.
+type note struct {
+	style lipgloss.Style
+	text  string
+}
+
 type S7Preview struct {
 	tabs      []previewTab
 	vp        viewport.Model
 	activeTab int
+	notes     []note // the 확인할 점 tab, the first; none: no such tab
+	notesW    int    // the width the notes tab was wrapped at; -1: to wrap again
+	noTitle   bool   // the screen is too low for the title as well (layout)
 	errors    []validator.Error
 	warnings  []schema.Change     // values an existing cluster can not take, or takes by rebuilding nodes
 	loaded    *schema.Loaded      // what the site's files held when the wizard started; nil for a new site
@@ -83,12 +99,161 @@ func (s *S7Preview) Title() string { return "미리보기 & 저장" }
 func (s *S7Preview) SetSize(w, h int) {
 	s.width = w
 	s.height = h
-	vpH := h - 14
-	if vpH < 5 {
-		vpH = 5
+	s.layout()
+}
+
+// layout fits the viewport to the room left by what is above and below it, as
+// rendered at the width of the screen (a line that wraps counts as two), and
+// wraps the 확인할 점 tab to that width.
+func (s *S7Preview) layout() {
+	s.vp.Width = s.width
+	if len(s.notes) > 0 && s.notesW != s.width {
+		s.notesW = s.width
+		s.tabs[0].content = s.notesText()
+		if s.activeTab == 0 {
+			s.vp.SetContent(s.tabs[0].content)
+		}
 	}
-	s.vp.Width = w
+	measure := lipgloss.NewStyle().Width(s.width)
+	room := func() int {
+		return s.height - lipgloss.Height(measure.Render(s.above())) - lipgloss.Height(measure.Render(s.below())) - 2 // the lines of the scroll bar
+	}
+	// on a low screen the title goes first (the step bar names the screen)
+	s.noTitle = false
+	vpH := room()
+	if vpH < 3 {
+		s.noTitle = true
+		vpH = room()
+	}
+	if vpH < 1 {
+		vpH = 1 // lower still: View cuts the rest around it
+	}
 	s.vp.Height = vpH
+	s.vp.SetYOffset(s.vp.YOffset) // within the content at the new height
+}
+
+func (s *S7Preview) notesText() string {
+	var lines []string
+	for _, n := range s.notes {
+		for _, l := range wrapNote(n.text, s.width) {
+			lines = append(lines, n.style.Render(l))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// wrapNote breaks a note into lines at most width wide at its spaces, the lines
+// after the first indented under the text after its indent and mark ("  • ",
+// "⚠ "); a word wider than a line is cut.
+func wrapNote(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	rest := strings.TrimLeft(text, " ")
+	head := text[:len(text)-len(rest)]
+	for _, p := range []string{"• ", "⚠ ", "✓ ", "✗ "} {
+		if strings.HasPrefix(rest, p) {
+			head += p
+			break
+		}
+	}
+	pad := strings.Repeat(" ", lipgloss.Width(head))
+	var lines []string
+	line, empty := head, true
+	// split at each space, so that a run of spaces in the note is kept (as empty
+	// words) except where the line breaks
+	for _, word := range strings.Split(strings.TrimPrefix(text, head), " ") {
+		if empty && word == "" {
+			continue
+		}
+		if !empty && lipgloss.Width(line+" "+word) > width {
+			lines = append(lines, strings.TrimRight(line, " "))
+			line, empty = pad, true
+			if word == "" {
+				continue
+			}
+		}
+		if !empty {
+			line += " "
+		}
+		line, empty = line+word, false
+		for width >= len(pad)+2 && lipgloss.Width(line) > width { // room for a wide rune after the indent
+			cut, w := 0, 0
+			for i, r := range line {
+				if w += lipgloss.Width(string(r)); w > width {
+					cut = i
+					break
+				}
+			}
+			lines = append(lines, line[:cut])
+			line = pad + line[cut:]
+		}
+	}
+	return append(lines, line)
+}
+
+// buildNotes is what the preview reports, for the 확인할 점 tab.
+func (s *S7Preview) buildNotes() {
+	s.notes = nil
+	add := func(style lipgloss.Style, text string) { s.notes = append(s.notes, note{style, text}) }
+	if len(s.errors) > 0 {
+		add(styles.StyleError, fmt.Sprintf("✗ 검증 오류 %d건:", len(s.errors)))
+		for _, e := range s.errors {
+			add(styles.StyleError, "  • "+e.Error())
+		}
+	}
+
+	// not blocking: the operator may mean it, but update-cluster.yml will refuse
+	// or rebuild nodes for it
+	if len(s.warnings) > 0 {
+		add(styles.StyleWarning, fmt.Sprintf("⚠ 기존 클러스터에서 바꾸기 어려운 값 %d건:", len(s.warnings)))
+		for _, w := range s.warnings {
+			add(styles.StyleWarning, "  • "+w.Message())
+		}
+	}
+
+	// not blocking either: the site puts these files there, maybe after saving
+	if len(s.missing) > 0 {
+		add(styles.StyleWarning, fmt.Sprintf("⚠ 컨트롤플레인 파일 %d건이 ansible/files 에 없습니다 (setup-cluster 전에 두세요):", len(s.missing)))
+		for _, f := range s.missing {
+			add(styles.StyleWarning, "  • "+s.installerFiles+"/"+f.Src+schema.FileSource(f))
+		}
+	}
+
+	for _, n := range s.caNote {
+		add(styles.StyleWarning, "⚠ "+n)
+	}
+	for _, n := range s.binNote {
+		add(styles.StyleWarning, "⚠ "+n)
+	}
+	if s.catalog != "" {
+		if s.catalogOK {
+			add(styles.StyleMuted, "✓ "+s.catalog)
+		} else {
+			add(styles.StyleWarning, "⚠ "+s.catalog)
+		}
+	}
+}
+
+// warningCount is the number of warnings and notes of the 확인할 점 tab (the
+// errors are counted apart).
+func (s *S7Preview) warningCount() int {
+	n := len(s.warnings) + len(s.missing) + len(s.caNote) + len(s.binNote)
+	if s.catalog != "" && !s.catalogOK {
+		n++
+	}
+	return n
+}
+
+// notesFirst puts the 확인할 점 tab first, adding it when it is not there yet,
+// and returns whether it added it.
+func (s *S7Preview) notesFirst() bool {
+	s.notesW = -1 // wrapped again by layout
+	if len(s.notes) == 0 || (len(s.tabs) > 0 && s.tabs[0].name == notesTab) {
+		return false
+	}
+	s.tabs = append([]previewTab{{name: notesTab}}, s.tabs...)
+	return true
 }
 
 func (s *S7Preview) SyncFromState(st *state.AppState) {
@@ -133,7 +298,10 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 		// all of the above in one annotated view; not a file that is saved
 		s.tabs = append(s.tabs, previewTab{schema.SiteValuesFile, "", string(schema.SiteValues(st))})
 	}
+	s.buildNotes()
+	s.notesFirst()
 
+	// on 확인할 점 when there is anything to report: the first thing seen
 	s.activeTab = 0
 	s.focusIdx = 0
 	s.navIdx = 0
@@ -160,6 +328,7 @@ func (s *S7Preview) Validate() []string {
 func (s *S7Preview) Init() tea.Cmd { return nil }
 
 func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	s.layout() // ↓ at the bottom of the viewport as it is shown
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -250,10 +419,26 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 	s.saveErr = ""
 	// on the button that now reads 다음: Enter goes on to the plan
 	s.focusIdx, s.navIdx = s7FocusNav, 1
+
+	// the files written, in 확인할 점 (added if it was not there: the tab shown stays)
+	if len(s.notes) > 0 {
+		s.notes = append(s.notes, note{styles.StyleMuted, ""})
+	}
+	s.notes = append(s.notes, note{styles.StyleSuccess, "✓ 저장한 파일 (기존 파일은 .bak 으로 백업):"})
+	for _, t := range s.tabs {
+		if t.path != "" {
+			s.notes = append(s.notes, note{styles.StyleMuted, "  " + t.path})
+		}
+	}
+	if s.notesFirst() {
+		s.activeTab++
+	}
+	s.layout()
 	return s, nil
 }
 
 func (s *S7Preview) refreshViewport() {
+	s.layout() // the 확인할 점 tab wrapped
 	if s.activeTab < len(s.tabs) {
 		s.vp.SetContent(s.tabs[s.activeTab].content)
 	}
@@ -285,9 +470,22 @@ func (s *S7Preview) scrollBar() string {
 }
 
 func (s *S7Preview) View() string {
-	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("미리보기 & 저장") + "\n\n")
+	s.layout()
+	above := s.above()
+	view := above + "\n" + s.scrollBar() + "\n" + s.below()
+	// a screen too low even for the smallest viewport: the buttons stay, and the
+	// viewport (or the buttons) in sight over them
+	start := strings.Count(above, "\n") + 1
+	end := start + s.vp.Height + 2
+	if s.focusIdx == s7FocusNav {
+		start = strings.Count(view, "\n")
+		end = start + 1
+	}
+	return FitView(view, start, end, s.width, s.height)
+}
 
+// above is what is above the viewport: the title and the tabs.
+func (s *S7Preview) above() string {
 	// Tabs — ←/→ 전환
 	contentFocused := s.focusIdx == s7FocusContent
 	parts := make([]string, len(s.tabs))
@@ -300,65 +498,32 @@ func (s *S7Preview) View() string {
 	}
 	tabLine := strings.Join(parts, " ")
 	if contentFocused && len(s.tabs) > 1 {
-		tabLine += styles.StyleMuted.Render("   ←/→ 파일 전환")
+		tabLine += styles.StyleMuted.Render("   ←/→ 탭 전환")
 	}
-	b.WriteString(tabLine + "\n")
+	if s.noTitle {
+		return tabLine
+	}
+	return styles.StyleTitle.Render("미리보기 & 저장") + "\n\n" + tabLine
+}
 
-	b.WriteString(s.scrollBar() + "\n")
-
+// below is what is under the viewport, a few lines whatever there is to
+// report (that is in the 확인할 점 tab), and the buttons.
+func (s *S7Preview) below() string {
+	var lines []string
 	if len(s.errors) == 0 {
-		b.WriteString(styles.StyleSuccess.Render("✓ 검증 통과 — 저장 가능합니다") + "\n")
+		lines = append(lines, styles.StyleSuccess.Render("✓ 검증 통과 — 저장 가능합니다"))
 	} else {
-		b.WriteString(styles.StyleError.Render(fmt.Sprintf("✗ 검증 오류 %d건:", len(s.errors))) + "\n")
-		for _, e := range s.errors {
-			b.WriteString(styles.StyleError.Render("  • "+e.Error()) + "\n")
-		}
+		lines = append(lines, styles.StyleError.Render(fmt.Sprintf("✗ 검증 오류 %d건 — '%s' 탭", len(s.errors), notesTab)))
 	}
-
-	// not blocking: the operator may mean it, but update-cluster.yml will refuse
-	// or rebuild nodes for it
-	if len(s.warnings) > 0 {
-		b.WriteString(styles.StyleWarning.Render(fmt.Sprintf("⚠ 기존 클러스터에서 바꾸기 어려운 값 %d건:", len(s.warnings))) + "\n")
-		for _, w := range s.warnings {
-			b.WriteString(styles.StyleWarning.Render("  • "+w.Message()) + "\n")
-		}
+	if n := s.warningCount(); n > 0 {
+		lines = append(lines, styles.StyleWarning.Render(fmt.Sprintf("⚠ 확인할 점 %d건 — '%s' 탭", n, notesTab)))
 	}
-
-	// not blocking either: the site puts these files there, maybe after saving
-	if len(s.missing) > 0 {
-		b.WriteString(styles.StyleWarning.Render(fmt.Sprintf("⚠ 컨트롤플레인 파일 %d건이 ansible/files 에 없습니다 (setup-cluster 전에 두세요):", len(s.missing))) + "\n")
-		for _, f := range s.missing {
-			b.WriteString(styles.StyleWarning.Render("  • "+s.installerFiles+"/"+f.Src+schema.FileSource(f)) + "\n")
-		}
-	}
-
-	for _, n := range s.caNote {
-		b.WriteString(styles.StyleWarning.Render("⚠ "+n) + "\n")
-	}
-	for _, n := range s.binNote {
-		b.WriteString(styles.StyleWarning.Render("⚠ "+n) + "\n")
-	}
-	if s.catalog != "" {
-		if s.catalogOK {
-			b.WriteString(styles.StyleMuted.Render("✓ "+s.catalog) + "\n")
-		} else {
-			b.WriteString(styles.StyleWarning.Render("⚠ "+s.catalog) + "\n")
-		}
-	}
-
 	if s.saveErr != "" {
-		b.WriteString(styles.StyleError.Render("✗ "+s.saveErr) + "\n")
+		lines = append(lines, styles.StyleError.Render("✗ "+s.saveErr))
 	}
 	if s.saved {
-		b.WriteString("\n" + styles.StyleSuccess.Render("✓ 저장 완료!") + "\n")
-		for _, t := range s.tabs {
-			if t.path != "" {
-				b.WriteString(styles.StyleMuted.Render("  "+t.path) + "\n")
-			}
-		}
-		b.WriteString(styles.StyleMuted.Render("  기존 파일은 .bak으로 백업되었습니다") + "\n")
-		b.WriteString("\n" + styles.StyleTitle.Render("설치 계획을 보시겠습니까?") + "  " +
-			styles.StyleMuted.Render("Enter: 9.설치로   Ctrl+C: 종료") + "\n")
+		lines = append(lines, styles.StyleSuccess.Render("✓ 저장 완료 — 기존 파일은 .bak 으로 백업")+
+			styles.StyleMuted.Render(" · 저장한 파일은 '"+notesTab+"' 탭"))
 	}
 
 	prevFocused := s.focusIdx == s7FocusNav && s.navIdx == 0
@@ -367,7 +532,5 @@ func (s *S7Preview) View() string {
 	if s.saved {
 		right = "다음"
 	}
-	b.WriteString("\n" + RenderNavButtons("이전", right, prevFocused, saveFocused, s.width))
-
-	return b.String()
+	return strings.Join(lines, "\n") + "\n\n" + RenderNavButtons("이전", right, prevFocused, saveFocused, s.width)
 }

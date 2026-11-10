@@ -303,12 +303,12 @@ func TestS4bFitKeepsHelp(t *testing.T) {
 		}
 	}
 
-	// 5 lines: the row, then as much of its help as fits
+	// 5 lines: the buttons, and over them the row, then as much of its help as fits
 	s = s4bLow(5)
 	view := s.focusOn(s4bStop{kind: s4bWebhook})
 	lines := strings.Split(view, "\n")
 	if len(lines) != 5 || !strings.Contains(lines[0], "위에 더 있음") || !strings.Contains(lines[1], "AIPub 인증 웹훅 (레거시)") ||
-		!strings.Contains(lines[4], "아래에 더 있음") {
+		!strings.Contains(lines[3], "아래에 더 있음") || !strings.Contains(lines[4], "< 다음 >") {
 		t.Errorf("help taller than the screen:\n%s", view)
 	}
 }
@@ -334,8 +334,8 @@ func TestS4bFitTinyHeight(t *testing.T) {
 	}
 }
 
-// Text left in the 항목 input with 고급 collapsed: the check that names it
-// expands the section, so the input is in sight.
+// Text left in the 항목 input with 고급 collapsed: the refusal that names it
+// expands the section, so the input is in sight; the check alone changes nothing.
 func TestS4bValidateShowsEntryInput(t *testing.T) {
 	s := newS4b(s4bState(), false)
 	s.focusOn(s4bStop{kind: s4bAdvanced})
@@ -351,6 +351,10 @@ func TestS4bValidateShowsEntryInput(t *testing.T) {
 	if len(msgs) != 1 || !strings.Contains(msgs[0], "추가할 항목에 입력한 것이 있습니다") {
 		t.Errorf("Validate: %v", msgs)
 	}
+	if s.advanced {
+		t.Error("Validate expanded 고급")
+	}
+	s.RevealErrors() // what the wizard does when it refuses the move
 	if view := s.plain(); !s.advanced || !strings.Contains(view, "항목 (Enter: 추가)") || !strings.Contains(view, "zzq") {
 		t.Errorf("the input named is not in sight:\n%s", view)
 	}

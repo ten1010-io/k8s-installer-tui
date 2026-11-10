@@ -237,26 +237,33 @@ func (s *S5bMonitoring) View() string {
 	b.WriteString(styles.StyleMuted.Render("기본값은 aipub-installer 의 것이고, 바꾼 값만 files/aipub/vars.yml 에 씁니다") + "\n\n")
 
 	f := s.focusIdx
+	// the focused part stays in sight on a low screen
+	fs := focusSpan{b: &b}
 	row := func(label string, idx int, in textinput.Model, key string) {
+		fs.mark(f == idx)
 		b.WriteString(RenderSectionHeader(label, f == idx) + "  " + in.View() +
 			styles.StyleMuted.Render("  "+short(key)) + "\n")
 	}
 	b.WriteString(styles.StylePrimary.Render("OpenSearch (로그)") + "\n")
 	row("볼륨 크기", s5bFocusOpensearchSize, s.opensearchSize, "aipub_monitoring_opensearch_storage_size")
 	row("로그 보존 기간", s5bFocusLogRetention, s.logRetention, "aipub_monitoring_opensearch_log_retention")
+	fs.mark(false)
 	b.WriteString("\n" + styles.StylePrimary.Render("VictoriaMetrics (메트릭)") + "\n")
 	row("볼륨 크기", s5bFocusMetricsSize, s.metricsSize, "aipub_monitoring_metrics_storage_size")
 	row("메트릭 보존 기간", s5bFocusMetricsRetention, s.metricsRetention, "aipub_monitoring_metrics_retention_period")
 
+	fs.mark(false)
 	b.WriteString("\n" + styles.StylePrimary.Render("그 밖에") + "\n")
 	rs := styles.RadioOff() + " 끔"
 	if s.rightsizing {
 		rs = styles.RadioOn() + " 켬"
 	}
+	fs.mark(f == s5bFocusRightsizing)
 	b.WriteString(RenderSectionHeader("라이트사이징", f == s5bFocusRightsizing) + "  " + rs +
 		styles.StyleMuted.Render("  "+short("aipub_monitoring_rightsizing_enabled")) + "\n")
 	row("API 레플리카 수", s5bFocusApiReplicas, s.apiReplicas, "aipub_monitoring_api_replicas")
 
+	fs.mark(f == s5bFocusNodes)
 	b.WriteString(RenderSectionHeader("OpenSearch 노드", f == s5bFocusNodes) +
 		styles.StyleMuted.Render("  아무것도 고르지 않으면 k8s 컨트롤 플레인 노드 전부") + "\n")
 	for i, n := range s.nodeNames {
@@ -272,6 +279,8 @@ func (s *S5bMonitoring) View() string {
 
 	prevFocused := f == s5bFocusNav && s.navIdx == 0
 	nextFocused := f == s5bFocusNav && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
-	return b.String()
+	b.WriteString("\n")
+	fs.mark(f == s5bFocusNav)
+	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	return fs.fit(s.width, s.height)
 }

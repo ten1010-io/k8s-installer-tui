@@ -25,13 +25,16 @@ import (
 // Focus layout:
 //   0  : 아카이브 경로 (K4)
 //   1  : 모니터링 설치 (AIPub only)
-//   2  : nav slot (←/→: 이전/실행)
+//   2  : the plan, when it is taller than the room it has (↑/↓ scroll; ↓ at
+//        its bottom goes on to the buttons)
+//   3  : nav slot (←/→: 이전/실행)
 //
 // Off the text input: c 사전 확인, d 명령 보기, w 스크립트 저장
 
 const (
 	s9FocusArchive = iota
 	s9FocusMonitoring
+	s9FocusPlan
 	s9FocusNav
 )
 
@@ -58,6 +61,7 @@ type S9Install struct {
 
 	showScript bool
 	vp         viewport.Model
+	planVP     viewport.Model // the plan, cut to the room under the inputs
 
 	focusIdx int
 	navIdx   int
@@ -71,7 +75,7 @@ func NewS9Install(s *state.AppState, paths fileio.Paths, opts plan.Options) *S9I
 	a.CharLimit = 256
 	return &S9Install{
 		appState: s, paths: paths, opts: opts, run: plan.ExecRun,
-		archive: a, checks: map[string]plan.CheckResult{}, vp: viewport.New(80, 20),
+		archive: a, checks: map[string]plan.CheckResult{}, vp: viewport.New(80, 20), planVP: viewport.New(80, 20),
 	}
 }
 
@@ -83,6 +87,36 @@ func (s *S9Install) SetSize(w, h int) {
 	s.width, s.height = w, h
 	s.vp.Width = w
 	s.vp.Height = max(5, h-8)
+	s.layout()
+}
+
+// layout gives the plan the room left by what is above and below it, as
+// rendered at the width of the screen; the whole plan when it fits.
+func (s *S9Install) layout() {
+	measure := lipgloss.NewStyle().Width(max(1, s.width))
+	// wrapped here, so that the viewport counts the lines it shows
+	content := measure.Render(s.planText())
+	s.planVP.Width = s.width
+	s.planVP.SetContent(content)
+	room := s.height - lipgloss.Height(measure.Render(s.top())) - lipgloss.Height(measure.Render(s.bottom()))
+	if n := lipgloss.Height(content); n <= room {
+		s.planVP.Height = n
+	} else {
+		// and a line that says where in the plan it is; on a low screen as little
+		// as a line of the plan, the buttons kept in sight
+		s.planVP.Height = max(1, room-1)
+	}
+	s.planVP.SetYOffset(s.planVP.YOffset)
+	// the plan fits now (a larger screen, shorter results): no stop there any more
+	if s.focusIdx == s9FocusPlan && s.planFits() {
+		s.focusIdx = s9FocusNav
+	}
+}
+
+// planFits is whether the whole plan is in sight; if not, it is a stop of the
+// focus, where ↑/↓ scroll it.
+func (s *S9Install) planFits() bool {
+	return s.planVP.TotalLineCount() <= s.planVP.Height
 }
 
 func (s *S9Install) SyncFromState(st *state.AppState) {
@@ -92,6 +126,7 @@ func (s *S9Install) SyncFromState(st *state.AppState) {
 	s.message = ""
 	s.rebuild()
 	s.syncFocus()
+	s.planVP.GotoTop()
 }
 
 func (s *S9Install) SyncToState(_ *state.AppState) {}
@@ -129,11 +164,17 @@ func (s *S9Install) next(i int) int {
 	if i == s9FocusMonitoring && !s.appState.AipubEnabled {
 		i++
 	}
+	if i == s9FocusPlan && s.planFits() {
+		i++
+	}
 	return min(i, s9FocusNav)
 }
 
 func (s *S9Install) prev(i int) int {
 	i--
+	if i == s9FocusPlan && s.planFits() {
+		i--
+	}
 	if i == s9FocusMonitoring && !s.appState.AipubEnabled {
 		i--
 	}
@@ -191,6 +232,7 @@ func (s *S9Install) writeScript() {
 }
 
 func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	s.layout() // the plan as it is shown: whether it fits, its bottom
 	switch msg := msg.(type) {
 	case checkDoneMsg:
 		for id, r := range msg.results {
@@ -237,10 +279,18 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "up":
+			if s.focusIdx == s9FocusPlan && !s.planVP.AtTop() {
+				s.planVP.LineUp(1)
+				return s, nil
+			}
 			s.focusIdx = s.prev(s.focusIdx)
 			s.syncFocus()
 			return s, nil
 		case "down", "tab":
+			if msg.String() == "down" && s.focusIdx == s9FocusPlan && !s.planVP.AtBottom() {
+				s.planVP.LineDown(1)
+				return s, nil
+			}
 			s.rebuild()
 			s.focusIdx = s.next(s.focusIdx)
 			s.syncFocus()
@@ -302,6 +352,45 @@ func (s *S9Install) View() string {
 		return b.String()
 	}
 
+	s.layout()
+	top := s.top()
+	b.WriteString(top + "\n" + s.planVP.View() + "\n")
+	if !s.planFits() {
+		// where in the plan the viewport is
+		bar := fmt.Sprintf("── 계획 %d–%d / %d줄", s.planVP.YOffset+1, min(s.planVP.YOffset+s.planVP.Height, s.planVP.TotalLineCount()),
+			s.planVP.TotalLineCount())
+		if s.focusIdx == s9FocusPlan {
+			b.WriteString(styles.StylePrimary.Render("▶ "+bar+" ── ↑/↓ 스크롤, 끝에서 ↓ 버튼으로") + "\n")
+		} else {
+			b.WriteString(styles.StyleMuted.Render("  "+bar+" ── Tab·↓ 로 와서 ↑/↓ 스크롤") + "\n")
+		}
+	}
+	b.WriteString(s.bottom())
+
+	// a screen too low even for a line of the plan: the buttons stay, the
+	// focused part in sight over them. top ends on a blank line after the inputs
+	view := b.String()
+	n := strings.Count(top, "\n")
+	start, end := n-1, n // 모니터링
+	switch s.focusIdx {
+	case s9FocusArchive:
+		start, end = n-1, n
+		if s.appState.AipubEnabled {
+			start, end = n-2, n-1
+		}
+	case s9FocusPlan:
+		start, end = n+1, n+2+s.planVP.Height // the plan and the line under it
+	case s9FocusNav:
+		start = strings.Count(view, "\n")
+		end = start + 1
+	}
+	return FitView(view, start, end, s.width, s.height)
+}
+
+// top is what is above the plan: the title, where the settings were saved and
+// the inputs.
+func (s *S9Install) top() string {
+	var b strings.Builder
 	b.WriteString(styles.StyleTitle.Render("설치 계획") + "\n")
 	b.WriteString(styles.StyleMuted.Render("저장한 설정으로 실행할 순서입니다. 이 버전은 계획과 명령만 보여 주고, 실행은 하지 않습니다.") + "\n\n")
 
@@ -319,8 +408,12 @@ func (s *S9Install) View() string {
 		}
 		b.WriteString(RenderSectionHeader("모니터링", f == s9FocusMonitoring) + "  " + mon + "\n")
 	}
-	b.WriteString("\n")
+	return b.String() // its last line is blank
+}
 
+// planText is the plan: the checks and the steps.
+func (s *S9Install) planText() string {
+	var b strings.Builder
 	b.WriteString(styles.StyleMuted.Render("  ✓ 통과   ! 경고 (계속 가능)   ✗ 실패   - 건너뜀   · 아직 안 함") + "\n\n")
 	started, inChecks := false, false
 	for _, st := range s.steps {
@@ -389,14 +482,19 @@ func (s *S9Install) View() string {
 			}
 		}
 	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
 
+// bottom is what is under the plan: a message, the keys and the buttons.
+func (s *S9Install) bottom() string {
+	var b strings.Builder
 	if s.message != "" {
 		b.WriteString("\n" + styles.StylePrimary.Render(s.message) + "\n")
 	}
 	b.WriteString("\n" + styles.StyleMuted.Render("  c 사전 확인   d 명령 보기   w 스크립트 저장 (install-plan.sh)   — 입력 칸 밖에서") + "\n")
 
-	prevFocused := f == s9FocusNav && s.navIdx == 0
-	runFocused := f == s9FocusNav && s.navIdx == 1
+	prevFocused := s.focusIdx == s9FocusNav && s.navIdx == 0
+	runFocused := s.focusIdx == s9FocusNav && s.navIdx == 1
 	b.WriteString("\n" + RenderNavButtons("이전", "실행 (준비 중)", prevFocused, runFocused, s.width))
 	return b.String()
 }

@@ -20,6 +20,7 @@ type App struct {
 	width        int
 	height       int
 	screenErrors []string
+	heldBusy     bool // screenErrors is the message of busy: a sub-edit held the move
 	version      string
 }
 
@@ -63,14 +64,29 @@ var aipubOnlyScreens = map[int]bool{6: true, 7: true, 8: true}
 func (a *App) Init() tea.Cmd { return nil }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := a.update(msg)
+	a.resize()
+	return m, cmd
+}
+
+// resize gives the screens the room of the panel, after any message: the
+// header wraps by the step the wizard is on, and errors may be shown under the
+// screen.
+func (a *App) resize() {
+	if a.width == 0 {
+		return
+	}
+	_, contentW, contentH := a.dims()
+	for _, sc := range a.screenList {
+		sc.SetSize(contentW, contentH)
+	}
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
-		_, contentW, contentH := a.dims()
-		for _, sc := range a.screenList {
-			sc.SetSize(contentW, contentH)
-		}
 		return a, nil
 
 	case tea.KeyMsg:
@@ -98,7 +114,29 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	newModel, cmd := a.screenList[a.current].Update(msg)
 	a.screenList[a.current] = newModel.(screens.Screen)
+	a.dropSettledErrors()
 	return a, cmd
+}
+
+// dropSettledErrors clears the errors a refused move left under the screen once
+// the screen would let the move through, e.g. after the preview is saved.
+func (a *App) dropSettledErrors() {
+	if len(a.screenErrors) == 0 {
+		return
+	}
+	sc := a.screenList[a.current]
+	if b, ok := sc.(screens.Busy); ok && b.Busy() {
+		return
+	}
+	// the sub-edit that held the move is closed: what the screen would still
+	// refuse is said on the next move
+	if a.heldBusy {
+		a.screenErrors, a.heldBusy = nil, false
+		return
+	}
+	if len(sc.Validate()) == 0 {
+		a.screenErrors = nil
+	}
 }
 
 func (a *App) onPreview() bool {
@@ -130,6 +168,7 @@ func (a *App) skipScreen(idx int) bool {
 func (a *App) busy() bool {
 	if b, ok := a.screenList[a.current].(screens.Busy); ok && b.Busy() {
 		a.screenErrors = []string{"입력 중인 항목을 저장하거나 취소한 뒤 이동하세요"}
+		a.heldBusy = true
 		return true
 	}
 	return false
@@ -139,9 +178,14 @@ func (a *App) goNext() (tea.Model, tea.Cmd) {
 	if a.busy() {
 		return a, nil
 	}
+	a.heldBusy = false
 	errs := a.screenList[a.current].Validate()
 	if len(errs) > 0 {
 		a.screenErrors = errs
+		// refused: the screen shows what the errors name
+		if r, ok := a.screenList[a.current].(screens.Revealer); ok {
+			r.RevealErrors()
+		}
 		return a, nil
 	}
 	a.screenErrors = nil
@@ -161,7 +205,7 @@ func (a *App) goPrev() (tea.Model, tea.Cmd) {
 	if a.busy() {
 		return a, nil
 	}
-	a.screenErrors = nil
+	a.screenErrors, a.heldBusy = nil, false
 	if a.current > 0 {
 		a.screenList[a.current].SyncToState(a.appState)
 		prev := a.current - 1
@@ -183,33 +227,28 @@ func (a *App) View() string {
 	outerContentW := outerBoxW - 4 // border(2) + padding(2)
 
 	// Screen body
-	body := a.screenList[a.current].View()
-	if len(a.screenErrors) > 0 {
-		msgs := make([]string, len(a.screenErrors))
-		for i, e := range a.screenErrors {
-			msgs[i] = "✗ " + e
-		}
-		body += "\n" + styles.StyleError.Render(strings.Join(msgs, "\n"))
-	}
+	body := a.screenList[a.current].View() + a.errorLines()
 
-	// Inner panel (thick blue border — the actual screen content box)
+	// Inner panel (thick blue border — the actual screen content box); its
+	// Width takes in its padding
 	innerPanel := lipgloss.NewStyle().
 		Border(lipgloss.ThickBorder()).
 		BorderForeground(styles.ColorPrimary).
 		Padding(0, 1).
-		Width(contentW).
+		Width(contentW + 2).
 		Render(body)
 
 	// Outer box content: top space + header + step bar + inner panel + label
 	var ob strings.Builder
 	ob.WriteString("\n") // breathing room above header
-	ob.WriteString(a.renderHeader(outerContentW))
+	// at the text width of the outer box, as the footer
+	ob.WriteString(a.renderHeader(outerContentW - 2))
 	ob.WriteString("\n\n")
 	ob.WriteString(innerPanel)
 	ob.WriteString("\n\n")
 	// one line, as dims counts it: the text width of the outer box is its Width less its padding
 	footerW := outerContentW - 2
-	ob.WriteString(styles.StyleMuted.MaxWidth(footerW).Render(a.keyHints(footerW)))
+	ob.WriteString(styles.StyleMuted.Copy().MaxWidth(footerW).Render(a.keyHints(footerW)))
 	ob.WriteString("\n")
 
 	// Outer box (thin rounded border — wraps everything)
@@ -252,7 +291,7 @@ func (a *App) View() string {
 }
 
 func (a *App) renderHeader(width int) string {
-	title := styles.StyleHeader.Width(width).Render("  k8s-installer-tui " + a.version + "  ")
+	title := styles.StyleHeader.Copy().Width(width).Render("  k8s-installer-tui " + a.version + "  ")
 
 	parts := make([]string, len(a.screenList))
 	for i, t := range stepTitles {
@@ -271,6 +310,18 @@ func (a *App) renderHeader(width int) string {
 	return title + "\n" + stepBar
 }
 
+// errorLines are the errors of the screen, under it in the panel.
+func (a *App) errorLines() string {
+	if len(a.screenErrors) == 0 {
+		return ""
+	}
+	msgs := make([]string, len(a.screenErrors))
+	for i, e := range a.screenErrors {
+		msgs[i] = "✗ " + e
+	}
+	return "\n" + styles.StyleError.Render(strings.Join(msgs, "\n"))
+}
+
 // dims returns (outerBoxTotalWidth, screenContentWidth, screenContentHeight).
 func (a *App) dims() (int, int, int) {
 	outerBoxW := a.width - 4 // 2-char dark-blue margin each side
@@ -280,15 +331,27 @@ func (a *App) dims() (int, int, int) {
 	if outerBoxW < 52 {
 		outerBoxW = 52
 	}
-	// outerContentW = outerBoxW - border(2) - padding(2) = outerBoxW - 4
-	// innerPanelContentW = outerContentW - innerBorder(2) - innerPadding(2) = outerBoxW - 8
-	contentW := outerBoxW - 8
+	// outerContentW = outerBoxW - border(2) - padding(2) = outerBoxW - 4, the
+	// Width of the outer box, which takes in its padding: its text is outerBoxW - 6
+	// wide, the inner panel with its border. The text of the inner panel, what a
+	// screen has, is that less innerBorder(2) and innerPadding(2) = outerBoxW - 10
+	outerContentW := outerBoxW - 4
+	contentW := outerBoxW - 10
 	if contentW < 32 {
 		contentW = 32
 	}
-	contentH := a.height - 12 // outer border+padding + header(2) + spacing(4) + footer(1) + margins(3)
-	if contentH < 5 {
-		contentH = 5
+	// the header as the outer box shows it: the title, and the step bar, which
+	// wraps at its width
+	headerH := lipgloss.Height(lipgloss.NewStyle().Padding(0, 1).Width(outerContentW).Render(a.renderHeader(outerContentW - 2)))
+	errorsH := 0
+	if e := a.errorLines(); e != "" {
+		errorsH = lipgloss.Height(lipgloss.NewStyle().Width(contentW).Render(e))
+	}
+	// outer border(2) + top space(1) + header + spacing(2) + inner border(2) +
+	// footer(1) + the line under it(1) + margin above the box(1)
+	contentH := a.height - 10 - headerH - errorsH
+	if contentH < 1 { // a screen fits what it can in the room there is
+		contentH = 1
 	}
 	return outerBoxW, contentW, contentH
 }

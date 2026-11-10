@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
@@ -284,6 +285,17 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return s, cmd
 }
 
+// preflightOf is the variable of the schema named key that carries a Preflight
+// hint (ansible_user is in two files, only one has it).
+func preflightOf(key string) (schema.Var, bool) {
+	for _, v := range schema.All() {
+		if v.Key == key && v.Preflight != "" {
+			return v, true
+		}
+	}
+	return schema.Var{}, false
+}
+
 func (s *S9Install) View() string {
 	var b strings.Builder
 	if s.showScript {
@@ -311,7 +323,18 @@ func (s *S9Install) View() string {
 	}
 	b.WriteString("\n")
 
+	b.WriteString(styles.StyleMuted.Render("  ✓ 통과   ! 경고 (계속 가능)   ✗ 실패   - 건너뜀   · 아직 안 함") + "\n\n")
+	started, inChecks := false, false
 	for _, st := range s.steps {
+		// the checks first and the steps that run after them, each under a heading
+		if isCheck := st.Kind == plan.Check; !started || isCheck != inChecks {
+			if isCheck {
+				b.WriteString(styles.StyleTitle.Render("사전 확인") + styles.StyleMuted.Render("  (읽기만 합니다. c 로 실행)") + "\n")
+			} else {
+				b.WriteString("\n" + styles.StyleTitle.Render("실행 순서") + "\n")
+			}
+			started, inChecks = true, isCheck
+		}
 		icon := "·"
 		res, checked := s.checks[st.ID]
 		switch {
@@ -339,12 +362,32 @@ func (s *S9Install) View() string {
 		default:
 			b.WriteString(line + "\n")
 		}
-		if !st.Skip {
+		switch {
+		case st.Skip:
+		case st.Kind == plan.Check && st.Sees != "":
+			b.WriteString(styles.StyleMuted.Render("        보는 것: "+st.Sees) + "\n")
+			if v, ok := preflightOf(st.Var); ok {
+				b.WriteString(styles.StyleMuted.Render("        힌트 ("+v.Key+"): "+v.Preflight) + "\n")
+			}
+		default:
 			b.WriteString(styles.StyleMuted.Render("        "+st.Note) + "\n")
 		}
 		if checked {
-			for _, l := range res.Lines {
-				b.WriteString("        " + l + "\n")
+			// what it found, in the colour of the verdict
+			style := lipgloss.NewStyle()
+			switch icon {
+			case "✗":
+				style = styles.StyleError
+			case "!":
+				style = styles.StyleWarning
+			case "-":
+				style = styles.StyleMuted
+			}
+			for i, l := range res.Lines {
+				if i == 0 && res.Skipped && !strings.HasPrefix(l, "건너뜀") {
+					l = "건너뜀: " + l
+				}
+				b.WriteString(style.Render("        "+l) + "\n")
 			}
 		}
 	}

@@ -37,6 +37,11 @@ type Step struct {
 	Args     []string // more arguments of ansible-playbook
 	Shell    []string // the commands, for Kind Shell: a line each, run from the ansible directory
 	Note     string   // one line shown under the step
+	// Sees is what a check looks at, one line, shown on the plan screen in
+	// place of the longer Note (which stays in the script). Var is the schema
+	// variable the check stands behind, whose Preflight hint is shown with it
+	Sees string
+	Var  string
 	Optional bool     // the operator may leave it out
 	Skip     bool     // left out: optional and turned off, or missing what it needs
 	SkipWhy  string
@@ -113,37 +118,43 @@ func Build(s *state.AppState, o Options) []Step {
 
 func build(s *state.AppState, o Options) []Step {
 	steps := []Step{
-		{ID: "P1", Title: "setup.sh 완료", Kind: Check,
+		{ID: "P1", Title: "setup.sh 완료", Kind: Check, Sees: "setup.sh 가 설치 디렉터리에 남긴 release 파일이 있는지",
 			Note: "번들을 풀고 " + o.Root + " 에 설치하는 단계. sudo가 필요해 직접 실행합니다"},
-		{ID: "P2", Title: "SSH·sudo 접속", Kind: Check,
+		{ID: "P2", Title: "SSH·sudo 접속", Kind: Check, Sees: "모든 노드에 ansible_user 로 접속해 sudo -n true 가 통과하는지",
 			Note: "configure-control-node-ssh.sh 안내대로 키를 등록한 뒤, 모든 노드에 비밀번호 없이 접속·sudo"},
 	}
 	if o.Existing {
 		// read only, and only offered: a new site has no apiserver to look at
 		steps = append(steps, Step{ID: "P3", Title: "apiserver 수동 설정 확인", Kind: Check,
+			Sees: "첫 컨트롤 플레인 노드의 kube-apiserver.yaml 에 손으로 넣은 설정이 켜진 프리셋과 맞는지 (읽기만)",
 			Note: "첫 k8s 컨트롤 플레인 노드의 " + APIServerManifest + " 를 읽기만 함 (slurp). 손으로 넣은 감사 로그·runtime-config·" +
 				"인증 플래그가 켜진 프리셋과 맞는지. 감지된 것을 끄고 update-cluster 하면 그 기능이 사라짐"})
 	}
 	if HelmfileChosen(s) {
 		// only offered when it matters, like P3
 		steps = append(steps, Step{ID: "P4", Title: "aipub-bin", Kind: Check,
+			Sees: "패키지가 helmfile·kustomize 를 실었는지 (aipub-package.json 의 aipub_bin)",
 			Note: "배포 도구가 helmfile: 패키지가 helmfile·kustomize 를 실었는지 (" + PackageFile + " 의 aipub_bin). " +
 				"없으면 사이트가 노드에 직접 두고 경로를 변수로 지정해야 함"})
 	}
 	if s.AipubEnabled {
 		steps = append(steps, Step{ID: "P5", Title: "카탈로그", Kind: Check,
+			Sees: "카탈로그에 aipub 모듈이 쓰는 이미지가 이름으로 모두 있는지",
 			Note: "aipub 플레이북은 모듈이 쓰는 이미지가 카탈로그 (ansible/aipub_vars/catalog.yml) 에 이름으로 없으면 실행 전에 거부합니다. " +
 				"같은 규칙으로 미리 확인 (카탈로그 파일이 없으면 건너뜀)"})
 	}
-	steps = append(steps, Step{ID: "P6", Title: "become 셸", Kind: Check,
+	steps = append(steps, Step{ID: "P6", Title: "become 셸", Kind: Check, Var: "ansible_user",
+		Sees: "모든 노드에서 sudo -n /bin/sh -c true 가 통과하는지 (막히면 dash 로 우회할 수 있는지)",
 		Note: "sudoers 가 /bin/sh 를 막으면 Ansible become 이 'Shared connection closed' 로 실패합니다. 모든 노드에서 " +
 			"sudo -n /bin/sh -c true 를 확인 (읽기만). 막혔고 dash 가 있으면 계획의 ansible-playbook 에 " +
 			"-e ansible_shell_executable=<dash> 를 붙입니다"})
 	if s.AipubEnabled {
-		steps = append(steps, Step{ID: "P7", Title: "DNS", Kind: Check,
+		steps = append(steps, Step{ID: "P7", Title: "DNS", Kind: Check, Var: "aipub_ingress_zone",
+			Sees: "AIPub·Harbor 호스트가 인그레스 VIP 로 풀리는지 (getent hosts)",
 			Note: "AIPub·Harbor 호스트 (<접두사>.<aipub_ingress_zone>) 가 인그레스 VIP " + s.K8sIngressVIP + " 로 풀리는지 " +
 				"control node 에서 getent hosts 로 확인. DNS 는 설치 뒤에 등록하는 경우가 많아 경고만"})
-		steps = append(steps, Step{ID: "P8", Title: "StorageClass", Kind: Check,
+		steps = append(steps, Step{ID: "P8", Title: "StorageClass", Kind: Check, Var: "aipub_ha_mode_storage_class",
+			Sees: "기존 클러스터에 StorageClass " + s.AipubHaModeStorageClass + " 가 있는지 (kubectl, 읽기만)",
 			Note: "기존 사이트: 첫 컨트롤 플레인 노드에서 kubectl get storageclass " + s.AipubHaModeStorageClass +
 				" 로 있는지 읽기만 확인 (없으면 경고). 새 사이트는 클러스터를 만든 뒤에 만들어져 건너뜀"})
 	}

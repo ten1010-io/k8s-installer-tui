@@ -61,3 +61,24 @@ func TestS9RunsP2AfterTheTerminal(t *testing.T) {
 		}
 	}
 }
+
+// A load balancer VIP outside the internal subnets is shown on the preview as a
+// warning, and saving does not wait on it.
+func TestPreviewWarnsAVIPOutsideTheInternalSubnets(t *testing.T) {
+	st := state.DefaultState()
+	st.Nodes = []state.NodeConfig{{Name: "node1", AnsibleHost: "192.168.0.11"}}
+	st.KiCpNodes, st.K8sNodes, st.K8sCpNodes, st.AipubCpNodes = []string{"node1"}, []string{"node1"}, []string{"node1"}, []string{"node1"}
+	st.KiCpHaMode = false
+	st.AipubEnabled = true
+	st.AipubHaModeStorageClass = "nfs-client"
+	st.K8sIngressVIP = "10.1.0.5"
+	s := NewS7Preview(st, fileio.DefaultPaths(t.TempDir()), t.TempDir())
+	s.SetSize(110, 60)
+	s.SyncFromState(st)
+	if v := s.View(); !strings.Contains(v, "k8s_ingress_vip: VIP 10.1.0.5가 내부망 대역 (192.168.0.0/24) 밖 — 의도한 구성인지 확인하세요") {
+		t.Errorf("no warning:\n%s", v)
+	}
+	if len(s.errors) != 0 {
+		t.Errorf("refused: %v", s.errors)
+	}
+}

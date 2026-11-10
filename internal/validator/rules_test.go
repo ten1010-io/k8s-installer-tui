@@ -113,12 +113,8 @@ func TestValidate(t *testing.T) {
 			s.K8sGatewayVIP = s.K8sIngressVIP
 			s.K8sIngressHostNetworkPort = 0
 		}, []string{"k8s_gateway_lb_name", "k8s_gateway_vip", "k8s_ingress_host_network_port"}},
-		{"lb vip outside the internal subnets", func(s *state.AppState) { s.K8sIngressVIP = "10.1.0.5" },
-			[]string{"k8s_ingress_vip"}},
-		{"lb vip in another internal subnet", func(s *state.AppState) {
-			s.InternalNetworkSubnets = []string{"192.168.0.0/24", "10.1.0.0/24"}
-			s.K8sIngressVIP = "10.1.0.5"
-		}, nil},
+		// a second (external) network of the nodes: a warning only (TestWarnings)
+		{"lb vip outside the internal subnets", func(s *state.AppState) { s.K8sIngressVIP = "10.1.0.5" }, nil},
 		{"lb vip is the ki cp vip", func(s *state.AppState) { s.K8sIngressVIP = s.KiCpHaModeVIP },
 			[]string{"k8s_ingress_vip"}},
 		{"lb vip is the ki cp vip without ha", func(s *state.AppState) {
@@ -135,14 +131,14 @@ func TestValidate(t *testing.T) {
 			s.K8sIngressMode = 1
 			s.K8sGatewayLBName = "gateway-lb"
 			s.K8sGatewayVIP = "10.96.0.10"
-		}, []string{"k8s_gateway_vip", "k8s_gateway_vip"}},
+		}, []string{"k8s_gateway_vip"}},
 		{"gateway vip in the internal subnet", func(s *state.AppState) {
 			s.K8sIngressMode = 1
 			s.K8sGatewayLBName = "gateway-lb"
 			s.K8sGatewayVIP = "192.168.0.201"
 		}, nil},
 		{"lb vip in the pod subnet", func(s *state.AppState) { s.K8sIngressVIP = "10.244.1.1" },
-			[]string{"k8s_ingress_vip", "k8s_ingress_vip"}},
+			[]string{"k8s_ingress_vip"}},
 		{"lb vip beside a broken pod subnet", func(s *state.AppState) { s.K8sPodSubnet = "bad" },
 			[]string{"k8s_pod_subnet"}},
 		{"load balancer values", func(s *state.AppState) {
@@ -397,5 +393,27 @@ func TestValidateMonitoring(t *testing.T) {
 	s.MonitoringApiReplicas = 0
 	if got, want := fields(Monitoring(s)), "aipub_monitoring_api_replicas aipub_monitoring_cp_nodes"; got != want {
 		t.Errorf("Monitoring: %q, want %q", got, want)
+	}
+}
+
+// A load balancer VIP outside every internal subnet is a warning, not an error:
+// it may be on a second network of the nodes.
+func TestWarnings(t *testing.T) {
+	s := valid()
+	if w := Warnings(s); len(w) != 0 {
+		t.Errorf("valid site: %q", w)
+	}
+	s.K8sIngressMode = 1
+	s.K8sGatewayLBName = "gateway-lb"
+	s.K8sGatewayVIP = "10.1.0.6"
+	s.K8sIngressVIP = "10.1.0.5"
+	w := Warnings(s)
+	if len(w) != 2 || !strings.Contains(w[0], "k8s_ingress_vip: VIP 10.1.0.5가 내부망 대역 (192.168.0.0/24) 밖") ||
+		!strings.Contains(w[1], "k8s_gateway_vip") || len(Validate(s)) != 0 {
+		t.Errorf("%q %v", w, Validate(s))
+	}
+	s.AipubEnabled = false
+	if len(Warnings(s)) != 0 {
+		t.Error("warned without AIPub")
 	}
 }

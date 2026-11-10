@@ -96,6 +96,10 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if in, ok := a.screenList[a.current].(interface{ Interrupt() bool }); ok && in.Interrupt() {
 				return a, nil
 			}
+			// and what it still runs ends before the program does
+			if st, ok := a.screenList[a.current].(interface{ Stop() }); ok {
+				st.Stop()
+			}
 			return a, tea.Quit
 		// control keys, so no text input takes them as text: they work on every screen
 		case "pgup", "ctrl+p":
@@ -155,6 +159,10 @@ func (a *App) keyHints(width int) string {
 	if a.onPreview() {
 		hints = append([]string{"Ctrl+S 저장"}, hints...)
 	}
+	// what the screen has going on leads (the install screen sending the key)
+	if h, ok := a.screenList[a.current].(interface{ KeyHints() []string }); ok {
+		hints = append(h.KeyHints(), hints...)
+	}
 	for n := len(hints); n > 1; n-- {
 		if line := "  " + strings.Join(hints[:n], " · "); lipgloss.Width(line) <= width {
 			return line
@@ -173,6 +181,9 @@ func (a *App) busy() bool {
 	if b, ok := a.screenList[a.current].(screens.Busy); ok && b.Busy() {
 		a.screenErrors = []string{"입력 중인 항목을 저장하거나 취소한 뒤 이동하세요"}
 		a.heldBusy = true
+		if r, ok := b.(interface{ BusyReason() string }); ok {
+			a.screenErrors = []string{r.BusyReason()}
+		}
 		return true
 	}
 	return false

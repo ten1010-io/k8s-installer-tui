@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -64,9 +65,17 @@ type keyReadyMsg struct {
 
 // sendProgressMsg is a node done by the one-password send. Neither it nor
 // sendDoneMsg carries the password.
-type sendProgressMsg struct{ result plan.NodeSSH }
+type sendProgressMsg struct {
+	run    *sendRun
+	result plan.NodeSSH
+}
 
-type sendDoneMsg struct{ err error }
+// sendDoneMsg ends a send: of run for the one-password send, nil for the
+// terminal (k).
+type sendDoneMsg struct {
+	run *sendRun
+	err error
+}
 
 type S9Install struct {
 	appState *state.AppState
@@ -87,8 +96,7 @@ type S9Install struct {
 	pass      textinput.Model
 	asking    bool
 	sending   bool
-	cancel    context.CancelFunc
-	progress  <-chan tea.Msg
+	send      *sendRun // the one-password send under way, nil for k
 	sendLines []string
 
 	showScript bool
@@ -156,6 +164,9 @@ func (s *S9Install) planFits() bool {
 }
 
 func (s *S9Install) SyncFromState(st *state.AppState) {
+	if s.asking {
+		s.closePass()
+	}
 	s.archive.SetValue(s.opts.ArchivePath)
 	s.focusIdx, s.navIdx = s9FocusArchive, 0
 	s.showScript = false
@@ -298,31 +309,55 @@ func (s *S9Install) sendWithPassword() tea.Cmd {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := make(chan tea.Msg)
-	s.cancel, s.progress, s.sending = cancel, ch, true
+	r := &sendRun{ch: make(chan tea.Msg), cancel: cancel, done: make(chan struct{})}
+	s.send, s.sending = r, true
 	s.message = ""
 	s.sendLines = []string{fmt.Sprintf("키 보내는 중 (%d대, Ctrl+C 중단)", len(nodes))}
 	opts, run := s.opts, s.run
 	go func() {
-		defer close(ch)
+		defer close(r.done)
+		defer close(r.ch)
 		defer func() {
 			for i := range password {
 				password[i] = 0
 			}
 		}()
+		// a screen that no longer reads (cancelled) must not hold the send up
+		put := func(m tea.Msg) {
+			select {
+			case r.ch <- m:
+			case <-ctx.Done():
+			}
+		}
 		key := plan.DefaultSSHKey()
 		if err := plan.PrepareKey(ctx, opts, run, key); err != nil {
-			ch <- sendDoneMsg{err: err}
+			put(sendDoneMsg{run: r, err: err})
 			return
 		}
-		err := plan.SendKeyWithPassword(ctx, run, key, nodes, password, func(r plan.NodeSSH) { ch <- sendProgressMsg{r} })
-		ch <- sendDoneMsg{err: err}
+		err := plan.SendKeyWithPassword(ctx, run, key, nodes, password, func(n plan.NodeSSH) { put(sendProgressMsg{run: r, result: n}) })
+		put(sendDoneMsg{run: r, err: err})
 	}()
-	return waitSend(ch)
+	return r.wait()
 }
 
-func waitSend(ch <-chan tea.Msg) tea.Cmd {
-	return func() tea.Msg { return <-ch }
+// sendRun is one one-password send: its goroutine gives each node on ch, and
+// closes done once it has stopped and the helper directory is gone.
+type sendRun struct {
+	ch       chan tea.Msg
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopping bool
+}
+
+// wait is the next message of the send; when the goroutine stopped without its
+// last one (cancelled), the send is done as cancelled.
+func (r *sendRun) wait() tea.Cmd {
+	return func() tea.Msg {
+		if m, ok := <-r.ch; ok {
+			return m
+		}
+		return sendDoneMsg{run: r, err: context.Canceled}
+	}
 }
 
 func (s *S9Install) closePass() {
@@ -332,19 +367,62 @@ func (s *S9Install) closePass() {
 	s.syncFocus()
 }
 
+// Busy holds the wizard on this screen while the password is asked or the key
+// sent: the messages of the send come to this screen only.
+func (s *S9Install) Busy() bool { return s.asking || s.sending }
+
+// BusyReason is what the wizard says when it does not leave.
+func (s *S9Install) BusyReason() string {
+	if s.sending {
+		return "키를 보내는 중입니다. 끝나거나 Ctrl+C 로 중단한 뒤 이동하세요"
+	}
+	return "비밀번호 입력 중입니다. Enter 로 보내거나 Esc 로 취소한 뒤 이동하세요"
+}
+
+// KeyHints are the keys of what is going on, for the footer.
+func (s *S9Install) KeyHints() []string {
+	switch {
+	case s.asking:
+		return []string{"Enter 보내기", "Esc 취소"}
+	case s.sending:
+		return []string{"Ctrl+C 중단"}
+	case len(s.refusing()) > 0:
+		return []string{"k·p 키 보내기"}
+	}
+	return nil
+}
+
 // Interrupt is Ctrl+C on this screen: it stops a send, or leaves the password
-// input, instead of quitting. False when there is nothing to stop.
+// input, instead of quitting. False when there is nothing to stop, or when a
+// stop is under way already: the second Ctrl+C quits (after Stop).
 func (s *S9Install) Interrupt() bool {
 	switch {
-	case s.sending && s.cancel != nil:
-		s.cancel()
-		s.message = "중단하는 중..."
+	case s.send != nil && !s.send.stopping:
+		s.send.stopping = true
+		s.send.cancel()
+		s.message = "중단하는 중... (한 번 더 Ctrl+C 면 종료)"
 		return true
 	case s.asking:
 		s.closePass()
 		return true
 	}
 	return false
+}
+
+// Stop ends a send before the program quits: cancelled, and waited for until
+// its helper directory is removed (the commands it runs are killed on cancel).
+func (s *S9Install) Stop() {
+	if s.asking {
+		s.closePass()
+	}
+	if s.send == nil {
+		return
+	}
+	s.send.cancel()
+	select {
+	case <-s.send.done:
+	case <-time.After(15 * time.Second):
+	}
 }
 
 func (s *S9Install) writeScript() {
@@ -384,16 +462,22 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, tea.ExecProcess(cmd, func(err error) tea.Msg { return sendDoneMsg{err: err} })
 
 	case sendProgressMsg:
+		if msg.run != s.send {
+			return s, nil // of a send that is over
+		}
 		r := msg.result
 		line := r.Node.Name + ": 키 받음"
 		if r.Key != plan.KeyOK {
 			line = r.Node.Name + ": " + r.Label() + " — " + r.Note()
 		}
 		s.sendLines = append(s.sendLines, line)
-		return s, waitSend(s.progress)
+		return s, s.send.wait()
 
 	case sendDoneMsg:
-		s.sending, s.cancel, s.progress = false, nil, nil
+		if msg.run != s.send {
+			return s, nil
+		}
+		s.sending, s.send = false, nil
 		switch {
 		case errors.Is(msg.err, context.Canceled):
 			s.message = "키 보내기를 중단했습니다. P2 를 다시 확인합니다"

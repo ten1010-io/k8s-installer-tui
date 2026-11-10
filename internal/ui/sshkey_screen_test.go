@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
@@ -80,6 +81,7 @@ func (f *sshSite) run(ctx context.Context, dir, name string, args ...string) ([]
 
 func newSSHScreen(t *testing.T, key map[string]string) (*screens.S9Install, *sshSite) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", "")
 	d, paths := newDriver(t)
 	s := d.app.appState
 	s.AipubEnabled = false
@@ -128,6 +130,8 @@ func TestPlanScreenOffersTheKeyOnlyToNodesRefusingIt(t *testing.T) {
 		{"down", map[string]string{"ops@192.168.0.12": "ssh: connect to host 192.168.0.12 port 22: Connection refused\n"}, false,
 			"node2: 접속 안 됨 — 접속 불가: 접속하지 못함"},
 		{"all ready", map[string]string{}, false, "정상: node1 node2 node3"},
+		{"password login off", map[string]string{"ops@192.168.0.12": "ops@192.168.0.12: Permission denied (publickey).\n"}, false,
+			"node2: 접속 안 됨 — 비밀번호 로그인 꺼짐: 제어 노드의 키를"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s9, _ := newSSHScreen(t, c.key)
@@ -226,29 +230,98 @@ func TestPlanScreenSendsTheKeyOnTheTerminal(t *testing.T) {
 	}
 }
 
-// Ctrl+C during a send stops it and stays on the screen; P2 runs again.
-func TestPlanScreenStopsASend(t *testing.T) {
-	d, _ := newDriver(t)
+// newSSHApp is the wizard on the install screen of newSSHScreen, after P2 found
+// node2 refusing the key.
+func newSSHApp(t *testing.T) (*App, *screens.S9Install, *sshSite) {
 	s9, site := newSSHScreen(t, map[string]string{"ops@192.168.0.12": refused})
 	_, cmd := s9.Update(key("c"))
 	drain(t, s9, cmd)
+	d, _ := newDriver(t)
+	d.app.current = len(d.app.screenList) - 1
+	d.app.screenList[d.app.current] = s9
+	return d.app, s9, site
+}
+
+// helperDirs are the directories of the askpass helper left under HOME.
+func helperDirs() []os.DirEntry {
+	home, _ := os.UserHomeDir()
+	left, _ := os.ReadDir(filepath.Join(home, ".cache", "k8s-installer-tui"))
+	return left
+}
+
+// waitGone waits for the send's goroutine to remove its helper directory.
+func waitGone(t *testing.T) {
+	t.Helper()
+	for i := 0; i < 200 && len(helperDirs()) > 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if left := helperDirs(); len(left) > 0 {
+		t.Errorf("the helper directory is left: %v", left)
+	}
+}
+
+var navKeys = []tea.KeyMsg{{Type: tea.KeyCtrlN}, {Type: tea.KeyCtrlP}, {Type: tea.KeyPgUp}, {Type: tea.KeyPgDown}}
+
+// While the password is asked the wizard does not leave the screen (the input
+// would keep it); Esc clears it.
+func TestPlanScreenHoldsTheWizardWhileAsking(t *testing.T) {
+	app, s9, _ := newSSHApp(t)
+	at := app.current
+	s9.Update(key("p"))
+	s9.Update(key("secret"))
+	if !strings.Contains(app.keyHints(200), "Enter 보내기 · Esc 취소") {
+		t.Errorf("footer: %s", app.keyHints(200))
+	}
+	for _, k := range navKeys {
+		app.Update(k)
+		app.Update(screens.NavigateNextMsg{})
+		app.Update(screens.NavigatePrevMsg{})
+		if app.current != at || !strings.Contains(strings.Join(app.screenErrors, " "), "비밀번호 입력 중입니다") {
+			t.Fatalf("%v left the screen while asking: %d %q", k, app.current, app.screenErrors)
+		}
+	}
+	s9.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if s9.Busy() || strings.Contains(view(s9), "******") {
+		t.Error("Esc leaves the input open")
+	}
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if app.current == at {
+		t.Error("the wizard is held after Esc")
+	}
+}
+
+// While the key is sent the wizard does not leave the screen, whose messages
+// carry the send on; Ctrl+C stops it, a second one quits, and the send's
+// goroutine ends and removes its helper directory even when nothing reads its
+// messages any more.
+func TestPlanScreenStopsASend(t *testing.T) {
+	app, s9, site := newSSHApp(t)
+	at := app.current
 	checked := site.p2
 	site.block = true
 	s9.Update(key("p"))
 	s9.Update(key("pw"))
-	_, cmd = s9.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := s9.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, k := range navKeys {
+		app.Update(k)
+		if app.current != at || !strings.Contains(strings.Join(app.screenErrors, " "), "키를 보내는 중입니다") {
+			t.Fatalf("%v left the screen while sending", k)
+		}
+	}
+	if !strings.Contains(app.keyHints(200), "Ctrl+C 중단") {
+		t.Errorf("footer: %s", app.keyHints(200))
+	}
 
-	// the App gives Ctrl+C to the screen while it sends
-	d.app.screenList[d.app.current] = s9
-	if _, quit := d.app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit != nil {
+	if _, quit := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit != nil {
 		t.Fatal("Ctrl+C quits during a send")
 	}
-	drain(t, s9, cmd)
-	if v := view(s9); !strings.Contains(v, "키 보내기를 중단했습니다") || site.p2 != checked+1 {
+	drain(t, s9, cmd) // the messages after the cancel end the send as cancelled
+	if v := view(s9); !strings.Contains(v, "키 보내기를 중단했습니다") || site.p2 != checked+1 || s9.Busy() {
 		t.Errorf("P2 ran %d times after the stop:\n%s", site.p2-checked, v)
 	}
+	waitGone(t)
 	// nothing running: Ctrl+C quits
-	if _, quit := d.app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit == nil {
+	if _, quit := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit == nil {
 		t.Error("Ctrl+C does not quit")
 	}
 }
@@ -277,5 +350,27 @@ func TestPlanScreenKeepsThePasswordInputInSight(t *testing.T) {
 	s9.Update(key("x"))
 	if v := view(s9); !strings.Contains(v, "SSH 비밀번호 (node2 공통): *") {
 		t.Errorf("typed text not in the input:\n%s", v)
+	}
+}
+
+// Ctrl+C twice while the send hangs and nobody reads its messages: the second
+// quits, after the send has ended and removed its helper directory.
+func TestPlanScreenQuitsOnASecondCtrlC(t *testing.T) {
+	app, s9, site := newSSHApp(t)
+	site.block = true
+	s9.Update(key("p"))
+	s9.Update(key("pw"))
+	s9.Update(tea.KeyMsg{Type: tea.KeyEnter}) // its command is never run: no reader
+	for i := 0; i < 200 && len(helperDirs()) == 0; i++ {
+		time.Sleep(5 * time.Millisecond) // the send is under way
+	}
+	if _, quit := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit != nil {
+		t.Fatal("the first Ctrl+C quits")
+	}
+	if _, quit := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit == nil {
+		t.Fatal("the second Ctrl+C does not quit")
+	}
+	if left := helperDirs(); len(left) > 0 {
+		t.Errorf("quit before the helper directory was removed: %v", left)
 	}
 }

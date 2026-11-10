@@ -91,6 +91,11 @@ func TestScript(t *testing.T) {
 	if !strings.Contains(elsewhere, "sudo cp /home/ops/site-a/inventory.yml /opt/k8s-installer/ansible/inventory.yml") {
 		t.Errorf("no copy of files saved elsewhere:\n%s", elsewhere)
 	}
+	// the audit policy goes along, where k8s-installer reads k8s_cp_extra_files
+	if want := "[ -f /home/ops/site-a/files/aipub/audit-policy.yaml ] && sudo install -D -m 0644 " +
+		"/home/ops/site-a/files/aipub/audit-policy.yaml /opt/k8s-installer/ansible/files/aipub/audit-policy.yaml || true"; !strings.Contains(elsewhere, want) {
+		t.Errorf("no copy of the audit policy:\n%s", elsewhere)
+	}
 
 	o.ArchivePath = ""
 	skipped := Script(Build(aipubState(), o), o, "/opt/k8s-installer/ansible")

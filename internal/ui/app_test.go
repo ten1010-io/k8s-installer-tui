@@ -509,7 +509,14 @@ func TestWizardControlPlane(t *testing.T) {
 	d.at("5.AIPub")
 	d.keys("ctrl+n")
 	d.at("8.저장")
-	// audit policy is written from template on save
+	// the default audit policy is written on save: a tab of its own, and no
+	// warning that the file is missing
+	if !strings.Contains(d.screen(), "aipub/audit-policy.yaml") {
+		t.Errorf("no tab of the audit policy:\n%s", d.screen())
+	}
+	if strings.Contains(d.screen(), "확인할 점") || strings.Contains(d.screen(), "ansible/files 에 없습니다") {
+		t.Errorf("a warning although the wizard writes the policy:\n%s", d.screen())
+	}
 	d.keys("s")
 	if !strings.Contains(d.screen(), "저장 완료") {
 		t.Fatalf("not saved:\n%s", d.screen())

@@ -1,10 +1,14 @@
 package screens
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
+	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
 // A note of the 확인할 점 tab is broken at its spaces under its mark, Korean
@@ -42,5 +46,62 @@ func TestWrapNote(t *testing.T) {
 		if got := wrapNote(c.text, c.width); strings.Join(got, "|") != strings.Join(c.want, "|") {
 			t.Errorf("wrapNote(%q, %d) = %q, want %q", c.text, c.width, got, c.want)
 		}
+	}
+}
+
+// The audit policy has a tab, and the saved files name it: written when it is
+// the default, kept (and said so) when the site has one; with nothing usable the
+// tab says why and the file is reported missing.
+func TestPreviewAuditPolicy(t *testing.T) {
+	paths := fileio.DefaultPaths(t.TempDir())
+	st := state.DefaultState()
+	st.ControlPlane.Audit = true
+	s := NewS7Preview(st, paths, t.TempDir())
+	s.SetSize(200, 60)
+	s.SyncFromState(st)
+	tab := func() *previewTab {
+		for i := range s.tabs {
+			if s.tabs[i].name == state.AuditPolicyFile {
+				return &s.tabs[i]
+			}
+		}
+		return nil
+	}
+	if a := tab(); a == nil || a.path != paths.AuditPolicy() || a.kept != "" || !fileio.IsWizardPolicy([]byte(a.content)) {
+		t.Fatalf("default: %+v", a)
+	}
+	for _, m := range s.missing {
+		if m.Src == state.AuditPolicyFile {
+			t.Errorf("reported missing although saving writes it: %v", s.missing)
+		}
+	}
+	s.errors = nil // the nodes are not this test's
+	s.doSave()
+	notes := s4bANSI.ReplaceAllString(s.notesText(), "")
+	if !strings.Contains(notes, "  "+paths.AuditPolicy()) || strings.Contains(notes, "쓰지 않음") {
+		t.Errorf("saved files:\n%s", notes)
+	}
+
+	// saved again: the file is kept, the list says so
+	s.SyncFromState(st)
+	if a := tab(); a == nil || a.kept != "위저드가 전에 쓴 기본 정책을 그대로 둡니다" {
+		t.Fatalf("kept: %+v", a)
+	}
+	s.errors = nil
+	s.doSave()
+	if notes := s4bANSI.ReplaceAllString(s.notesText(), ""); !strings.Contains(notes, paths.AuditPolicy()+" — 쓰지 않음: 위저드가 전에 쓴 기본 정책을 그대로 둡니다") {
+		t.Errorf("saved files:\n%s", notes)
+	}
+
+	// an empty file: no path to save, the tab and the missing file say why
+	if err := os.WriteFile(paths.AuditPolicy(), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	s.SyncFromState(st)
+	if a := tab(); a == nil || a.path != "" || !strings.Contains(a.content, "비어 있습니다") {
+		t.Fatalf("empty: %+v", a)
+	}
+	if len(s.missing) != 1 || !strings.Contains(schema.FileSource(&st.ControlPlane, s.missing[0]), "비어 있습니다") {
+		t.Errorf("missing: %v", s.missing)
 	}
 }

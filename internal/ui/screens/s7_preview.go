@@ -30,10 +30,12 @@ const (
 // previewTab is one file of the preview. A file AIPub does not need is not shown.
 // The last tab is the site-values view, which has no path: it is not saved.
 // The first tab is 확인할 점 when there is anything to report; no path either.
+// kept says why a file with a path is not written (it is kept as it is).
 type previewTab struct {
 	name    string
 	path    string
 	content string
+	kept    string
 }
 
 // notesTab is the name of the tab of what the preview reports: validation
@@ -194,7 +196,7 @@ func wrapNote(text string, width int) []string {
 }
 
 // buildNotes is what the preview reports, for the 확인할 점 tab.
-func (s *S7Preview) buildNotes() {
+func (s *S7Preview) buildNotes(st *state.AppState) {
 	s.notes = nil
 	add := func(style lipgloss.Style, text string) { s.notes = append(s.notes, note{style, text}) }
 	if len(s.errors) > 0 {
@@ -217,7 +219,7 @@ func (s *S7Preview) buildNotes() {
 	if len(s.missing) > 0 {
 		add(styles.StyleWarning, fmt.Sprintf("⚠ 컨트롤플레인 파일 %d건이 ansible/files 에 없습니다 (setup-cluster 전에 두세요):", len(s.missing)))
 		for _, f := range s.missing {
-			add(styles.StyleWarning, "  • "+s.installerFiles+"/"+f.Src+schema.FileSource(f))
+			add(styles.StyleWarning, "  • "+s.installerFiles+"/"+f.Src+schema.FileSource(&st.ControlPlane, f))
 		}
 	}
 
@@ -263,6 +265,8 @@ func (s *S7Preview) notesFirst() bool {
 func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.errors = validator.Validate(st)
 	s.warnings = schema.FixedChanges(s.loaded, st)
+	// which audit policy is used, for the warnings and the site-values view
+	st.ControlPlane.AuditNote = fileio.PlanAuditPolicy(s.paths.AuditPolicy(), st).Note
 	s.missing = fileio.MissingCpFiles(st, s.paths.FilesDir(), s.installerFiles)
 	s.saved = false
 	s.saveErr = ""
@@ -294,16 +298,25 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 			s.caNote = append(s.caNote, "JWKS CA 파일: "+r.CA.Err.Error())
 		}
 		s.tabs = []previewTab{
-			{"inventory.yml", s.paths.Inventory, string(r.Inventory)},
-			{"vars.yml", s.paths.Vars, string(r.Vars)},
+			{name: "inventory.yml", path: s.paths.Inventory, content: string(r.Inventory)},
+			{name: "vars.yml", path: s.paths.Vars, content: string(r.Vars)},
 		}
 		if r.AipubVars != nil {
-			s.tabs = append(s.tabs, previewTab{"aipub/vars.yml", s.paths.AipubVars, string(r.AipubVars)})
+			s.tabs = append(s.tabs, previewTab{name: "aipub/vars.yml", path: s.paths.AipubVars, content: string(r.AipubVars)})
+		}
+		// the audit policy: the default written, the file kept, or why none is
+		switch a := r.Audit; {
+		case a.Source == fileio.AuditDefault:
+			s.tabs = append(s.tabs, previewTab{name: state.AuditPolicyFile, path: s.paths.AuditPolicy(), content: string(a.Data)})
+		case a.Warn():
+			s.tabs = append(s.tabs, previewTab{name: state.AuditPolicyFile, content: "# " + a.Note + "\n"})
+		case a.Source != fileio.AuditOff:
+			s.tabs = append(s.tabs, previewTab{name: state.AuditPolicyFile, path: s.paths.AuditPolicy(), content: string(a.Data), kept: a.Note})
 		}
 		// all of the above in one annotated view; not a file that is saved
-		s.tabs = append(s.tabs, previewTab{schema.SiteValuesFile, "", string(schema.SiteValues(st))})
+		s.tabs = append(s.tabs, previewTab{name: schema.SiteValuesFile, content: string(schema.SiteValues(st))})
 	}
-	s.buildNotes()
+	s.buildNotes(st)
 	s.notesFirst()
 
 	// on 확인할 점 when there is anything to report: the first thing seen
@@ -431,8 +444,13 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 	}
 	s.notes = append(s.notes, note{styles.StyleSuccess, "✓ 저장한 파일 (기존 파일은 .bak 으로 백업):"})
 	for _, t := range s.tabs {
-		if t.path != "" {
+		if t.path != "" && t.kept == "" {
 			s.notes = append(s.notes, note{styles.StyleMuted, "  " + t.path})
+		}
+	}
+	for _, t := range s.tabs {
+		if t.kept != "" {
+			s.notes = append(s.notes, note{styles.StyleMuted, "  " + t.path + " — 쓰지 않음: " + t.kept})
 		}
 	}
 	if s.notesFirst() {

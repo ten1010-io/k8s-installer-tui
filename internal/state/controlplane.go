@@ -107,12 +107,11 @@ const WebhookCAPath = "/etc/k8s-installer/certs/ca.crt"
 
 // Preset is a fixed set of entries of the apiserver and the files they read.
 type Preset struct {
-	ID       string
-	Title    string
-	Args     []ExtraArg    // of k8s_apiserver_extra_args
-	Volumes  []ExtraVolume // of k8s_apiserver_extra_volumes
-	Files    []CpExtraFile // of k8s_cp_extra_files
-	Provider string        // who provides the files under ansible/files, when the site does
+	ID      string
+	Title   string
+	Args    []ExtraArg    // of k8s_apiserver_extra_args
+	Volumes []ExtraVolume // of k8s_apiserver_extra_volumes
+	Files   []CpExtraFile // of k8s_cp_extra_files
 	// Stage is the step it is applied by (StageCluster: built with the cluster).
 	// The files a later one reads are made by a step after setup-cluster
 	Stage int
@@ -136,7 +135,6 @@ var Presets = []Preset{
 		Files: []CpExtraFile{
 			{Src: AuditPolicyFile, Dest: "/etc/kubernetes/audit-policy.yaml", Mode: "0644"},
 		},
-		Provider: "AIPub 모니터링/python 팀",
 	},
 	{
 		ID:    PresetRuntimeConfig,

@@ -81,7 +81,7 @@ k8s_apiserver_extra_volumes: [{name: "audit-policy", hostPath: "/etc/kubernetes/
 # k8s_scheduler_extra_volumes: []     # ○ kube-scheduler 추가 host path 볼륨
 # k8s_etcd_extra_args: []             # ○ etcd 추가 인자
 k8s_cp_extra_files: [{src: "aipub/audit-policy.yaml", dest: "/etc/kubernetes/audit-policy.yaml", mode: "0644"}, {src: "aipub/authentication-config.yaml", dest: "/etc/kubernetes/authentication-config.yaml", mode: "0600"}, {src: "aipub/webhook-token-auth.yaml", dest: "/etc/kubernetes/webhook-token-auth.yaml", mode: "0644"}] # ○ (기본 []) 컨트롤 플레인 노드에 둘 파일 (비밀 금지)
-# preflight: ansible/files/aipub/audit-policy.yaml 이 있어야 함 (위저드가 템플릿으로 만듦)
+# preflight: ansible/files/aipub/audit-policy.yaml 이 있어야 함 (없으면 위저드가 기본 정책을 씀, 있는 파일은 그대로 둠)
 # preflight: ansible/files/aipub/authentication-config.yaml 이 있어야 함 (위저드가 issuer URL 과 CA 로 만듦, CA 가 생기기 전이면 A5.1 --fill-auth-config 가)
 # preflight: ansible/files/aipub/webhook-token-auth.yaml 이 있어야 함 (위저드가 웹훅 URL 로 만듦)
 
@@ -202,7 +202,7 @@ aipub_harbor_local_pv_node: "node1"   # ✅ (aipub_ha_mode=false 일 때 필수)
 #    [ ] k8s_apiserver_extra_args: CA /etc/k8s-installer/certs/ca.crt 는 A2 setup-cert 가 노드(컨트롤 노드 포함)에 둠; 있을 때만 authentication-config.yaml 을 씀 (없으면 A5.1 --fill-auth-config 가 만듦)
 #    [ ] k8s_apiserver_extra_args: CA 없이 update-cluster/노드 추가를 돌리면 설치기가 '소스 파일 없음'으로 거부합니다 (validate-hostvars.py, 노드는 그대로)
 #    [ ] k8s_apiserver_extra_args: 웹훅 URL "https://aipub.example.com/token-review" 이 컨트롤 플레인 노드에서 닿고 /etc/k8s-installer/certs/ca.crt 로 검증되는지 (A2.5 update-cluster 에서 적용)
-#    [ ] k8s_cp_extra_files: ansible/files/aipub/audit-policy.yaml 이 있어야 함 (위저드가 템플릿으로 만듦)
+#    [ ] k8s_cp_extra_files: ansible/files/aipub/audit-policy.yaml 이 있어야 함 (없으면 위저드가 기본 정책을 씀, 있는 파일은 그대로 둠)
 #    [ ] k8s_cp_extra_files: ansible/files/aipub/authentication-config.yaml 이 있어야 함 (위저드가 issuer URL 과 CA 로 만듦, CA 가 생기기 전이면 A5.1 --fill-auth-config 가)
 #    [ ] k8s_cp_extra_files: ansible/files/aipub/webhook-token-auth.yaml 이 있어야 함 (위저드가 웹훅 URL 로 만듦)
 #    [ ] aipub_load_balancers: nodes 의 이름이 inventory.yml 에 있어야 함

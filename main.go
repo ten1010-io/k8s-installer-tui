@@ -75,6 +75,11 @@ func main() {
 		os.Exit(fillAuthConfig(paths, s, filepath.Join(*installerRoot, "ansible", "files")))
 	}
 	if *renderDir != "" {
+		// an existing site keeps the audit policy of its nodes: the default is
+		// not rendered for it until the wizard has read them (PlanAuditPolicy)
+		if loaded, _ := fileio.LoadSite(paths); loaded != nil {
+			s.Existing = true
+		}
 		os.Exit(render(paths, s, *renderDir))
 	}
 
@@ -116,10 +121,16 @@ func render(from fileio.Paths, s *state.AppState, dir string) int {
 		return 1
 	}
 	to := fileio.DefaultPaths(dir)
+	// the audit policy saving would write (the default), or which one it keeps
+	s.ControlPlane.AuditNote = r.Audit.Note
+	if r.Audit.Note != "" {
+		fmt.Println("audit policy:", r.Audit.Note)
+	}
 	for _, f := range []struct {
 		path string
 		data []byte
-	}{{to.Inventory, r.Inventory}, {to.Vars, r.Vars}, {to.AipubVars, r.AipubVars}, {to.WebhookConfig(), r.WebhookConfig}, {to.AuthConfig(), r.AuthConfig}} {
+	}{{to.Inventory, r.Inventory}, {to.Vars, r.Vars}, {to.AipubVars, r.AipubVars}, {to.WebhookConfig(), r.WebhookConfig}, {to.AuthConfig(), r.AuthConfig},
+		{to.AuditPolicy(), r.AuditPolicy}} {
 		if f.data == nil {
 			continue
 		}

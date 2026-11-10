@@ -414,6 +414,10 @@ func CopyCommands(o Options, savedIn string) []string {
 		// writes both copies otherwise)
 		"[ -f " + shellQuote(src+"/files/"+state.JWKSConfigFile) + " ] && sudo install -D -m 0644 " +
 			shellQuote(src+"/files/"+state.JWKSConfigFile) + " " + shellQuote(dst+"/files/"+state.JWKSConfigFile) + " || true",
+		// the audit policy of the audit preset, when it is on: the default the
+		// wizard wrote, the site's or the one taken from a node
+		"[ -f " + shellQuote(src+"/files/"+state.AuditPolicyFile) + " ] && sudo install -D -m 0644 " +
+			shellQuote(src+"/files/"+state.AuditPolicyFile) + " " + shellQuote(dst+"/files/"+state.AuditPolicyFile) + " || true",
 	}
 }
 

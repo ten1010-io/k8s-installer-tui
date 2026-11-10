@@ -229,14 +229,16 @@ func controlPlaneHints(s *state.AppState, v Var) []string {
 		}
 	case state.CpExtraFilesVar:
 		for _, f := range cp.ExtraFiles(state.StageAll) {
-			out = append(out, "ansible/files/"+f.Src+" 이 있어야 함"+FileSource(f))
+			out = append(out, "ansible/files/"+f.Src+" 이 있어야 함"+FileSource(cp, f))
 		}
 	}
 	return out
 }
 
-// FileSource says who puts a file of k8s_cp_extra_files under ansible/files.
-func FileSource(f state.CpExtraFile) string {
+// FileSource says who puts a file of k8s_cp_extra_files under ansible/files; for
+// the audit policy, which policy is used (cp.AuditNote, set from
+// fileio.PlanAuditPolicy where the files are known).
+func FileSource(cp *state.ControlPlane, f state.CpExtraFile) string {
 	for _, p := range state.Presets {
 		for _, pf := range p.Files {
 			if pf != f {
@@ -249,10 +251,10 @@ func FileSource(f state.CpExtraFile) string {
 				return " (위저드가 issuer URL 과 CA 로 만듦, CA 가 생기기 전이면 A5.1 --fill-auth-config 가)"
 			}
 			if p.ID == state.PresetAudit {
-				return " (위저드가 템플릿으로 만듦)"
-			}
-			if p.Provider != "" {
-				return " (" + p.Title + " 정책: " + p.Provider + " 제공)"
+				if cp.AuditNote != "" {
+					return " (" + cp.AuditNote + ")"
+				}
+				return " (없으면 위저드가 기본 정책을 씀, 있는 파일은 그대로 둠)"
 			}
 		}
 	}

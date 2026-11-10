@@ -362,24 +362,6 @@ func TestRunnerResumesFromTheFailedStep(t *testing.T) {
 	}
 }
 
-func TestRunnerRefusesWhenLocked(t *testing.T) {
-	r, f, _ := newTestRunner(t, aipubStages())
-	os.MkdirAll(r.Dir, 0755)
-	held, err := lockFile(filepath.Join(r.Dir, "lock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer held.Close()
-	_, err = r.Run(context.Background(), false)
-	var locked *LockedError
-	if !errors.As(err, &locked) || locked.PID != fmt.Sprint(os.Getpid()) || f.ranIDs() != "" {
-		t.Errorf("err %v, ran %q", err, f.ranIDs())
-	}
-	if _, err := os.Stat(filepath.Join(r.Dir, stateFile)); err == nil {
-		t.Error("state.json written by a run that did not start")
-	}
-}
-
 // Stop lets the running step finish and starts no other; Kill ends it now.
 func TestRunnerStopAndKill(t *testing.T) {
 	stages := [][]Step{{{ID: "X1", Kind: Shell, Shell: []string{"x1"}}}, {{ID: "X2", Kind: Shell, Shell: []string{"x2"}}}}

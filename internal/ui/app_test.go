@@ -152,6 +152,17 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	t.Logf("S5:\n%s", d.screen())
 	d.keys("ctrl+n")
 
+	// S5b: a size that is not one is refused, a right one is kept; the rest stays at the defaults
+	d.at("5b.모니터링")
+	d.keys("ctrl+u", "5T")
+	d.keys("ctrl+n")
+	d.at("5b.모니터링")
+	if !strings.Contains(strings.Join(d.app.screenErrors, ""), "aipub_monitoring_opensearch_storage_size") {
+		t.Errorf("no error naming the size: %v", d.app.screenErrors)
+	}
+	d.keys("ctrl+u", "5Ti")
+	d.keys("ctrl+n")
+
 	// S6: a load balancer name with h/j/k/l in it, and the ingress VIP
 	d.at("6.AIPub LB")
 	d.keys("ctrl+n")
@@ -178,6 +189,14 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	}
 	if _, ok := a["aipub_ha_mode_storage_class"]; ok {
 		t.Error("storage class written without HA")
+	}
+	if a["aipub_monitoring_opensearch_storage_size"] != "5Ti" {
+		t.Errorf("monitoring size = %v", a["aipub_monitoring_opensearch_storage_size"])
+	}
+	for _, k := range []string{"aipub_monitoring_api_replicas", "aipub_monitoring_metrics_storage_size", "aipub_monitoring_cp_nodes"} {
+		if _, ok := a[k]; ok {
+			t.Errorf("%s written at its default", k)
+		}
 	}
 	if a["aipub_ingress_zone"] != "aipub.lkjh.local" {
 		t.Errorf("zone = %v", a["aipub_ingress_zone"])
@@ -213,7 +232,7 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	// 9.설치: the plan of what was saved
 	d.keys("enter")
 	d.at("9.설치")
-	s9 := d.app.screenList[9].(*screens.S9Install)
+	s9 := d.app.screenList[10].(*screens.S9Install)
 	s9.SetRunner(func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		return []byte("node1 | CHANGED | rc=0 | (stdout) \nnode2 | CHANGED | rc=0 | (stdout) \n" +
 			"node3 | UNREACHABLE! => {\"msg\": \"No route to host\"}\n"), fmt.Errorf("exit status 4")

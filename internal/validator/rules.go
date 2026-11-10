@@ -19,6 +19,10 @@ var (
 	reFQDN      = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`)
 	reSubdomain = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-.]*[a-z0-9])?$`)
 	reMinor     = regexp.MustCompile(`^1\.[0-9]+$`)
+	// the monitoring installer reads a retention as days: values.yaml.j2 takes the
+	// digits of "180d" for the longest window of rightsizing, so a week ("2w") or
+	// hours it would read as zero
+	reDays = regexp.MustCompile(`^[1-9][0-9]*d$`)
 )
 
 type Error struct {
@@ -171,6 +175,10 @@ func formatMsg(t schema.Type, enum []string, val any) string {
 	case schema.TypeSize:
 		if !reSize.MatchString(text) {
 			return fmt.Sprintf("'%s'는 올바른 스토리지 크기 형식이 아닙니다 (예: 512Gi)", text)
+		}
+	case schema.TypeDays:
+		if !reDays.MatchString(text) {
+			return fmt.Sprintf("'%s'는 형식이 올바르지 않습니다 (일 단위, 예: 180d)", text)
 		}
 	case schema.TypeEnum:
 		for _, e := range enum {
@@ -368,7 +376,39 @@ func validateAipub(s *state.AppState) []Error {
 		}
 	}
 
+	errs = append(errs, monitoringCpNodes(s)...)
 	return errs
+}
+
+// monitoringCpNodes: aipub_monitoring_cp_nodes ⊆ k8s_cp_node. OpenSearch and
+// Alertmanager run a replica on each, with volumes that are directories of those
+// nodes without HA, so they have to be nodes of the cluster that run workloads
+// of the control plane (set-facts.yml of the monitoring module defaults to every
+// k8s control plane node).
+func monitoringCpNodes(s *state.AppState) []Error {
+	var errs []Error
+	for _, n := range s.MonitoringCpNodes {
+		if !s.IsK8sCpNode(n) {
+			errs = append(errs, Error{"aipub_monitoring_cp_nodes",
+				fmt.Sprintf("'%s'는 마스터 노드 그룹에 속하지 않습니다", n)})
+		}
+	}
+	return errs
+}
+
+// Monitoring checks what the monitoring screen edits on its own: its variables
+// and the nodes it picks, for the screen to stop on before the preview.
+func Monitoring(s *state.AppState) []Error {
+	var errs []Error
+	for _, v := range schema.ByFile(schema.FileAipub) {
+		if v.Screen != "5b.모니터링" {
+			continue
+		}
+		if val, ok := schema.Value(s, v); ok {
+			errs = append(errs, checkVar(v, v.Key, val, false)...)
+		}
+	}
+	return append(errs, monitoringCpNodes(s)...)
 }
 
 // --- the control plane (k8s_*_extra_args, k8s_*_extra_volumes, k8s_cp_extra_files) ---

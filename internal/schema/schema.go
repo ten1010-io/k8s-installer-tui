@@ -49,6 +49,7 @@ const (
 	TypeMinor     Type = "minor"     // a kubernetes minor: 1.36
 	TypeDuration  Type = "duration"  // hours, as kubeadm takes them: 26280h
 	TypeSize      Type = "size"      // a quantity in binary units: 512Gi
+	TypeDays      Type = "days"      // a number of days, as the monitoring installer takes them: 180d
 	TypePort      Type = "port"      // 1-65535
 	TypeEnum      Type = "enum"      // one of Enum
 	TypeList      Type = "list"      // a sequence; its items are Elem when that is set

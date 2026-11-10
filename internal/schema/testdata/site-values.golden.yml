@@ -181,9 +181,12 @@ aipub_harbor_local_pv_node: "node1"   # ✅ (aipub_ha_mode=false 일 때 필수)
 # aipub_monitoring_storage_static_type: "local" # ○ static 일 때의 종류
 # aipub_monitoring_nfs_server: null   # ○ static nfs 일 때 NFS 서버
 # aipub_monitoring_opensearch_storage_size: "3Ti" # ○ OpenSearch 볼륨 크기 (사이트 규모에 맞게)
-# aipub_monitoring_opensearch_log_retention: "180d" # ○ OpenSearch 로그 보존 기간
+# aipub_monitoring_opensearch_log_retention: "180d" # ○ OpenSearch 로그 보존 기간 (일 단위, 180d)
 # aipub_monitoring_metrics_storage_size: "1Ti" # ○ VictoriaMetrics 볼륨 크기 (사이트 규모에 맞게)
-# aipub_monitoring_metrics_retention_period: "180d" # ○ 메트릭 보존 기간
+# aipub_monitoring_metrics_retention_period: "180d" # ○ VictoriaMetrics 메트릭 보존 기간 (일 단위, 180d)
+# aipub_monitoring_rightsizing_enabled: true # ○ 리소스 라이트사이징 스캔 (false 로 끄면 CronJob 이 없음)
+# aipub_monitoring_api_replicas: 2    # ○ monitoring-api 레플리카 수
+# aipub_monitoring_cp_nodes: []       # ○ OpenSearch·Alertmanager 레플리카가 뜰 노드 (비우면 k8s 컨트롤 플레인 노드 전부)
 # aipub_monitoring_opensearch_disk_watermark_low: "85%" # ○ OpenSearch 디스크 워터마크 low
 # aipub_monitoring_opensearch_disk_watermark_high: "90%" # ○ OpenSearch 디스크 워터마크 high
 # aipub_monitoring_opensearch_disk_watermark_flood_stage: "95%" # ○ OpenSearch 디스크 워터마크 flood_stage

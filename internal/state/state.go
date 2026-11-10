@@ -79,6 +79,18 @@ type AppState struct {
 	AipubMonitoringHelmBin        string // empty or helm: the helm of k8s-installer
 	AipubMonitoringHelmfileDryRun bool
 
+	// S5b: the monitoring stack (files/aipub/vars.yml), also written only when
+	// changed
+	MonitoringOpensearchStorageSize  string
+	MonitoringOpensearchLogRetention string
+	MonitoringMetricsStorageSize     string
+	MonitoringMetricsRetentionPeriod string
+	MonitoringRightsizingEnabled     bool
+	MonitoringApiReplicas            int
+	// MonitoringCpNodes are the nodes OpenSearch and Alertmanager run a replica
+	// on, by node name; empty: every k8s control plane node
+	MonitoringCpNodes []string
+
 	// S6: Certificate mode (files/aipub/vars.yml → aipub_cert_mode)
 	AipubCertMode string
 }
@@ -114,6 +126,14 @@ func DefaultState() *AppState {
 		AipubAppDeployTool:        "installer",
 		AipubMonitoringDeployTool: "installer",
 		AipubMonitoringHelmBin:    "helm",
+
+		MonitoringOpensearchStorageSize:  "3Ti",
+		MonitoringOpensearchLogRetention: "180d",
+		MonitoringMetricsStorageSize:     "1Ti",
+		MonitoringMetricsRetentionPeriod: "180d",
+		MonitoringRightsizingEnabled:     true,
+		MonitoringApiReplicas:            2,
+
 		// The authentication of AIPub on a new site (aipub-installer k8s-jwks:
 		// "A new install has no webhook")
 		ControlPlane: ControlPlane{JWKS: true},

@@ -226,6 +226,20 @@ func aipubValue(s *state.AppState, key string) (any, bool) {
 		return s.AipubMonitoringHelmBin, true
 	case "aipub_monitoring_helmfile_dry_run":
 		return s.AipubMonitoringHelmfileDryRun, true
+	case "aipub_monitoring_opensearch_storage_size":
+		return s.MonitoringOpensearchStorageSize, true
+	case "aipub_monitoring_opensearch_log_retention":
+		return s.MonitoringOpensearchLogRetention, true
+	case "aipub_monitoring_metrics_storage_size":
+		return s.MonitoringMetricsStorageSize, true
+	case "aipub_monitoring_metrics_retention_period":
+		return s.MonitoringMetricsRetentionPeriod, true
+	case "aipub_monitoring_rightsizing_enabled":
+		return s.MonitoringRightsizingEnabled, true
+	case "aipub_monitoring_api_replicas":
+		return s.MonitoringApiReplicas, true
+	case "aipub_monitoring_cp_nodes":
+		return append([]string{}, s.MonitoringCpNodes...), true
 	}
 	return nil, false
 }

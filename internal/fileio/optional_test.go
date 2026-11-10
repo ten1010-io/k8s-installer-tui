@@ -3,6 +3,7 @@ package fileio
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -113,5 +114,71 @@ func TestOptionalIdempotent(t *testing.T) {
 	must(t, err)
 	if string(first) != string(second) {
 		t.Errorf("changed when rendered again:\n%s\n---\n%s", first, second)
+	}
+}
+
+// The monitoring variables: written only when changed, the list of nodes only
+// when some are picked, and all of them read back.
+func TestMonitoringOptional(t *testing.T) {
+	r, err := Render(Paths{}, sampleState())
+	must(t, err)
+	a := decode(t, r.AipubVars)
+	for k := range a {
+		if strings.HasPrefix(k, "aipub_monitoring_") {
+			t.Errorf("%s written at its default", k)
+		}
+	}
+
+	s := sampleState()
+	s.MonitoringOpensearchStorageSize = "500Gi"
+	s.MonitoringOpensearchLogRetention = "30d"
+	s.MonitoringMetricsStorageSize = "200Gi"
+	s.MonitoringMetricsRetentionPeriod = "90d"
+	s.MonitoringRightsizingEnabled = false
+	s.MonitoringApiReplicas = 1
+	s.MonitoringCpNodes = []string{"node1", "node2"}
+	r, err = Render(Paths{}, s)
+	must(t, err)
+	a = decode(t, r.AipubVars)
+	want := map[string]any{
+		"aipub_monitoring_opensearch_storage_size":  "500Gi",
+		"aipub_monitoring_opensearch_log_retention": "30d",
+		"aipub_monitoring_metrics_storage_size":     "200Gi",
+		"aipub_monitoring_metrics_retention_period": "90d",
+		"aipub_monitoring_rightsizing_enabled":      false,
+		"aipub_monitoring_api_replicas":             1,
+	}
+	for k, w := range want {
+		if a[k] != w {
+			t.Errorf("%s = %#v, want %#v", k, a[k], w)
+		}
+	}
+	if got := a["aipub_monitoring_cp_nodes"]; !reflect.DeepEqual(got, []any{"node1", "node2"}) {
+		t.Errorf("cp nodes = %#v", got)
+	}
+
+	p := DefaultPaths(t.TempDir())
+	must(t, os.MkdirAll(filepath.Dir(p.AipubVars), 0755))
+	must(t, os.WriteFile(p.AipubVars, r.AipubVars, 0644))
+	back := state.DefaultState()
+	must(t, LoadAipubVars(p.AipubVars, back))
+	if back.MonitoringOpensearchStorageSize != "500Gi" || back.MonitoringOpensearchLogRetention != "30d" ||
+		back.MonitoringMetricsStorageSize != "200Gi" || back.MonitoringMetricsRetentionPeriod != "90d" ||
+		back.MonitoringRightsizingEnabled || back.MonitoringApiReplicas != 1 ||
+		!reflect.DeepEqual(back.MonitoringCpNodes, []string{"node1", "node2"}) {
+		t.Errorf("not read back: %+v", back)
+	}
+
+	// the nodes cleared: the key goes, the others stay
+	back.MonitoringCpNodes = nil
+	back.AipubIngressZone = "aipub.example.com"
+	again, err := renderAipubVars(r.AipubVars, back)
+	must(t, err)
+	a = decode(t, again)
+	if _, ok := a["aipub_monitoring_cp_nodes"]; ok {
+		t.Error("cp nodes kept after they were cleared")
+	}
+	if a["aipub_monitoring_api_replicas"] != 1 {
+		t.Errorf("a value that did not change was lost: %v", a)
 	}
 }

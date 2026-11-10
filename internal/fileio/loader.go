@@ -203,6 +203,14 @@ type aipubYAML struct {
 	MonKustomizeBin   string `yaml:"aipub_monitoring_kustomize_bin"`
 	MonHelmBin        string `yaml:"aipub_monitoring_helm_bin"`
 	MonHelmfileDryRun *bool  `yaml:"aipub_monitoring_helmfile_dry_run"`
+
+	MonOpensearchSize      string   `yaml:"aipub_monitoring_opensearch_storage_size"`
+	MonOpensearchRetention string   `yaml:"aipub_monitoring_opensearch_log_retention"`
+	MonMetricsSize         string   `yaml:"aipub_monitoring_metrics_storage_size"`
+	MonMetricsRetention    string   `yaml:"aipub_monitoring_metrics_retention_period"`
+	MonRightsizing         *bool    `yaml:"aipub_monitoring_rightsizing_enabled"`
+	MonApiReplicas         int      `yaml:"aipub_monitoring_api_replicas"`
+	MonCpNodes             []string `yaml:"aipub_monitoring_cp_nodes"`
 }
 
 type varsYAML struct {
@@ -355,6 +363,20 @@ func applyAipub(a aipubYAML, s *state.AppState) {
 	setIf(&s.AipubMonitoringHelmBin, a.MonHelmBin)
 	if a.MonHelmfileDryRun != nil {
 		s.AipubMonitoringHelmfileDryRun = *a.MonHelmfileDryRun
+	}
+
+	setIf(&s.MonitoringOpensearchStorageSize, a.MonOpensearchSize)
+	setIf(&s.MonitoringOpensearchLogRetention, a.MonOpensearchRetention)
+	setIf(&s.MonitoringMetricsStorageSize, a.MonMetricsSize)
+	setIf(&s.MonitoringMetricsRetentionPeriod, a.MonMetricsRetention)
+	if a.MonRightsizing != nil {
+		s.MonitoringRightsizingEnabled = *a.MonRightsizing
+	}
+	if a.MonApiReplicas > 0 {
+		s.MonitoringApiReplicas = a.MonApiReplicas
+	}
+	if len(a.MonCpNodes) > 0 {
+		s.MonitoringCpNodes = a.MonCpNodes
 	}
 }
 

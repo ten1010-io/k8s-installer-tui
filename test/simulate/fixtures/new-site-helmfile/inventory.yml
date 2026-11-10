@@ -1,0 +1,20 @@
+# A site set up on the screens and not saved yet: new-site-non-ha with the lite edition, helmfile as
+# the deploy tool of both modules (no aipub-bin in its package record) and the monitoring values
+# changed from their defaults. The installer root of its package is under installer-root/
+all:
+  hosts:
+    master1:
+      ansible_host: 10.10.0.11
+      ansible_port: 2222
+    gpu1:
+      ansible_host: 10.10.0.21
+ki_cp_node:
+  hosts:
+    master1: {}
+k8s_node:
+  hosts:
+    master1:
+      k8s_cp: true
+      k8s_node_labels:
+        node-role.aipub.ten1010.io/control-plane: ""
+    gpu1: {}

@@ -326,3 +326,44 @@ func TestValidateDeployChoices(t *testing.T) {
 		}
 	}
 }
+
+// The monitoring variables are checked by their format, and the nodes OpenSearch
+// runs on have to be k8s control plane nodes.
+func TestValidateMonitoring(t *testing.T) {
+	s := valid()
+	s.MonitoringOpensearchStorageSize = "100Gi"
+	s.MonitoringOpensearchLogRetention = "30d"
+	s.MonitoringMetricsStorageSize = "2Ti"
+	s.MonitoringMetricsRetentionPeriod = "365d"
+	s.MonitoringApiReplicas = 3
+	s.MonitoringCpNodes = []string{"node1", "node2"}
+	if errs := Validate(s); len(errs) != 0 {
+		t.Fatalf("valid values refused: %v", errs)
+	}
+
+	for name, edit := range map[string]func(s *state.AppState){
+		"size":                func(s *state.AppState) { s.MonitoringOpensearchStorageSize = "3T" },
+		"size lower case":     func(s *state.AppState) { s.MonitoringMetricsStorageSize = "100gi" },
+		"retention weeks":     func(s *state.AppState) { s.MonitoringMetricsRetentionPeriod = "2w" },
+		"retention no unit":   func(s *state.AppState) { s.MonitoringOpensearchLogRetention = "30" },
+		"retention zero":      func(s *state.AppState) { s.MonitoringOpensearchLogRetention = "0d" },
+		"replicas zero":       func(s *state.AppState) { s.MonitoringApiReplicas = 0 },
+		"cp node of a worker": func(s *state.AppState) { s.MonitoringCpNodes = []string{"node1", "node3"} },
+		"cp node unknown":     func(s *state.AppState) { s.MonitoringCpNodes = []string{"nope"} },
+	} {
+		s := valid()
+		edit(s)
+		errs := Validate(s)
+		if len(errs) != 1 || !strings.HasPrefix(errs[0].Field, "aipub_monitoring_") {
+			t.Errorf("%s: %v", name, errs)
+		}
+	}
+
+	// the check of the screen says the same
+	s = valid()
+	s.MonitoringCpNodes = []string{"node3"}
+	s.MonitoringApiReplicas = 0
+	if got, want := fields(Monitoring(s)), "aipub_monitoring_api_replicas aipub_monitoring_cp_nodes"; got != want {
+		t.Errorf("Monitoring: %q, want %q", got, want)
+	}
+}

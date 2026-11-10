@@ -203,6 +203,11 @@ func TestFillAuthConfig(t *testing.T) {
 		!strings.Contains(string(saved), "url: https://aipub.aipub.example.com\n") {
 		t.Errorf("the copies differ or lack the CA:\n%s\n---\n%s", saved, installed)
 	}
+	// both in the history of the site: the save, and the installer's as a copy
+	siteDir := filepath.Dir(site.Inventory)
+	if got := kinds(t, siteDir, "files/aipub/authentication-config.yaml"); got != "save copy" {
+		t.Errorf("history of the auth config: %q", got)
+	}
 
 	// again, as the plan may be run again: nothing changes, no backup made
 	back = state.DefaultState()

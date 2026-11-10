@@ -381,7 +381,7 @@ func TestPreviewNotesTab(t *testing.T) {
 		t.Errorf("← is not back on 확인할 점:\n%s", d.screen())
 	}
 	d.keys("s")
-	for _, want := range []string{"✓ 저장 완료 — 기존 파일은 .bak 으로 백업", "저장한 파일 (기존 파일은 .bak 으로 백업)", paths.Inventory, paths.Vars} {
+	for _, want := range []string{"✓ 저장 완료 — 이전 내용은 history.jsonl 에 남김", "저장한 파일 (이전 내용은 history.jsonl 에 남김)", paths.Inventory, paths.Vars} {
 		if !strings.Contains(d.screen(), want) {
 			t.Errorf("after saving the preview lacks %q:\n%s", want, d.screen())
 		}
@@ -874,8 +874,9 @@ func TestPreviewRefusalClearsOnSave(t *testing.T) {
 	}
 }
 
-// Saving twice keeps the .bak of the file that was there before the first save.
-func TestPreviewSaveTwiceKeepsBackup(t *testing.T) {
+// Saving twice keeps, in the history, the file that was there before the first
+// save, and leaves no .bak.
+func TestPreviewSaveTwiceKeepsHistory(t *testing.T) {
 	d, paths := newDriver(t)
 	if err := os.MkdirAll(filepath.Dir(paths.Inventory), 0755); err != nil {
 		t.Fatal(err)
@@ -891,8 +892,20 @@ func TestPreviewSaveTwiceKeepsBackup(t *testing.T) {
 		t.Fatalf("not saved:\n%s", d.screen())
 	}
 	d.keys("ctrl+s", "s")
-	bak, err := os.ReadFile(paths.Inventory + ".bak")
-	if err != nil || string(bak) != original {
-		t.Errorf("inventory.yml.bak = %q, %v; want the file from before the save", bak, err)
+	h, err := fileio.ReadHistory(filepath.Dir(paths.Inventory))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edits []string
+	for _, e := range h {
+		if e.Kind == fileio.HistoryEdit && e.Path == "inventory.yml" {
+			edits = append(edits, e.Content)
+		}
+	}
+	if len(edits) != 1 || edits[0] != original {
+		t.Errorf("history edits of inventory.yml = %q; want the file from before the save, once", edits)
+	}
+	if _, err := os.Stat(paths.Inventory + ".bak"); err == nil {
+		t.Error("inventory.yml.bak written; the history takes its place")
 	}
 }

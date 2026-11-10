@@ -31,7 +31,7 @@ import (
 func Stages(steps []Step, o Options, savedIn string) [][]Step {
 	var stages [][]Step
 	if copies := CopyCommands(o, savedIn); len(copies) > 0 {
-		stages = append(stages, []Step{noPrompt(Step{ID: "C1", Title: "설정 복사", Kind: Shell, Shell: copies, AlwaysRun: true,
+		stages = append(stages, []Step{noPrompt(Step{ID: copyStepID, Title: "설정 복사", Kind: Shell, Shell: copies, AlwaysRun: true,
 			Note: "저장한 설정 파일을 " + o.AnsibleDir() + " 로 (sudo, 이어서 실행할 때도 다시 복사)"})})
 	}
 	for _, st := range steps {
@@ -47,6 +47,10 @@ func Stages(steps []Step, o Options, savedIn string) [][]Step {
 	}
 	return stages
 }
+
+// copyStepID is the step that copies the settings to the installer; the runner
+// checks and records it in the history of the site (fileio.GuardCopy).
+const copyStepID = "C1"
 
 // sudoWord is a sudo that starts a command of a shell line, with its -n if it has one.
 var sudoWord = regexp.MustCompile(`(^|[\s;&|(])sudo (-n )?`)

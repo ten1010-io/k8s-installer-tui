@@ -111,11 +111,26 @@ Docker와 네트워크(패키지, PyPI의 ansible-core)가 필요합니다. 이�
 
 ### 기존 파일이 있는 경우
 
-기존 파일이 있으면 읽어서 편집 모드로 시작합니다. 저장은 새로 쓰지 않고 기존 YAML을 그 자리에서 고칩니다(`internal/fileio/yamldoc.go`). 이 도구가 다루지 않는 변수와 주석은 그대로 남고, 템플릿에는 있고 사이트 파일에는 없는 변수는 주석과 함께 추가됩니다. 덮어쓰기 전의 파일은 `.bak`으로 보관합니다.
+기존 파일이 있으면 읽어서 편집 모드로 시작합니다. 저장은 새로 쓰지 않고 기존 YAML을 그 자리에서 고칩니다(`internal/fileio/yamldoc.go`). 이 도구가 다루지 않는 변수와 주석은 그대로 남고, 템플릿에는 있고 사이트 파일에는 없는 변수는 주석과 함께 추가됩니다. 파일은 통째로 새로 써서 이름을 바꿔 넣으므로(rename) 중간에 끊겨도 반쯤 쓴 파일이 남지 않습니다.
 
-```
-vars.yml      →  vars.yml.bak   (백업)
-vars.yml      ←  수정한 내용으로 저장
+이력은 저장한 파일 옆 `history.jsonl` 하나에 한 줄씩 덧붙입니다(덧붙이기만 함, 0600). `.bak` 대신입니다.
+
+| kind | 언제 | 내용 |
+|---|---|---|
+| `save` | 저장할 때마다, 바뀐 파일만 | 쓴 내용 |
+| `edit` | 저장 전 파일이 이력의 마지막과 다를 때 (손으로 고쳤거나 이력 전부터 있던 파일) | 덮어쓰기 전 내용 |
+| `copy` | 설치 실행의 C1 이 설치기(`<installer-root>/ansible`)로 복사한 뒤 | 복사한 내용 |
+| `installer` | C1 이 복사하기 전 설치기 쪽 파일이 사이트와도, 마지막 복사와도 다를 때 | 덮어쓰기 전 설치기 쪽 내용 |
+
+C1 은 설치기 쪽 파일이 이력에 없는 내용이면(마지막 복사 뒤 손으로 고침) 그 내용을 `installer` 로 남기고 한 번 멈춥니다. 확인한 뒤(사이트에 반영하거나 버려도 되면) 다시 실행하면 덮어씁니다. 이력에 있는 내용(예전 저장, 스크립트로 한 복사, 되돌린 수정)이면 멈추지 않습니다. 첫 복사 때 설치기에 있던 파일(설치기 템플릿 등)은 멈추지 않고 이력에만 남깁니다. 이 사용자가 읽을 수 없는 설치기 쪽 파일은 확인하지 못하고 덮어쓰며, C1 로그에 그렇게 적습니다. `--fill-auth-config` 가 설치기 쪽 인증 설정을 쓸 때도 이전 내용과 복사를 이력에 남깁니다. 설치기 디렉터리에 바로 저장하면 C1 이 없고, `upgrade.sh` 가 ansible 디렉터리를 바꿀 때 `history.jsonl` 도 지워집니다.
+
+UTF-8 이 아닌 파일은 `"encoding":"base64"` 로 바이트 그대로 남깁니다. 이력에는 바꾸기 전의 토큰·비밀번호도 남으므로(0600), 필요 없어진 이력은 지워도 됩니다(없으면 다음 저장부터 새로 시작).
+
+```bash
+# 마지막으로 저장한 vars.yml (끊긴 줄은 건너뜀)
+jq -nrR '[inputs | fromjson? | select(.kind=="save" and .path=="group_vars/all/vars.yml")] | last | .content' history.jsonl
+# 무엇이 언제 바뀌었는지
+jq -rR 'fromjson? | [.time, .kind, .path, .sha256[0:12]] | @tsv' history.jsonl
 ```
 
 새 사이트는 `internal/fileio/templates/`에 내장한 설치 도구의 예제 파일에서 시작합니다. 이전 버전이 쓴 파일(`k8s_load_balancers`, `ki_cert_mode`, vars.yml에 있던 `aipub_*`, `ansible_ssh_user`, `nvidia_gpu` 등)은 읽어서 새 위치로 옮겨 저장합니다. 구버전 변수 `aipub_java_*`를 쓴 사이트 파일도 그대로 읽히고 값이 보존됩니다.
@@ -275,7 +290,7 @@ k8s-installer-tui/
 │   ├── state/               # AppState, NodeConfig
 │   ├── fileio/
 │   │   ├── loader.go        # 파일 3개 -> AppState (구버전 파일 이전 포함)
-│   │   ├── writer.go        # AppState -> 파일 3개, .bak 백업
+│   │   ├── writer.go        # AppState -> 파일 3개 (history.go: history.jsonl)
 │   │   ├── yamldoc.go       # 주석을 보존하는 YAML 편집
 │   │   └── templates/       # 설치 도구 예제 파일의 복사본 (README.md 참고)
 │   ├── validator/rules.go   # 검증 규칙

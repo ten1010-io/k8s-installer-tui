@@ -131,13 +131,20 @@ func Render(p Paths, s *state.AppState) (*Rendered, error) {
 	return &r, nil
 }
 
-// WriteAll renders and writes the files, keeping the previous version of each as
-// <file>.bak. A file marked keepIfExists is written only where nothing is (not
-// even a dangling symlink): the audit policy of a site is never written over.
+// WriteAll renders and writes the files, each whole by rename, and appends them
+// to history.jsonl beside inventory.yml, after what was there when the history
+// does not have it (history.go). A file marked keepIfExists is written only
+// where nothing is (not even a dangling symlink): the audit policy of a site is
+// never written over.
 func WriteAll(p Paths, s *state.AppState) error {
 	r, err := Render(p, s)
 	if err != nil {
 		return err
+	}
+	dir := filepath.Dir(p.Inventory)
+	h, err := ReadHistory(dir)
+	if err != nil {
+		return fmt.Errorf("%s: %w", HistoryFile, err)
 	}
 	files := []struct {
 		path         string
@@ -158,7 +165,7 @@ func WriteAll(p Paths, s *state.AppState) error {
 		if _, err := os.Lstat(f.path); f.keepIfExists && !errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		if err := writeWithBackup(f.path, f.data); err != nil {
+		if h, err = writeWithHistory(dir, f.path, f.data, h); err != nil {
 			return err
 		}
 	}
@@ -171,18 +178,6 @@ func readOrNil(path string) []byte {
 		return nil
 	}
 	return data
-}
-
-func writeWithBackup(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	if _, err := os.Stat(path); err == nil {
-		if err := os.Rename(path, path+".bak"); err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(path, data, 0644)
 }
 
 // --- group_vars/all/vars.yml ---

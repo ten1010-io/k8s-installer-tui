@@ -420,8 +420,7 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
-	// saved already: writing again would put the files just saved into .bak,
-	// over the ones that were there before
+	// saved already: the same files again
 	if s.saved {
 		return s, nil
 	}
@@ -442,7 +441,7 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 	if len(s.notes) > 0 {
 		s.notes = append(s.notes, note{styles.StyleMuted, ""})
 	}
-	s.notes = append(s.notes, note{styles.StyleSuccess, "✓ 저장한 파일 (기존 파일은 .bak 으로 백업):"})
+	s.notes = append(s.notes, note{styles.StyleSuccess, "✓ 저장한 파일 (이전 내용은 " + fileio.HistoryFile + " 에 남김):"})
 	for _, t := range s.tabs {
 		if t.path != "" && t.kept == "" {
 			s.notes = append(s.notes, note{styles.StyleMuted, "  " + t.path})
@@ -545,7 +544,7 @@ func (s *S7Preview) below() string {
 		lines = append(lines, styles.StyleError.Render("✗ "+s.saveErr))
 	}
 	if s.saved {
-		lines = append(lines, styles.StyleSuccess.Render("✓ 저장 완료 — 기존 파일은 .bak 으로 백업")+
+		lines = append(lines, styles.StyleSuccess.Render("✓ 저장 완료 — 이전 내용은 "+fileio.HistoryFile+" 에 남김")+
 			styles.StyleMuted.Render(" · 저장한 파일은 '"+notesTab+"' 탭"))
 	}
 

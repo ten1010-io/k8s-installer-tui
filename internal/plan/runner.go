@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -604,6 +605,32 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "── %s %s %s\n── %s\n", time.Now().Format(time.RFC3339), st.ID, st.Title, strings.ReplaceAll(Command(st), "\n", "\n── "))
+	copying := st.ID == copyStepID && r.Opts.SiteDir != ""
+	if copying {
+		// what the copy replaces goes to the history of the site first; a file
+		// edited on the installer side since the last copy stops it once
+		changed, unchecked, err := fileio.GuardCopy(r.Opts.SiteDir, r.Opts.AnsibleDir())
+		if len(unchecked) > 0 {
+			fmt.Fprintf(f, "── 읽을 수 없어 확인하지 못하고 덮어씀 (이력에 없음): %s\n", strings.Join(unchecked, ", "))
+		}
+		note := ""
+		switch {
+		case err != nil:
+			note = "복사 전 확인 실패: " + err.Error()
+		case len(changed) > 0:
+			note = "설치기 쪽 파일을 마지막 복사 뒤 손으로 고쳤습니다: " + strings.Join(changed, ", ") +
+				". 그 내용은 " + filepath.Join(r.Opts.SiteDir, fileio.HistoryFile) + " 에 남겼습니다. " +
+				"확인한 뒤 (필요하면 사이트에 반영하고) 다시 실행하면 덮어씁니다"
+		}
+		if note != "" {
+			fmt.Fprintf(f, "── %s\n", note)
+			code := 1
+			r.set(st.ID, func(s *StepState) {
+				s.Status, s.Start, s.End, s.ExitCode, s.Log, s.Note = StatusFailed, now(), now(), &code, logPath, note
+			})
+			return false
+		}
+	}
 	r.set(st.ID, func(s *StepState) {
 		s.Status, s.Start, s.End, s.ExitCode, s.Log, s.Note = StatusRunning, now(), nil, nil, logPath, ""
 	})
@@ -622,6 +649,12 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			code = exit.ExitCode()
+		}
+	}
+	if err == nil && copying {
+		// not a failure of the copy, which is done: the next one says it again
+		if rerr := fileio.RecordCopy(r.Opts.SiteDir, r.Opts.AnsibleDir()); rerr != nil {
+			fmt.Fprintf(f, "── 이력에 복사를 남기지 못함: %v\n", rerr)
 		}
 	}
 	fmt.Fprintf(f, "── %s %s 끝: 종료 코드 %d\n", time.Now().Format(time.RFC3339), st.ID, code)

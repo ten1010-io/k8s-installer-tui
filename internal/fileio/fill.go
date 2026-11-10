@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -50,21 +51,56 @@ func FillAuthConfig(p Paths, s *state.AppState, installerFiles string) ([]string
 			targets = append(targets, installed)
 		}
 	}
+	site := filepath.Dir(p.Inventory)
+	h, err := ReadHistory(site)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", HistoryFile, err)
+	}
 	var out []string
 	if ca.Err != nil {
 		out = append(out, "CA 파일은 쓸 수 없어 저장된 CA 를 씀: "+ca.Err.Error())
 	}
-	for _, t := range targets {
+	for i, t := range targets {
 		if cur, err := os.ReadFile(t); err == nil && bytes.Equal(cur, data) {
 			out = append(out, "unchanged: "+t)
 			continue
 		}
-		if err := writeWithBackup(t, data); err != nil {
+		// the site keeps its history; the installer's copy goes to it too, as a
+		// copy, after what it replaces (as C1 does)
+		var err error
+		if i == 0 {
+			_, err = writeWithHistory(site, t, data, h)
+		} else {
+			err = writeInstallerCopy(site, h, t, data)
+		}
+		if hh, rerr := ReadHistory(site); rerr == nil {
+			h = hh
+		}
+		if err != nil {
 			return out, fmt.Errorf("%s: %w", t, err)
 		}
 		out = append(out, "written: "+t)
 	}
 	return out, nil
+}
+
+// writeInstallerCopy writes the installer's copy of the authentication config,
+// keeping what it replaces in the history of the site and recording the copy.
+func writeInstallerCopy(site string, h []HistoryEntry, path string, data []byte) error {
+	rel := "files/" + state.JWKSConfigFile
+	if old, err := os.ReadFile(path); err == nil {
+		if keep, _ := keepInstaller(h, rel, old); keep != nil {
+			if err := appendHistory(site, *keep); err != nil {
+				return err
+			}
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := writeAtomic(path, data); err != nil {
+		return err
+	}
+	return appendHistory(site, entry(HistoryCopy, rel, data))
 }
 
 func samePath(a, b string) bool {

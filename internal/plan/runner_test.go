@@ -430,6 +430,49 @@ func TestRunnerResumeCopiesTheSiteAgain(t *testing.T) {
 	}
 }
 
+// C1 keeps what it replaces in the history of the site, and stops once on a
+// file edited on the installer side since the last copy.
+func TestRunnerCopyStopsOnceOnAnInstallerEdit(t *testing.T) {
+	o := testOptions()
+	o.Root = t.TempDir()
+	site := t.TempDir()
+	o.SiteDir = site
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.WriteFile(filepath.Join(site, "inventory.yml"), []byte("a: 1\n"), 0644))
+	dst := filepath.Join(filepath.FromSlash(o.AnsibleDir()), "inventory.yml")
+	must(os.MkdirAll(filepath.Dir(dst), 0755))
+	stages := Stages(nil, o, site)
+	// run runs C1 and says whether its copy command ran
+	run := func() (Outcome, StepState, bool) {
+		r := NewRunner(o, aipubState(), stages, nil)
+		f := newFakeSite(stages)
+		r.Exec, r.Cmd = f.exec, f.cmd
+		outcome, err := r.Run(context.Background(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := r.Snapshot()
+		return outcome, *st.Step("C1"), f.ranIDs() == "C1"
+	}
+	if outcome, c1, ran := run(); outcome != OutcomeOK || !ran {
+		t.Fatalf("first copy: %s %+v, ran %v", outcome, c1, ran)
+	}
+	// what the copy did, then an edit by hand on the installer side
+	must(os.WriteFile(dst, []byte("a: 1\nb: by hand\n"), 0644))
+	outcome, c1, ran := run()
+	if outcome != OutcomeFailed || ran || !strings.Contains(c1.Note, "inventory.yml") || !strings.Contains(c1.Note, "history.jsonl") {
+		t.Fatalf("installer edit: %s %+v, copy ran %v", outcome, c1, ran)
+	}
+	if outcome, c1, ran := run(); outcome != OutcomeOK || !ran {
+		t.Errorf("after it was kept: %s %+v, ran %v", outcome, c1, ran)
+	}
+}
+
 // A shell step that runs sudo here (C1, A5.1) has no terminal for a password:
 // the run does not start when sudo would ask one.
 func TestRunnerNeedsSudoWithoutAPassword(t *testing.T) {

@@ -20,6 +20,8 @@ var (
 	k8sVarsTemplate []byte
 	//go:embed templates/aipub-vars.yml
 	aipubVarsTemplate []byte
+	//go:embed templates/authentication-config.yaml
+	authConfigTemplate []byte
 )
 
 // The label base and the services of aipub run on (aipub_cp_node_label_key).
@@ -54,6 +56,12 @@ func (p Paths) WebhookConfig() string {
 	return filepath.Join(p.FilesDir(), filepath.FromSlash(state.WebhookConfigFile))
 }
 
+// AuthConfig is where the Structured Authentication Config of the JWKS preset is
+// written: files/aipub/authentication-config.yaml.
+func (p Paths) AuthConfig() string {
+	return filepath.Join(p.FilesDir(), filepath.FromSlash(state.JWKSConfigFile))
+}
+
 // DefaultPaths are the places k8s-installer reads the files from, relative to
 // its ansible directory (/opt/k8s-installer/ansible).
 func DefaultPaths(ansibleDir string) Paths {
@@ -66,13 +74,15 @@ func DefaultPaths(ansibleDir string) Paths {
 
 // Rendered is the content of the three files. AipubVars is nil when AIPub is not
 // installed, and the file is then left alone. WebhookConfig is the kubeconfig of
-// the webhook preset of the control plane, nil while it is off (a file written
-// before is left alone).
+// the webhook preset of the control plane and AuthConfig the authentication
+// config of the JWKS preset, each nil while it is off (a file written before is
+// left alone).
 type Rendered struct {
 	Inventory     []byte
 	Vars          []byte
 	AipubVars     []byte
 	WebhookConfig []byte
+	AuthConfig    []byte
 }
 
 // Render renders the three files over what is at p, or over the templates.
@@ -91,6 +101,7 @@ func Render(p Paths, s *state.AppState) (*Rendered, error) {
 		}
 	}
 	r.WebhookConfig = WebhookConfig(s)
+	r.AuthConfig = AuthConfig(s)
 	return &r, nil
 }
 
@@ -104,7 +115,7 @@ func WriteAll(p Paths, s *state.AppState) error {
 	files := []struct {
 		path string
 		data []byte
-	}{{p.Inventory, r.Inventory}, {p.Vars, r.Vars}, {p.AipubVars, r.AipubVars}, {p.WebhookConfig(), r.WebhookConfig}}
+	}{{p.Inventory, r.Inventory}, {p.Vars, r.Vars}, {p.AipubVars, r.AipubVars}, {p.WebhookConfig(), r.WebhookConfig}, {p.AuthConfig(), r.AuthConfig}}
 	for _, f := range files {
 		if f.data == nil {
 			continue
@@ -198,14 +209,14 @@ func renderVars(existing []byte, s *state.AppState) ([]byte, error) {
 	// written as the template writes it, [], rather than the key taken out: the
 	// key carries the comment of the template above it, and addMissingKeys would
 	// put it back on the next save anyway
-	cp := &s.ControlPlane
+	cp := s.AppliedControlPlane()
 	for _, comp := range state.CpComponents {
-		setKey(top, state.ArgsVar(comp), extraArgsNode(cp.ExtraArgs(comp, false)))
+		setKey(top, state.ArgsVar(comp), extraArgsNode(cp.ExtraArgs(comp, state.StageAll)))
 	}
 	for _, comp := range state.CpVolumeComponents {
-		setKey(top, state.VolumesVar(comp), extraVolumesNode(cp.ExtraVolumes(comp, false)))
+		setKey(top, state.VolumesVar(comp), extraVolumesNode(cp.ExtraVolumes(comp, state.StageAll)))
 	}
-	setKey(top, state.CpExtraFilesVar, cpExtraFilesNode(cp.ExtraFiles(false)))
+	setKey(top, state.CpExtraFilesVar, cpExtraFilesNode(cp.ExtraFiles(state.StageAll)))
 
 	return encodeDoc(top)
 }
@@ -248,6 +259,57 @@ func listOrEmpty(items []*yaml.Node) *yaml.Node {
 		n.Style = yaml.FlowStyle
 	}
 	return n
+}
+
+// --- the authentication config of the JWKS preset (files/aipub/authentication-config.yaml) ---
+
+// JWKSCAPlaceholder stands for the CA in the template of aipub-installer, and in
+// the file the wizard writes until the CA is copied in (plan step A5.1).
+const JWKSCAPlaceholder = "REPLACE_ME_CA"
+
+const (
+	authConfigIssuerLine = "      url: https://REPLACE_ME\n"
+	authConfigCALine     = "        " + JWKSCAPlaceholder + "\n"
+)
+
+// AuthConfig is the Structured Authentication Config the apiserver checks the
+// tokens of AIPub with (--authentication-config), nil when the JWKS preset is not
+// applied or has no issuer. It is the template k8s-jwks of aipub-installer fills
+// (templates/authentication-config.yaml), filled in the same two places: the
+// issuer URL, and the CA setup-cert puts on every node, inline because the
+// schema takes no path. The CA is not there before setup-cert has run; until it
+// is copied in, the placeholder of the template stays, and the plan copies it in
+// right before the step that applies the preset. Nothing in it is secret: it is
+// copied to the control plane nodes in the clear (k8s_cp_extra_files).
+func AuthConfig(s *state.AppState) []byte {
+	cp := s.AppliedControlPlane()
+	issuer := s.JWKSIssuer()
+	if !cp.JWKS || issuer == "" {
+		return nil
+	}
+	t := string(authConfigTemplate)
+	if !strings.Contains(t, authConfigIssuerLine) || !strings.Contains(t, authConfigCALine) {
+		return nil // the template moved on; TestAuthConfig says so
+	}
+	issuerNode, err := yaml.Marshal(issuer)
+	if err != nil {
+		return nil
+	}
+	t = strings.Replace(t, authConfigIssuerLine, "      url: "+string(issuerNode), 1)
+	ca := strings.TrimSpace(cp.JWKSCA)
+	if ca == "" {
+		ca = JWKSCAPlaceholder
+	}
+	var caLines strings.Builder
+	for _, l := range strings.Split(ca, "\n") {
+		caLines.WriteString("        " + strings.TrimRight(l, " \r") + "\n")
+	}
+	t = strings.Replace(t, authConfigCALine, caLines.String(), 1)
+	header := "# Written by k8s-installer-tui (AIPub 인증 (JWKS)) from the template of aipub-installer, filled in\n" +
+		"# as k8s-jwks fills it. Copied to every control plane node in the clear by k8s_cp_extra_files:\n" +
+		"# the issuer URL and the public CA only, never a credential. The CA is copied in from\n" +
+		"# " + state.JWKSCAPath + " after setup-cert (" + JWKSCAPlaceholder + " until then).\n"
+	return []byte(header + t)
 }
 
 // --- the kubeconfig of the webhook preset (files/aipub/webhook-token-auth.yaml) ---
@@ -459,14 +521,17 @@ func hostMap(hosts *yaml.Node, name string) *yaml.Node {
 
 // MissingCpFiles lists the files of k8s_cp_extra_files that are in none of the
 // files directories given (ansible/files next to the saved settings, of the
-// installer). The kubeconfig of the webhook preset is left out while the wizard
-// writes it. k8s-installer stops on such a file before it touches a node; the
-// preview warns sooner.
+// installer). The kubeconfig of the webhook preset and the authentication config
+// of the JWKS preset are left out while the wizard writes them. k8s-installer
+// stops on such a file before it touches a node; the preview warns sooner.
 func MissingCpFiles(s *state.AppState, filesDirs ...string) []state.CpExtraFile {
-	generated := WebhookConfig(s) != nil
+	generated := map[string]bool{
+		state.WebhookConfigFile: WebhookConfig(s) != nil,
+		state.JWKSConfigFile:    AuthConfig(s) != nil,
+	}
 	var out []state.CpExtraFile
-	for _, f := range s.ControlPlane.ExtraFiles(false) {
-		if generated && f.Src == state.WebhookConfigFile {
+	for _, f := range s.AppliedControlPlane().ExtraFiles(state.StageAll) {
+		if generated[f.Src] {
 			continue
 		}
 		found := false

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
+	"gopkg.in/yaml.v3"
 )
 
 // controlPlaneState is sampleState with every preset on and an entry typed in for
@@ -14,7 +15,7 @@ import (
 func controlPlaneState() *state.AppState {
 	s := sampleState()
 	cp := &s.ControlPlane
-	cp.Audit, cp.RuntimeConfig, cp.Webhook = true, true, true
+	cp.Audit, cp.RuntimeConfig, cp.JWKS, cp.Webhook = true, true, true, true
 	cp.WebhookURL = "https://aipub.example.com/api/v1/token-review"
 	cp.Args = map[string][]state.ExtraArg{
 		"apiserver":          {{Name: "feature-gates", Value: "Foo=true"}},
@@ -42,18 +43,25 @@ func TestControlPlaneRoundTrip(t *testing.T) {
 	must(t, err)
 	v := decode(t, data)
 	args := v["k8s_apiserver_extra_args"].([]interface{})
-	if len(args) != 9 { // audit 5, runtime-config 1, webhook 2, typed 1
+	if len(args) != 10 { // audit 5, runtime-config 1, jwks 1, webhook 2, typed 1
 		t.Fatalf("apiserver args: %v", args)
+	}
+	if a := args[6].(map[string]interface{}); a["name"] != "authentication-config" || a["value"] != "/etc/kubernetes/authentication-config.yaml" {
+		t.Errorf("jwks arg %v", a)
 	}
 	if a := args[0].(map[string]interface{}); a["name"] != "audit-policy-file" || a["value"] != "/etc/kubernetes/audit-policy.yaml" {
 		t.Errorf("first arg %v", a)
 	}
-	if a := args[8].(map[string]interface{}); a["name"] != "feature-gates" {
+	if a := args[9].(map[string]interface{}); a["name"] != "feature-gates" {
 		t.Errorf("typed arg not last: %v", a)
 	}
 	vols := v["k8s_apiserver_extra_volumes"].([]interface{})
-	if len(vols) != 5 {
+	if len(vols) != 6 {
 		t.Fatalf("apiserver volumes: %v", vols)
+	}
+	if vol := vols[2].(map[string]interface{}); vol["name"] != "authentication-config" || vol["hostPath"] != "/etc/kubernetes/authentication-config.yaml" ||
+		vol["mountPath"] != "/etc/kubernetes/authentication-config.yaml" || vol["readOnly"] != true || vol["pathType"] != "File" {
+		t.Errorf("jwks volume: %v", vol)
 	}
 	if vol := vols[0].(map[string]interface{}); vol["readOnly"] != true || vol["pathType"] != "File" {
 		t.Errorf("audit-policy volume: %v", vol)
@@ -64,8 +72,12 @@ func TestControlPlaneRoundTrip(t *testing.T) {
 		t.Errorf("readOnly written while false: %v", vol)
 	}
 	files := v["k8s_cp_extra_files"].([]interface{})
-	if len(files) != 3 || files[1].(map[string]interface{})["src"] != "aipub/webhook-token-auth.yaml" {
+	if len(files) != 4 || files[2].(map[string]interface{})["src"] != "aipub/webhook-token-auth.yaml" {
 		t.Errorf("cp extra files: %v", files)
+	}
+	if f := files[1].(map[string]interface{}); f["src"] != "aipub/authentication-config.yaml" ||
+		f["dest"] != "/etc/kubernetes/authentication-config.yaml" || f["mode"] != "0644" {
+		t.Errorf("jwks file: %v", f)
 	}
 	for _, k := range []string{"k8s_controller_manager_extra_args", "k8s_scheduler_extra_args", "k8s_etcd_extra_args",
 		"k8s_controller_manager_extra_volumes", "k8s_scheduler_extra_volumes"} {
@@ -87,10 +99,30 @@ func TestControlPlaneRoundTrip(t *testing.T) {
 		}
 	}
 
+	// the authentication config of JWKS: the issuer derived from the zone, the CA
+	// not there yet
+	ac, err := os.ReadFile(p.AuthConfig())
+	must(t, err)
+	for _, want := range []string{"url: https://aipub.aipub.example.com\n", "        REPLACE_ME_CA\n"} {
+		if !strings.Contains(string(ac), want) {
+			t.Errorf("authentication config lacks %q:\n%s", want, ac)
+		}
+	}
+
 	back := state.DefaultState()
 	must(t, LoadAll(p, back))
 	if !reflect.DeepEqual(back.ControlPlane, s.ControlPlane) {
 		t.Errorf("read back\n  %+v\nwant\n  %+v", back.ControlPlane, s.ControlPlane)
+	}
+
+	// an issuer of its own and the CA, as A5.1 copies it in, are read back
+	s.ControlPlane.JWKSIssuerURL = "https://login.example.com/aipub"
+	s.ControlPlane.JWKSCA = testCA
+	must(t, WriteAll(p, s))
+	back = state.DefaultState()
+	must(t, LoadAll(p, back))
+	if !reflect.DeepEqual(back.ControlPlane, s.ControlPlane) {
+		t.Errorf("read back with issuer and CA\n  %+v\nwant\n  %+v", back.ControlPlane, s.ControlPlane)
 	}
 
 	// Everything off: every list is [] again, nothing left over
@@ -111,6 +143,43 @@ func TestControlPlaneRoundTrip(t *testing.T) {
 	}
 }
 
+// testCA stands for the CA setup-cert makes; the file holds it as the PEM.
+const testCA = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUTEST\nAAAA\n-----END CERTIFICATE-----"
+
+// The authentication config is the template of aipub-installer with the issuer
+// and the CA filled in, as k8s-jwks fills it: the same document otherwise.
+func TestAuthConfig(t *testing.T) {
+	s := controlPlaneState()
+	s.ControlPlane.JWKSCA = testCA
+	var tmpl, got map[string]interface{}
+	must(t, yaml.Unmarshal(authConfigTemplate, &tmpl))
+	out := AuthConfig(s)
+	if out == nil {
+		t.Fatal("no authentication config (has the template of aipub-installer changed?)")
+	}
+	must(t, yaml.Unmarshal(out, &got))
+	issuer := tmpl["jwt"].([]interface{})[0].(map[string]interface{})["issuer"].(map[string]interface{})
+	issuer["url"] = "https://aipub.aipub.example.com"
+	issuer["certificateAuthority"] = testCA + "\n"
+	if !reflect.DeepEqual(got, tmpl) {
+		t.Errorf("not the template filled in:\n%s", out)
+	}
+	if !strings.HasPrefix(string(out), "# Written by k8s-installer-tui") ||
+		!strings.Contains(string(out), "# - The \"oidc:\" prefix keeps the RBAC bindings") {
+		t.Errorf("header or the comments of the template missing:\n%s", out)
+	}
+
+	// not written without AIPub (the issuer is AIPub), nor with the preset off
+	s.AipubEnabled = false
+	if AuthConfig(s) != nil {
+		t.Error("written without AIPub")
+	}
+	s.AipubEnabled, s.ControlPlane.JWKS = true, false
+	if AuthConfig(s) != nil {
+		t.Error("written with the preset off")
+	}
+}
+
 // Turning one preset off takes out its entries and nothing else; a preset only
 // partly in the file is read as entries typed in.
 func TestControlPlanePresetOff(t *testing.T) {
@@ -123,11 +192,33 @@ func TestControlPlanePresetOff(t *testing.T) {
 	back := state.DefaultState()
 	must(t, LoadAll(p, back))
 	cp := back.ControlPlane
-	if cp.Audit || !cp.RuntimeConfig || !cp.Webhook {
-		t.Errorf("presets read back: audit %v runtime %v webhook %v", cp.Audit, cp.RuntimeConfig, cp.Webhook)
+	if cp.Audit || !cp.RuntimeConfig || !cp.JWKS || !cp.Webhook {
+		t.Errorf("presets read back: audit %v runtime %v jwks %v webhook %v", cp.Audit, cp.RuntimeConfig, cp.JWKS, cp.Webhook)
 	}
 	if len(cp.Args["apiserver"]) != 1 || len(cp.Volumes["apiserver"]) != 1 || len(cp.Files) != 1 {
 		t.Errorf("typed entries changed: %+v", cp)
+	}
+
+	// JWKS off: its three entries go, the legacy webhook and the rest stay
+	s.ControlPlane.JWKS = false
+	must(t, WriteAll(p, s))
+	data, err := os.ReadFile(p.Vars)
+	must(t, err)
+	if strings.Contains(string(data), "authentication-config") {
+		t.Errorf("an entry of JWKS is left after turning it off:\n%s", data)
+	}
+	back = state.DefaultState()
+	must(t, LoadAll(p, back))
+	cp = back.ControlPlane
+	if cp.JWKS || !cp.Webhook || !cp.RuntimeConfig {
+		t.Errorf("presets read back after JWKS off: jwks %v webhook %v runtime %v", cp.JWKS, cp.Webhook, cp.RuntimeConfig)
+	}
+	if len(cp.Args["apiserver"]) != 1 || len(cp.Volumes["apiserver"]) != 1 || len(cp.Files) != 1 {
+		t.Errorf("typed entries changed after JWKS off: %+v", cp)
+	}
+	v := decode(t, data)
+	if n := len(v["k8s_apiserver_extra_args"].([]interface{})); n != 4 { // runtime 1, webhook 2, typed 1
+		t.Errorf("apiserver args after JWKS off: %d", n)
 	}
 
 	// one entry of the audit preset is not the preset
@@ -159,5 +250,9 @@ func TestMissingCpFiles(t *testing.T) {
 	s.ControlPlane.WebhookURL = "" // nothing to write the kubeconfig from
 	if got := MissingCpFiles(s, p.FilesDir(), installer); len(got) != 2 || got[0].Src != state.WebhookConfigFile {
 		t.Errorf("webhook without a URL: %v", got)
+	}
+	s.AipubIngressZone = "" // nothing to derive the issuer from
+	if got := MissingCpFiles(s, p.FilesDir(), installer); len(got) != 3 || got[0].Src != state.JWKSConfigFile {
+		t.Errorf("JWKS without an issuer: %v", got)
 	}
 }

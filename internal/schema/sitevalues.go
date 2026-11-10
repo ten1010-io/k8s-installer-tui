@@ -210,19 +210,24 @@ func displayWidth(s string) int {
 }
 
 // controlPlaneHints are the checks the presets of the control plane leave to the
-// site: the files k8s_cp_extra_files copies have to be under ansible/files, and
-// the token review server of the webhook has to answer.
+// site: the files k8s_cp_extra_files copies have to be under ansible/files, the
+// issuer of JWKS and the token review server of the webhook have to answer.
 func controlPlaneHints(s *state.AppState, v Var) []string {
-	cp := &s.ControlPlane
+	cp := s.AppliedControlPlane()
 	var out []string
 	switch v.Key {
 	case state.ArgsVar("apiserver"):
+		if cp.JWKS {
+			out = append(out, fmt.Sprintf("JWKS issuer %q 가 컨트롤 플레인 노드에서 닿아야 함 (AIPub backend-gateway, A5 setup-aipub 뒤에 뜸; A5.2 update-cluster 에서 적용)",
+				s.JWKSIssuer()))
+			out = append(out, "CA "+state.JWKSCAPath+" 는 A2 setup-cert 가 모든 노드에 둠; A5.1 이 authentication-config.yaml 에 복사")
+		}
 		if cp.Webhook {
 			out = append(out, fmt.Sprintf("웹훅 URL %q 이 컨트롤 플레인 노드에서 닿고 %s 로 검증되는지 (A2.5 update-cluster 에서 적용)",
 				cp.WebhookURL, state.WebhookCAPath))
 		}
 	case state.CpExtraFilesVar:
-		for _, f := range cp.ExtraFiles(false) {
+		for _, f := range cp.ExtraFiles(state.StageAll) {
 			out = append(out, "ansible/files/"+f.Src+" 이 있어야 함"+FileSource(f))
 		}
 	}
@@ -238,6 +243,9 @@ func FileSource(f state.CpExtraFile) string {
 			}
 			if p.ID == state.PresetWebhook {
 				return " (위저드가 웹훅 URL 로 만듦)"
+			}
+			if p.ID == state.PresetJWKS {
+				return " (위저드가 issuer URL 로 만듦, CA 는 A5.1 이 노드에서 복사)"
 			}
 			if p.Provider != "" {
 				return " (" + p.Title + " 정책: " + p.Provider + " 제공)"

@@ -236,10 +236,33 @@ func TestValidateControlPlane(t *testing.T) {
 			cp.Webhook = true
 			cp.WebhookURL = "http://aipub.example.com/token-review"
 		}, []string{"control_plane.webhook_url"}},
+		{"jwks with the derived issuer", func(cp *state.ControlPlane) { cp.JWKS = true }, nil},
+		{"jwks issuer set", func(cp *state.ControlPlane) {
+			cp.JWKS = true
+			cp.JWKSIssuerURL = "https://login.example.com:8443/aipub"
+		}, nil},
+		{"jwks issuer not https", func(cp *state.ControlPlane) {
+			cp.JWKS = true
+			cp.JWKSIssuerURL = "http://aipub.example.com"
+		}, []string{"control_plane.jwks_issuer_url"}},
+		{"jwks issuer with a query", func(cp *state.ControlPlane) {
+			cp.JWKS = true
+			cp.JWKSIssuerURL = "https://aipub.example.com/?a=b"
+		}, []string{"control_plane.jwks_issuer_url"}},
+		{"jwks and the legacy webhook together", func(cp *state.ControlPlane) {
+			cp.JWKS, cp.Webhook = true, true
+			cp.WebhookURL = "https://aipub.example.com/token-review"
+		}, nil},
+		{"jwks entries count before the ones typed in", func(cp *state.ControlPlane) {
+			cp.JWKS = true
+			cp.Args = map[string][]state.ExtraArg{"apiserver": {arg("--feature-gates", "A=true")}}
+		}, []string{"k8s_apiserver_extra_args[1]"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := valid()
+			// the cases count the entries typed in from 0; the JWKS ones turn it on
+			s.ControlPlane.JWKS = false
 			c.edit(&s.ControlPlane)
 			want := append([]string{}, c.fields...)
 			sort.Strings(want)
@@ -260,5 +283,22 @@ func TestValidateControlPlane(t *testing.T) {
 	s.ControlPlane.WebhookURL = "https://aipub.example.com/token-review"
 	if got := fields(Validate(s)); got != "control_plane.webhook" {
 		t.Errorf("webhook without AIPub: %s", got)
+	}
+
+	// JWKS without AIPub is not applied, so nothing to check
+	s = valid()
+	s.AipubEnabled = false
+	s.ControlPlane.JWKS = true
+	s.ControlPlane.JWKSIssuerURL = "http://not-checked"
+	if got := fields(Validate(s)); got != "" {
+		t.Errorf("jwks without AIPub: %s", got)
+	}
+
+	// no issuer: none typed in and no zone to derive it from
+	s = valid()
+	s.ControlPlane.JWKS = true
+	s.AipubIngressZone = ""
+	if got := fields(Validate(s)); !strings.Contains(got, "control_plane.jwks_issuer_url") {
+		t.Errorf("jwks without an issuer: %s", got)
 	}
 }

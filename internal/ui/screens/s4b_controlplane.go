@@ -21,16 +21,20 @@ import (
 // Focus layout:
 //   0  : AIPub 감사 로그 (toggle)
 //   1  : runtime-config (toggle)
-//   2  : AIPub 인증 웹훅 (toggle)
-//   3  : 웹훅 URL
-//   4  : 추가할 대상 (←/→)
-//   5  : 추가할 항목 (Enter: 추가)
-//   6… : 직접 넣은 항목 (d: 삭제)
+//   2  : AIPub 인증 (JWKS) (toggle)
+//   3  : issuer URL
+//   4  : AIPub 인증 웹훅, 레거시 (toggle)
+//   5  : 웹훅 URL
+//   6  : 추가할 대상 (←/→)
+//   7  : 추가할 항목 (Enter: 추가)
+//   8… : 직접 넣은 항목 (d: 삭제)
 //   last: nav slot (←/→: 이전/다음)
 
 const (
 	s4bFocusAudit = iota
 	s4bFocusRuntime
+	s4bFocusJWKS
+	s4bFocusIssuer
 	s4bFocusWebhook
 	s4bFocusURL
 	s4bFocusTarget
@@ -68,6 +72,8 @@ type cpEntry struct {
 
 type S4bControlPlane struct {
 	cp       state.ControlPlane
+	issuer   textinput.Model
+	derived  string // the issuer that follows the zone, prefilled
 	url      textinput.Model
 	entry    textinput.Model
 	target   int
@@ -83,9 +89,12 @@ func NewS4bControlPlane() *S4bControlPlane {
 	url := textinput.New()
 	url.Placeholder = "https://<AIPub 토큰 검증 서버>"
 	url.CharLimit = 256
+	issuer := textinput.New()
+	issuer.Placeholder = "https://<aipub_app_host_prefix>.<aipub_ingress_zone>"
+	issuer.CharLimit = 256
 	entry := textinput.New()
 	entry.CharLimit = 256
-	return &S4bControlPlane{url: url, entry: entry}
+	return &S4bControlPlane{issuer: issuer, url: url, entry: entry}
 }
 
 func (s *S4bControlPlane) Title() string { return "컨트롤플레인" }
@@ -93,6 +102,7 @@ func (s *S4bControlPlane) SetSize(w, h int) {
 	s.width = w
 	s.height = h
 	s.url.Width = w - 34
+	s.issuer.Width = w - 34
 	s.entry.Width = w - 34
 }
 
@@ -114,6 +124,12 @@ func copyControlPlane(c state.ControlPlane) state.ControlPlane {
 
 func (s *S4bControlPlane) SyncFromState(st *state.AppState) {
 	s.cp = copyControlPlane(st.ControlPlane)
+	s.derived = st.JWKSIssuerDerived()
+	if s.cp.JWKSIssuerURL != "" {
+		s.issuer.SetValue(s.cp.JWKSIssuerURL)
+	} else {
+		s.issuer.SetValue(s.derived)
+	}
 	s.url.SetValue(s.cp.WebhookURL)
 	s.entry.SetValue("")
 	s.entryErr = ""
@@ -124,17 +140,30 @@ func (s *S4bControlPlane) SyncFromState(st *state.AppState) {
 
 func (s *S4bControlPlane) SyncToState(st *state.AppState) {
 	s.cp.WebhookURL = strings.TrimSpace(s.url.Value())
+	s.cp.JWKSIssuerURL = s.issuerOverride()
 	st.ControlPlane = copyControlPlane(s.cp)
 }
 
-// Validate stops on the rules of the variables of this screen and the webhook
-// URL. That the webhook needs AIPub is told on the preview, once AIPub is chosen.
+// issuerOverride is the issuer typed in, empty when it is the derived one: that
+// one follows a change of the zone made later.
+func (s *S4bControlPlane) issuerOverride() string {
+	v := strings.TrimSpace(s.issuer.Value())
+	if v == s.derived {
+		return ""
+	}
+	return v
+}
+
+// Validate stops on the rules of the variables of this screen, the webhook URL
+// and an issuer typed in. That the webhook needs AIPub, and an issuer derived
+// from a zone, are checked on the preview, once AIPub is chosen.
 func (s *S4bControlPlane) Validate() []string {
 	if strings.TrimSpace(s.entry.Value()) != "" {
 		return []string{"추가할 항목에 입력한 것이 있습니다. Enter 로 추가하거나 지워주세요"}
 	}
 	cp := copyControlPlane(s.cp)
 	cp.WebhookURL = strings.TrimSpace(s.url.Value())
+	cp.JWKSIssuerURL = s.issuerOverride()
 	var msgs []string
 	for _, e := range validator.ControlPlane(cp) {
 		msgs = append(msgs, e.Error())
@@ -180,6 +209,11 @@ func volumeText(v state.ExtraVolume) string {
 func (s *S4bControlPlane) navFocus() int { return s4bFocusList + len(s.entries()) }
 
 func (s *S4bControlPlane) syncFocus() {
+	if s.focusIdx == s4bFocusIssuer {
+		s.issuer.Focus()
+	} else {
+		s.issuer.Blur()
+	}
 	if s.focusIdx == s4bFocusURL {
 		s.url.Focus()
 	} else {
@@ -279,7 +313,7 @@ func contains(l []string, x string) bool {
 func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		nav := s.navFocus()
-		inInput := s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusEntry
+		inInput := s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusIssuer || s.focusIdx == s4bFocusEntry
 		switch msg.String() {
 		case "up":
 			if s.focusIdx > 0 {
@@ -325,6 +359,8 @@ func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.cp.Audit = !s.cp.Audit
 			case s.focusIdx == s4bFocusRuntime:
 				s.cp.RuntimeConfig = !s.cp.RuntimeConfig
+			case s.focusIdx == s4bFocusJWKS:
+				s.cp.JWKS = !s.cp.JWKS
 			case s.focusIdx == s4bFocusWebhook:
 				s.cp.Webhook = !s.cp.Webhook
 			case s.focusIdx == s4bFocusEntry && msg.String() == "enter":
@@ -334,7 +370,7 @@ func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return s, Prev()
 				}
 				return s, Next()
-			case s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusTarget:
+			case s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusIssuer || s.focusIdx == s4bFocusTarget:
 				s.focusIdx++
 				s.syncFocus()
 			}
@@ -348,6 +384,8 @@ func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	switch s.focusIdx {
+	case s4bFocusIssuer:
+		s.issuer, cmd = s.issuer.Update(msg)
 	case s4bFocusURL:
 		s.url, cmd = s.url.Update(msg)
 	case s4bFocusEntry:
@@ -377,7 +415,16 @@ func (s *S4bControlPlane) View() string {
 	b.WriteString(styles.StyleMuted.Render("    정책 파일 ansible/files/aipub/audit-policy.yaml 은 사이트가 둡니다 (AIPub 모니터링/python 팀 제공)") + "\n")
 	b.WriteString(RenderRow(checkbox(s.cp.RuntimeConfig)+" runtime-config (admissionregistration.k8s.io/v1beta1=true)", f == s4bFocusRuntime, w) + "\n")
 	b.WriteString(styles.StyleMuted.Render("    첫 설치부터") + "\n")
-	b.WriteString(RenderRow(checkbox(s.cp.Webhook)+" AIPub 인증 웹훅 (authentication-token-webhook, cache-ttl 2m)", f == s4bFocusWebhook, w) + "\n")
+	b.WriteString(RenderRow(checkbox(s.cp.JWKS)+" AIPub 인증 (JWKS) (authentication-config, 새 사이트 기본)", f == s4bFocusJWKS, w) + "\n")
+	b.WriteString(styles.StyleMuted.Render("    AIPub 설치 시에만 적용. aipub-installer k8s-jwks 와 같은 플래그·볼륨·파일을 kubeadm 이 보관하게 함") + "\n")
+	b.WriteString(styles.StyleMuted.Render("    issuer 는 AIPub 백엔드라 A5 setup-aipub 뒤에야 답하므로 클러스터 생성(K3)에서는 빼고, A5.1 에서") + "\n")
+	b.WriteString(styles.StyleMuted.Render("    setup-cert 의 CA("+state.JWKSCAPath+")를 설정에 넣은 뒤 A5.2 update-cluster 로 적용합니다 (노드 한 대씩 재시작)") + "\n")
+	b.WriteString(RenderSectionHeader("  issuer URL", f == s4bFocusIssuer) + "  " + s.issuer.View() + "\n")
+	b.WriteString(styles.StyleMuted.Render("    기본은 https://<aipub_app_host_prefix>.<aipub_ingress_zone> (aipub-installer 와 같은 규칙, 존을 바꾸면 따라감)") + "\n")
+	b.WriteString(styles.StyleMuted.Render("    ansible/files/"+state.JWKSConfigFile+" 로 만들어 둡니다. 평문 복사 — 비밀 금지") + "\n")
+	b.WriteString(RenderRow(checkbox(s.cp.Webhook)+" AIPub 인증 웹훅 (레거시 — JWKS 로 옮기기 전 사이트)", f == s4bFocusWebhook, w) + "\n")
+	b.WriteString(styles.StyleMuted.Render("    authentication-token-webhook, cache-ttl 2m. 웹훅을 쓰던 사이트만. JWKS 와 함께 켤 수 있음") + "\n")
+	b.WriteString(styles.StyleMuted.Render("    (옮기는 동안 둘 다 돌리고, 확인 뒤 aipub-installer 의 migrate-webhook-to-jwks.sh 로 웹훅을 뺌)") + "\n")
 	b.WriteString(styles.StyleMuted.Render("    AIPub 설치 시에만. setup-cert 가 만드는 CA("+state.WebhookCAPath+")가 있어야 apiserver 가 뜨므로") + "\n")
 	b.WriteString(styles.StyleMuted.Render("    클러스터 생성(K3)에서는 빼고, A2 setup-cert 다음 A2.5 update-cluster 로 적용합니다 (노드 한 대씩 재시작)") + "\n")
 	b.WriteString(RenderSectionHeader("  웹훅 URL", f == s4bFocusURL) + "  " + s.url.View() + "\n")

@@ -491,20 +491,28 @@ func contains(l []string, x string) bool {
 
 // validateControlPlane checks what is not a variable of vars.yml: the URL of the
 // webhook preset, which goes into the kubeconfig it names, and that the preset
-// has the CA of setup-cert of aipub-installer to start with.
+// has the CA of setup-cert of aipub-installer to start with; the issuer of the
+// JWKS preset, which goes into the authentication config, when AIPub is
+// installed (without it the preset is not applied).
 func validateControlPlane(s *state.AppState) []Error {
 	var errs []Error
 	if s.ControlPlane.Webhook && !s.AipubEnabled {
 		errs = append(errs, Error{"control_plane.webhook",
 			"AIPub 인증 웹훅은 AIPub 을 설치할 때만 켤 수 있습니다 (CA 를 setup-cert 가 만듭니다)"})
 	}
-	return append(errs, checkWebhookURL(&s.ControlPlane)...)
+	errs = append(errs, checkWebhookURL(&s.ControlPlane)...)
+	if s.AppliedControlPlane().JWKS {
+		errs = append(errs, checkIssuerURL(s.JWKSIssuer(), true)...)
+	}
+	return errs
 }
 
 // ControlPlane checks what the control plane screen edits on its own: the eight
 // variables and the webhook URL, for the screen to stop on before the preview.
 func ControlPlane(cp state.ControlPlane) []Error {
-	s := &state.AppState{ControlPlane: cp}
+	// as written with AIPub, which the screen does not know yet: the JWKS preset
+	// counts, so that the indexes are those the preview gives
+	s := &state.AppState{ControlPlane: cp, AipubEnabled: true}
 	var errs []Error
 	for _, v := range schema.ByFile(schema.FileK8s) {
 		if v.Group != "control_plane" {
@@ -514,7 +522,31 @@ func ControlPlane(cp state.ControlPlane) []Error {
 			errs = append(errs, checkVar(v, v.Key, val, false)...)
 		}
 	}
-	return append(errs, checkWebhookURL(&cp)...)
+	errs = append(errs, checkWebhookURL(&cp)...)
+	if cp.JWKS {
+		// empty follows the zone, which is checked once AIPub is chosen
+		errs = append(errs, checkIssuerURL(cp.JWKSIssuerURL, false)...)
+	}
+	return errs
+}
+
+// checkIssuerURL checks the issuer of the JWKS preset: the iss of the tokens of
+// AIPub and where the apiserver finds its discovery document, so an https URL
+// with no credential, query or fragment. required: empty is refused.
+func checkIssuerURL(raw string, required bool) []Error {
+	const field = "control_plane.jwks_issuer_url"
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		if !required {
+			return nil
+		}
+		return []Error{{field, "AIPub 인증 (JWKS) 을 켰으면 issuer URL 을 입력하거나 aipub_ingress_zone 을 정해주세요"}}
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return []Error{{field, fmt.Sprintf("'%s': JWKS issuer 는 https://호스트[:포트][/경로] 형식이어야 합니다 (자격 증명·쿼리 없이)", raw)}}
+	}
+	return nil
 }
 
 func checkWebhookURL(cp *state.ControlPlane) []Error {

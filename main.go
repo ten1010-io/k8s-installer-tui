@@ -73,7 +73,7 @@ func render(from fileio.Paths, s *state.AppState, dir string) int {
 	for _, f := range []struct {
 		path string
 		data []byte
-	}{{to.Inventory, r.Inventory}, {to.Vars, r.Vars}, {to.AipubVars, r.AipubVars}, {to.WebhookConfig(), r.WebhookConfig}} {
+	}{{to.Inventory, r.Inventory}, {to.Vars, r.Vars}, {to.AipubVars, r.AipubVars}, {to.WebhookConfig(), r.WebhookConfig}, {to.AuthConfig(), r.AuthConfig}} {
 		if f.data == nil {
 			continue
 		}

@@ -140,16 +140,16 @@ func k8sValue(s *state.AppState, key string) (any, bool) {
 	case "k8s_certificate_validity_period":
 		return s.K8sCertificateValidityPeriod, true
 	case state.CpExtraFilesVar:
-		return s.ControlPlane.ExtraFiles(false), true
+		return s.AppliedControlPlane().ExtraFiles(state.StageAll), true
 	}
 	for _, comp := range state.CpComponents {
 		if key == state.ArgsVar(comp) {
-			return s.ControlPlane.ExtraArgs(comp, false), true
+			return s.AppliedControlPlane().ExtraArgs(comp, state.StageAll), true
 		}
 	}
 	for _, comp := range state.CpVolumeComponents {
 		if key == state.VolumesVar(comp) {
-			return s.ControlPlane.ExtraVolumes(comp, false), true
+			return s.AppliedControlPlane().ExtraVolumes(comp, state.StageAll), true
 		}
 	}
 	return nil, false

@@ -8,6 +8,7 @@ match what the installers accept now.
 |------|---------|--------|
 | `k8s-vars.yml` | `ansible/group_vars/all/vars.yml` of k8s-installer | `main` |
 | `aipub-vars.yml` | `ansible/aipub_vars/examples/vars.yml` of aipub-installer (defaults: `ansible/aipub_vars/defaults/*.yml`) | the branch carrying the IN-70 layout (`feat/IN-70-staged-packager`, then `main` once merged) |
+| `authentication-config.yaml` | `scripts/aipub/installer/manifests/authentication-config.yaml` of aipub-installer, the config `k8s-jwks` fills in; the JWKS preset fills in the same two places (issuer URL, CA) | as above |
 
 Re-sync them when the installers change (copy the file as it is, then run
 `go test ./...`). They use the new `aipub_app_*` names; a site file that still has

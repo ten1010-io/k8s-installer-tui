@@ -1,5 +1,7 @@
 package state
 
+import "strings"
+
 // AppState holds everything the screens edit. It is written to three files:
 //
 //	inventory.yml               nodes, groups, the aipub control plane label   (k8s-installer)
@@ -50,8 +52,11 @@ type AppState struct {
 	K8sIngressHostNetworkPort int
 
 	// S5: AIPub (files/aipub/vars.yml)
-	AipubEnabled                bool
-	AipubIngressZone            string
+	AipubEnabled     bool
+	AipubIngressZone string
+	// aipub_app_host_prefix, read from the site file and never written: the
+	// issuer of the JWKS preset is derived from it
+	AipubAppHostPrefix          string
 	AipubHaMode                 bool
 	AipubHaModeStorageClass     string
 	AipubHarborLocalPVNode      string // without HA: the node harbor keeps its data on
@@ -84,6 +89,7 @@ func DefaultState() *AppState {
 		K8sIngressHostNetworkPort:    443,
 		AipubEnabled:                 false,
 		AipubIngressZone:             "example.com",
+		AipubAppHostPrefix:           "aipub",
 		AipubHaMode:                  true,
 		HarborIngressSubdomain:       "aipub-harbor",
 		HarborReplicaCount:           3,
@@ -92,7 +98,44 @@ func DefaultState() *AppState {
 		HarborRedisStorageSize:       "32Gi",
 		HarborTrivyStorageSize:       "5Gi",
 		AipubCertMode:                "self_signed",
+		// The authentication of AIPub on a new site (aipub-installer k8s-jwks:
+		// "A new install has no webhook")
+		ControlPlane: ControlPlane{JWKS: true},
 	}
+}
+
+// AppliedControlPlane is the control plane as it is written: the JWKS preset
+// only when AIPub is installed, as its issuer is AIPub. The copy shares the lists.
+func (s *AppState) AppliedControlPlane() *ControlPlane {
+	cp := s.ControlPlane
+	if !s.AipubEnabled {
+		cp.JWKS = false
+	}
+	return &cp
+}
+
+// JWKSIssuerDerived is the issuer aipub-installer gives k8s-jwks: AIPUB_URL,
+// https://<aipubHostPrefix>.<aipubDomain> (scripts/aipub/installer/lib/config.sh),
+// which site.yaml.j2 fills from aipub_app_host_prefix and aipub_ingress_zone.
+// Empty without a zone.
+func (s *AppState) JWKSIssuerDerived() string {
+	if s.AipubIngressZone == "" {
+		return ""
+	}
+	prefix := s.AipubAppHostPrefix
+	if prefix == "" {
+		prefix = "aipub"
+	}
+	return "https://" + prefix + "." + s.AipubIngressZone
+}
+
+// JWKSIssuer is the issuer the JWKS preset writes: the one the site set, else
+// the derived one.
+func (s *AppState) JWKSIssuer() string {
+	if v := strings.TrimSpace(s.ControlPlane.JWKSIssuerURL); v != "" {
+		return v
+	}
+	return s.JWKSIssuerDerived()
 }
 
 // KubeProxyEnabled is what k8s_kube_proxy_enabled is written as. AIPub brings

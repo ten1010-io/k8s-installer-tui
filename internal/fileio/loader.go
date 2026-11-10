@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
@@ -22,7 +23,42 @@ func LoadAll(p Paths, s *state.AppState) error {
 		return err
 	}
 	loadWebhookURL(p.WebhookConfig(), s)
-	return LoadAipubVars(p.AipubVars, s)
+	if err := LoadAipubVars(p.AipubVars, s); err != nil {
+		return err
+	}
+	loadAuthConfig(p.AuthConfig(), s)
+	return nil
+}
+
+// loadAuthConfig reads the issuer and the CA back from the authentication config
+// the JWKS preset wrote. An issuer that is the derived one is kept as following
+// it (empty), so that changing the zone moves it. Read after files/aipub/vars.yml,
+// which the derived issuer comes from. Nothing when there is none or it does not
+// parse.
+func loadAuthConfig(path string, s *state.AppState) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var ac struct {
+		JWT []struct {
+			Issuer struct {
+				URL                  string `yaml:"url"`
+				CertificateAuthority string `yaml:"certificateAuthority"`
+			} `yaml:"issuer"`
+		} `yaml:"jwt"`
+	}
+	if yaml.Unmarshal(data, &ac) != nil || len(ac.JWT) == 0 {
+		return
+	}
+	is := ac.JWT[0].Issuer
+	s.ControlPlane.JWKSIssuerURL = is.URL
+	if is.URL == s.JWKSIssuerDerived() {
+		s.ControlPlane.JWKSIssuerURL = ""
+	}
+	if ca := strings.TrimSpace(is.CertificateAuthority); ca != JWKSCAPlaceholder {
+		s.ControlPlane.JWKSCA = ca
+	}
 }
 
 // loadWebhookURL reads the token review server back from the kubeconfig the
@@ -147,6 +183,7 @@ type aipubYAML struct {
 	CertMode            string           `yaml:"aipub_cert_mode"`
 
 	IngressZone          string   `yaml:"aipub_ingress_zone"`
+	AppHostPrefix        string   `yaml:"aipub_app_host_prefix"`
 	HaMode               *bool    `yaml:"aipub_ha_mode"`
 	HaModeStorageClass   string   `yaml:"aipub_ha_mode_storage_class"`
 	HarborLocalPVNode    string   `yaml:"aipub_harbor_local_pv_node"`
@@ -282,6 +319,7 @@ func applyAipub(a aipubYAML, s *state.AppState) {
 		s.K8sIngressHostNetworkPort = a.DefaultIngressClass.HostNetworkPort
 	}
 	setIf(&s.AipubCertMode, a.CertMode)
+	setIf(&s.AipubAppHostPrefix, a.AppHostPrefix)
 	if a.HaMode != nil {
 		s.AipubHaMode = *a.HaMode
 	}

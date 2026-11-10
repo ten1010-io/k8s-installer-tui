@@ -54,7 +54,38 @@ const (
 	PresetAudit         = "audit"
 	PresetRuntimeConfig = "runtime_config"
 	PresetWebhook       = "webhook"
+	PresetJWKS          = "jwks"
 )
+
+// The steps of an installation a preset is applied by. An entry that reads what
+// a later step makes is left out of the cluster as it is first built and applied
+// by an update-cluster.yml run after that step.
+const (
+	// StageCluster is setup-cluster (K3): the cluster as kubeadm first builds it
+	StageCluster = iota
+	// StageAfterCert is after setup-cert of aipub-installer (A2), which puts the
+	// CA on every node
+	StageAfterCert
+	// StageAfterAipub is after setup-aipub (A5): the issuer of AIPub answers
+	StageAfterAipub
+	// StageAll is every entry, as vars.yml holds them
+	StageAll = StageAfterAipub
+)
+
+// JWKSConfigFile is the Structured Authentication Config the JWKS preset points
+// the apiserver at. The wizard writes it under ansible/files from the issuer URL,
+// after the template of aipub-installer
+// (scripts/aipub/installer/manifests/authentication-config.yaml).
+const JWKSConfigFile = "aipub/authentication-config.yaml"
+
+// JWKSConfigPath is where the file is put on the control plane nodes, the path
+// k8s-jwks of aipub-installer uses.
+const JWKSConfigPath = "/etc/kubernetes/authentication-config.yaml"
+
+// JWKSCAPath is the CA the issuer is verified with: setup-cert of aipub-installer
+// puts it on every node. The config takes the CA inline (its schema has no path
+// option), so it is copied into the file rather than mounted.
+const JWKSCAPath = "/etc/k8s-installer/certs/ca.crt"
 
 // WebhookConfigFile is the kubeconfig the webhook preset points the apiserver at.
 // The wizard writes it under ansible/files from the URL given on the screen.
@@ -72,9 +103,9 @@ type Preset struct {
 	Volumes  []ExtraVolume // of k8s_apiserver_extra_volumes
 	Files    []CpExtraFile // of k8s_cp_extra_files
 	Provider string        // who provides the files under ansible/files, when the site does
-	// Later is a preset that can not be in the cluster as it is first built: the
-	// files it reads are made by a step after setup-cluster
-	Later bool
+	// Stage is the step it is applied by (StageCluster: built with the cluster).
+	// The files a later one reads are made by a step after setup-cluster
+	Stage int
 }
 
 var Presets = []Preset{
@@ -103,8 +134,22 @@ var Presets = []Preset{
 		Args:  []ExtraArg{{"runtime-config", "admissionregistration.k8s.io/v1beta1=true"}},
 	},
 	{
+		// k8s-jwks of aipub-installer as entries kubeadm keeps, where k8s-jwks
+		// edits the static pod manifest of each node by hand
+		ID:    PresetJWKS,
+		Title: "AIPub 인증 (JWKS)",
+		Args:  []ExtraArg{{"authentication-config", JWKSConfigPath}},
+		Volumes: []ExtraVolume{
+			{Name: "authentication-config", HostPath: JWKSConfigPath, MountPath: JWKSConfigPath, ReadOnly: true, PathType: "File"},
+		},
+		Files: []CpExtraFile{
+			{Src: JWKSConfigFile, Dest: JWKSConfigPath, Mode: "0644"},
+		},
+		Stage: StageAfterAipub,
+	},
+	{
 		ID:    PresetWebhook,
-		Title: "AIPub 인증 웹훅",
+		Title: "AIPub 인증 웹훅 (레거시 — JWKS 로 옮기기 전 사이트)",
 		Args: []ExtraArg{
 			{"authentication-token-webhook-config-file", "/etc/kubernetes/webhook-token-auth.yaml"},
 			{"authentication-token-webhook-cache-ttl", "2m"},
@@ -116,7 +161,7 @@ var Presets = []Preset{
 		Files: []CpExtraFile{
 			{Src: WebhookConfigFile, Dest: "/etc/kubernetes/webhook-token-auth.yaml", Mode: "0644"},
 		},
-		Later: true,
+		Stage: StageAfterCert,
 	},
 }
 
@@ -128,6 +173,17 @@ type ControlPlane struct {
 	// WebhookURL is the token review server of AIPub, written into the kubeconfig
 	// of the webhook preset. Required while it is on; nothing guesses it
 	WebhookURL string
+	// JWKS is the JWKS preset: on for a new site, applied only when AIPub is
+	// installed (AppState.AppliedControlPlane)
+	JWKS bool
+	// JWKSIssuerURL is the issuer when the site sets one; empty follows the rule
+	// of aipub-installer, https://<aipub_app_host_prefix>.<aipub_ingress_zone>
+	// (AppState.JWKSIssuer)
+	JWKSIssuerURL string
+	// JWKSCA is the PEM of the CA as the config file holds it, read back so that
+	// saving again keeps it. Empty until the plan copies it in from the nodes
+	// after setup-cert
+	JWKSCA string
 
 	// Entries typed in by hand, by component (CpComponents)
 	Args    map[string][]ExtraArg
@@ -144,6 +200,8 @@ func (c *ControlPlane) On(id string) bool {
 		return c.RuntimeConfig
 	case PresetWebhook:
 		return c.Webhook
+	case PresetJWKS:
+		return c.JWKS
 	}
 	return false
 }
@@ -157,15 +215,16 @@ func (c *ControlPlane) Set(id string, on bool) {
 		c.RuntimeConfig = on
 	case PresetWebhook:
 		c.Webhook = on
+	case PresetJWKS:
+		c.JWKS = on
 	}
 }
 
-// presets are the presets that are on; initial leaves out the ones applied
-// after the cluster is built.
-func (c *ControlPlane) presets(initial bool) []Preset {
+// presets are the presets that are on and applied by step stage at the latest.
+func (c *ControlPlane) presets(stage int) []Preset {
 	var out []Preset
 	for _, p := range Presets {
-		if c.On(p.ID) && !(initial && p.Later) {
+		if c.On(p.ID) && p.Stage <= stage {
 			out = append(out, p)
 		}
 	}
@@ -173,12 +232,12 @@ func (c *ControlPlane) presets(initial bool) []Preset {
 }
 
 // ExtraArgs is k8s_<component>_extra_args: the presets that are on, then the
-// entries typed in, an entry the same as one before it left out. initial leaves
-// out what is applied after the cluster is built (the webhook).
-func (c *ControlPlane) ExtraArgs(component string, initial bool) []ExtraArg {
+// entries typed in, an entry the same as one before it left out. stage leaves out
+// the presets applied after that step (StageAll: nothing left out).
+func (c *ControlPlane) ExtraArgs(component string, stage int) []ExtraArg {
 	var all []ExtraArg
 	if component == "apiserver" {
-		for _, p := range c.presets(initial) {
+		for _, p := range c.presets(stage) {
 			all = append(all, p.Args...)
 		}
 	}
@@ -187,10 +246,10 @@ func (c *ControlPlane) ExtraArgs(component string, initial bool) []ExtraArg {
 }
 
 // ExtraVolumes is k8s_<component>_extra_volumes, merged like ExtraArgs.
-func (c *ControlPlane) ExtraVolumes(component string, initial bool) []ExtraVolume {
+func (c *ControlPlane) ExtraVolumes(component string, stage int) []ExtraVolume {
 	var all []ExtraVolume
 	if component == "apiserver" {
-		for _, p := range c.presets(initial) {
+		for _, p := range c.presets(stage) {
 			all = append(all, p.Volumes...)
 		}
 	}
@@ -199,9 +258,9 @@ func (c *ControlPlane) ExtraVolumes(component string, initial bool) []ExtraVolum
 }
 
 // ExtraFiles is k8s_cp_extra_files, merged like ExtraArgs.
-func (c *ControlPlane) ExtraFiles(initial bool) []CpExtraFile {
+func (c *ControlPlane) ExtraFiles(stage int) []CpExtraFile {
 	var all []CpExtraFile
-	for _, p := range c.presets(initial) {
+	for _, p := range c.presets(stage) {
 		all = append(all, p.Files...)
 	}
 	all = append(all, c.Files...)
@@ -210,11 +269,23 @@ func (c *ControlPlane) ExtraFiles(initial bool) []CpExtraFile {
 
 // HasLater reports whether something is on that the first setup-cluster has to
 // leave out.
-func (c *ControlPlane) HasLater() bool { return len(c.presets(false)) != len(c.presets(true)) }
+func (c *ControlPlane) HasLater() bool {
+	return len(c.presets(StageAll)) != len(c.presets(StageCluster))
+}
+
+// HasStage reports whether a preset that is on is applied by step stage.
+func (c *ControlPlane) HasStage(stage int) bool {
+	for _, p := range c.presets(stage) {
+		if p.Stage == stage {
+			return true
+		}
+	}
+	return false
+}
 
 // Empty reports whether nothing is added to the control plane.
 func (c *ControlPlane) Empty() bool {
-	if len(c.presets(false)) > 0 || len(c.Files) > 0 {
+	if len(c.presets(StageAll)) > 0 || len(c.Files) > 0 {
 		return false
 	}
 	for _, comp := range CpComponents {
@@ -239,8 +310,8 @@ func dedupe[T comparable](in []T) []T {
 
 // Absorb sets the control plane from the lists a vars.yml holds: a preset whose
 // entries are all there is turned on and its entries taken out, and what is left
-// is kept as entries typed in by hand. The webhook URL is read separately (it is
-// in the kubeconfig the preset names, not in vars.yml).
+// is kept as entries typed in by hand. The webhook URL and the JWKS issuer are
+// read separately (they are in the files the presets name, not in vars.yml).
 func (c *ControlPlane) Absorb(args map[string][]ExtraArg, volumes map[string][]ExtraVolume, files []CpExtraFile) {
 	c.Args, c.Volumes, c.Files = map[string][]ExtraArg{}, map[string][]ExtraVolume{}, nil
 	apiArgs := append([]ExtraArg{}, args["apiserver"]...)

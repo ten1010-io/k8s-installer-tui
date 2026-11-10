@@ -69,16 +69,19 @@ k8s_minor_version: "1.36"             # ✅ 쿠버네티스 마이너 버전 (�
 k8s_certificate_validity_period: "26280h" # ✅ 인증서 유효기간 (예: 26280h = 3년)
 
 ### 컨트롤 플레인 추가 인자 ─────────────────
-k8s_apiserver_extra_args: [{name: "audit-policy-file", value: "/etc/kubernetes/audit-policy.yaml"}, {name: "audit-log-path", value: "/var/log/aipub/usage/audit.log"}, {name: "audit-log-maxage", value: "30"}, {name: "audit-log-maxbackup", value: "30"}, {name: "audit-log-maxsize", value: "100"}, {name: "runtime-config", value: "admissionregistration.k8s.io/v1beta1=true"}, {name: "authentication-token-webhook-config-file", value: "/etc/kubernetes/webhook-token-auth.yaml"}, {name: "authentication-token-webhook-cache-ttl", value: "2m"}] # ○ (기본 []) kube-apiserver 추가 인자
+k8s_apiserver_extra_args: [{name: "audit-policy-file", value: "/etc/kubernetes/audit-policy.yaml"}, {name: "audit-log-path", value: "/var/log/aipub/usage/audit.log"}, {name: "audit-log-maxage", value: "30"}, {name: "audit-log-maxbackup", value: "30"}, {name: "audit-log-maxsize", value: "100"}, {name: "runtime-config", value: "admissionregistration.k8s.io/v1beta1=true"}, {name: "authentication-config", value: "/etc/kubernetes/authentication-config.yaml"}, {name: "authentication-token-webhook-config-file", value: "/etc/kubernetes/webhook-token-auth.yaml"}, {name: "authentication-token-webhook-cache-ttl", value: "2m"}] # ○ (기본 []) kube-apiserver 추가 인자
+# preflight: JWKS issuer "https://aipub.aipub.example.com" 가 컨트롤 플레인 노드에서 닿아야 함 (AIPub backend-gateway, A5 setup-aipub 뒤에 뜸; A5.2 update-cluster 에서 적용)
+# preflight: CA /etc/k8s-installer/certs/ca.crt 는 A2 setup-cert 가 모든 노드에 둠; A5.1 이 authentication-config.yaml 에 복사
 # preflight: 웹훅 URL "https://aipub.example.com/token-review" 이 컨트롤 플레인 노드에서 닿고 /etc/k8s-installer/certs/ca.crt 로 검증되는지 (A2.5 update-cluster 에서 적용)
-k8s_apiserver_extra_volumes: [{name: "audit-policy", hostPath: "/etc/kubernetes/audit-policy.yaml", mountPath: "/etc/kubernetes/audit-policy.yaml", readOnly: true, pathType: "File"}, {name: "audit-log", hostPath: "/var/log/aipub/usage", mountPath: "/var/log/aipub/usage", pathType: "DirectoryOrCreate"}, {name: "webhook-token-auth", hostPath: "/etc/kubernetes/webhook-token-auth.yaml", mountPath: "/etc/kubernetes/webhook-token-auth.yaml", readOnly: true, pathType: "File"}, {name: "k8s-installer-certs", hostPath: "/etc/k8s-installer/certs", mountPath: "/etc/k8s-installer/certs", readOnly: true}] # ○ (기본 []) kube-apiserver 추가 host path 볼륨
+k8s_apiserver_extra_volumes: [{name: "audit-policy", hostPath: "/etc/kubernetes/audit-policy.yaml", mountPath: "/etc/kubernetes/audit-policy.yaml", readOnly: true, pathType: "File"}, {name: "audit-log", hostPath: "/var/log/aipub/usage", mountPath: "/var/log/aipub/usage", pathType: "DirectoryOrCreate"}, {name: "authentication-config", hostPath: "/etc/kubernetes/authentication-config.yaml", mountPath: "/etc/kubernetes/authentication-config.yaml", readOnly: true, pathType: "File"}, {name: "webhook-token-auth", hostPath: "/etc/kubernetes/webhook-token-auth.yaml", mountPath: "/etc/kubernetes/webhook-token-auth.yaml", readOnly: true, pathType: "File"}, {name: "k8s-installer-certs", hostPath: "/etc/k8s-installer/certs", mountPath: "/etc/k8s-installer/certs", readOnly: true}] # ○ (기본 []) kube-apiserver 추가 host path 볼륨
 # k8s_controller_manager_extra_args: [] # ○ kube-controller-manager 추가 인자
 # k8s_controller_manager_extra_volumes: [] # ○ kube-controller-manager 추가 host path 볼륨
 # k8s_scheduler_extra_args: []        # ○ kube-scheduler 추가 인자
 # k8s_scheduler_extra_volumes: []     # ○ kube-scheduler 추가 host path 볼륨
 # k8s_etcd_extra_args: []             # ○ etcd 추가 인자
-k8s_cp_extra_files: [{src: "aipub/audit-policy.yaml", dest: "/etc/kubernetes/audit-policy.yaml", mode: "0644"}, {src: "aipub/webhook-token-auth.yaml", dest: "/etc/kubernetes/webhook-token-auth.yaml", mode: "0644"}] # ○ (기본 []) 컨트롤 플레인 노드에 둘 파일 (비밀 금지)
+k8s_cp_extra_files: [{src: "aipub/audit-policy.yaml", dest: "/etc/kubernetes/audit-policy.yaml", mode: "0644"}, {src: "aipub/authentication-config.yaml", dest: "/etc/kubernetes/authentication-config.yaml", mode: "0644"}, {src: "aipub/webhook-token-auth.yaml", dest: "/etc/kubernetes/webhook-token-auth.yaml", mode: "0644"}] # ○ (기본 []) 컨트롤 플레인 노드에 둘 파일 (비밀 금지)
 # preflight: ansible/files/aipub/audit-policy.yaml 이 있어야 함 (AIPub 감사 로그 정책: AIPub 모니터링/python 팀 제공)
+# preflight: ansible/files/aipub/authentication-config.yaml 이 있어야 함 (위저드가 issuer URL 로 만듦, CA 는 A5.1 이 노드에서 복사)
 # preflight: ansible/files/aipub/webhook-token-auth.yaml 이 있어야 함 (위저드가 웹훅 URL 로 만듦)
 
 ### 실행 전 점검 / etcd 백업 ────────────────
@@ -189,8 +192,11 @@ aipub_harbor_local_pv_node: "node1"   # ✅ (aipub_ha_mode=false 일 때 필수)
 #    [ ] ki_cp_ha_mode_vip: internal_network_subnets 안의 비어 있는 IP 여야 arp 로 잡힘
 #    [ ] k8s_pod_subnet: 노드·서비스가 쓰는 망과 겹치지 않아야 함
 #    [ ] k8s_kube_proxy_enabled: 클러스터가 이미 있으면 바꿀 수 없음
+#    [ ] k8s_apiserver_extra_args: JWKS issuer "https://aipub.aipub.example.com" 가 컨트롤 플레인 노드에서 닿아야 함 (AIPub backend-gateway, A5 setup-aipub 뒤에 뜸; A5.2 update-cluster 에서 적용)
+#    [ ] k8s_apiserver_extra_args: CA /etc/k8s-installer/certs/ca.crt 는 A2 setup-cert 가 모든 노드에 둠; A5.1 이 authentication-config.yaml 에 복사
 #    [ ] k8s_apiserver_extra_args: 웹훅 URL "https://aipub.example.com/token-review" 이 컨트롤 플레인 노드에서 닿고 /etc/k8s-installer/certs/ca.crt 로 검증되는지 (A2.5 update-cluster 에서 적용)
 #    [ ] k8s_cp_extra_files: ansible/files/aipub/audit-policy.yaml 이 있어야 함 (AIPub 감사 로그 정책: AIPub 모니터링/python 팀 제공)
+#    [ ] k8s_cp_extra_files: ansible/files/aipub/authentication-config.yaml 이 있어야 함 (위저드가 issuer URL 로 만듦, CA 는 A5.1 이 노드에서 복사)
 #    [ ] k8s_cp_extra_files: ansible/files/aipub/webhook-token-auth.yaml 이 있어야 함 (위저드가 웹훅 URL 로 만듦)
 #    [ ] aipub_load_balancers: nodes 의 이름이 inventory.yml 에 있어야 함
 #    [ ] aipub_ingress_zone: `*.<이 도메인>` DNS 가 인그레스 VIP 를 가리켜야 외부에서 접속됨

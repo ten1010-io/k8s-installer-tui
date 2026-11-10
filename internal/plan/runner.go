@@ -100,11 +100,16 @@ const (
 // RunState is state.json.
 type RunState struct {
 	// InputHash is of the site files when the run started (InputHash)
-	InputHash string      `json:"input_hash"`
-	Started   time.Time   `json:"started"`
-	Updated   time.Time   `json:"updated"`
-	Outcome   Outcome     `json:"outcome,omitempty"` // empty while it runs, or when the program died
-	Steps     []StepState `json:"steps"`
+	InputHash string `json:"input_hash"`
+	// Existing and AipubInstalled are Options of the plan: what was there when
+	// the installation started. A resume plans with them, not with what the
+	// files say now (the run itself saved them)
+	Existing       bool        `json:"existing"`
+	AipubInstalled bool        `json:"aipub_installed"`
+	Started        time.Time   `json:"started"`
+	Updated        time.Time   `json:"updated"`
+	Outcome        Outcome     `json:"outcome,omitempty"` // empty while it runs, or when the program died
+	Steps          []StepState `json:"steps"`
 }
 
 // Step is the state of step id, nil when the run has none.
@@ -364,7 +369,8 @@ func (r *Runner) Run(ctx context.Context, resume bool) (Outcome, error) {
 
 func (r *Runner) init(prev *RunState) {
 	now := time.Now()
-	r.st = RunState{InputHash: InputHash(r.Inputs), Started: now, Updated: now}
+	r.st = RunState{InputHash: InputHash(r.Inputs), Existing: r.Opts.Existing, AipubInstalled: r.Opts.AipubInstalled,
+		Started: now, Updated: now}
 	for i, stage := range r.Stages {
 		for _, st := range stage {
 			s := StepState{ID: st.ID, Title: st.Title, Stage: i, Status: StatusPending}
@@ -562,7 +568,9 @@ func (r *Runner) manual(ctx, waits context.Context, st Step) {
 			record("설치함 (운영자), 다시 확인")
 			r.set(st.ID, func(s *StepState) { s.Status, s.Note = StatusRunning, "확인 중 (kubectl get storageclass)" })
 		case <-r.stopped:
-			r.set(st.ID, func(s *StepState) { s.Status, s.End, s.Note = StatusCancelled, now(), "멈춤: 기다리던 중 중단" })
+			r.set(st.ID, func(s *StepState) {
+				s.Status, s.End, s.Note = StatusCancelled, now(), "멈춤: 기다리던 중 중단"
+			})
 			return
 		case <-waits.Done():
 			note := "같은 단계의 다른 단계가 실패해 멈춤"

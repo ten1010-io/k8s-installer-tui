@@ -44,6 +44,13 @@ func main() {
 	sendSSHKey := flag.Bool("send-ssh-key", false, "화면 없이 키를 받지 않는 노드에 ssh-copy-id 로 키를 보내고 (비밀번호는 노드마다 ssh 가 물음) "+
 		"--check-ssh 의 표를 출력. 키가 없으면 <installer-root>/ansible/configure-control-node-ssh.sh 로 만듦. Ctrl-C 130, SIGTERM 143, SIGHUP 129")
 	askPassOnce := flag.Bool("ask-pass-once", false, "--send-ssh-key 에서 비밀번호를 터미널에서 한 번만 물어 (화면에 보이지 않음) 모든 노드에 씀")
+	install := flag.Bool("install", false, "화면 없이 설치를 실행: 사전 확인 (P1..P8, ✗ 이면 시작 안 함) 뒤 설치 계획의 단계를 차례로 실행하고 "+
+		"StorageClass 단계 (M1) 에서 Enter 를 기다림. 상태·로그는 <installer-root>/tui-install. "+
+		"Ctrl-C 한 번 실행 중인 단계 뒤 멈춤, 두 번 바로 멈춤. 종료 코드 0 완료, 1 실패, 2 시작 못 함, 130 중단")
+	resume := flag.Bool("resume", false, "--install 에서 지난 실행 (state.json) 의 성공한 단계는 건너뛰고 이어서 실행")
+	existing := flag.Bool("existing", false, "--install: 클러스터가 이미 있는 사이트로 계획 (기본은 새 사이트. --resume 은 지난 실행의 것을 씀)")
+	archive := flag.String("archive", "", "--install: K4 의 사용자 레지스트리 아카이브 경로 (비우면 K4 건너뜀)")
+	noMonitoring := flag.Bool("no-monitoring", false, "--install: 모니터링 (A4) 을 설치하지 않음")
 	showVersion := flag.Bool("version", false, "버전 출력")
 	flag.Parse()
 
@@ -81,6 +88,16 @@ func main() {
 			s.Existing = true
 		}
 		os.Exit(render(paths, s, *renderDir))
+	}
+	if *install {
+		opts := plan.DefaultOptions()
+		opts.Root, opts.ArchivePath, opts.Monitoring = *installerRoot, *archive, !*noMonitoring
+		if *existing {
+			opts.Existing = true
+			_, err := os.Stat(paths.AipubVars)
+			opts.AipubInstalled = err == nil
+		}
+		os.Exit(installHeadless(paths, s, opts, *resume))
 	}
 
 	opts := plan.DefaultOptions()

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -42,9 +41,6 @@ func CheckInstalled(o Options) CheckResult {
 	return CheckResult{OK: true, Lines: []string{"설치된 릴리스 " + strings.TrimSpace(string(data))}}
 }
 
-// "node1 | CHANGED | rc=0 | (stdout) ", "node2 | UNREACHABLE! => {...", "node3 | FAILED | rc=1 | ..."
-var adhocLine = regexp.MustCompile(`^(\S+) \| (\S+?)!? (?:\| rc=(\d+) )?.*$`)
-
 // CheckSSH is P2: every node of the inventory is reached as ansible_user and runs
 // sudo without a password, which the playbooks need (k8s-installer checks
 // `sudo -n true` the same way as its first task).
@@ -56,16 +52,11 @@ func CheckSSH(ctx context.Context, o Options, run RunFunc) CheckResult {
 	out, err := run(ctx, o.AnsibleDir(), "bash", "-c", script)
 
 	results := map[string]string{}
-	for _, l := range strings.Split(string(out), "\n") {
-		m := adhocLine.FindStringSubmatch(strings.TrimSpace(l))
-		if m == nil {
-			continue
-		}
-		node, status := m[1], m[2]
+	for node, a := range parseAdhoc(out) {
 		switch {
-		case (status == "CHANGED" || status == "SUCCESS") && (m[3] == "" || m[3] == "0"):
+		case a.ok():
 			results[node] = "ok"
-		case status == "UNREACHABLE":
+		case a.Status == "UNREACHABLE":
 			results[node] = "접속 안 됨 (SSH 키, 주소, 포트 확인)"
 		default:
 			results[node] = "sudo 비밀번호 필요 또는 실패 (NOPASSWD 확인)"

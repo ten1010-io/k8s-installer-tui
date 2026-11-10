@@ -2,8 +2,10 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -19,9 +21,13 @@ func (a adhocOut) ok() bool {
 	return (a.Status == "CHANGED" || a.Status == "SUCCESS") && (a.RC == "" || a.RC == "0")
 }
 
-// "node | CHANGED | rc=0 | (stdout) /usr/bin/dash", "node | FAILED | rc=3 | (stdout) missing",
-// "node | UNREACHABLE! => {...}"
-var adhocFull = regexp.MustCompile(`^(\S+) \| (\S+?)!? (?:\| rc=(\d+) )?(.*)$`)
+// What `ansible -o` prints, by ansible-core version (k8s-installer ships 2.17 and 2.19):
+//
+//	node | CHANGED | rc=0 | (stdout) /usr/bin/dash
+//	node | FAILED | rc=3 | (stdout) missing             2.19, then the JSON line below
+//	node | FAILED! => {"rc": 3, "stdout": "missing"}    2.17: a failed command is this line only
+//	node | UNREACHABLE!: Failed to connect ...          (older: "UNREACHABLE! => {...}")
+var adhocFull = regexp.MustCompile(`^(\S+) \| ([A-Z]+)!?:? (?:\| rc=(\d+) )?(.*)$`)
 
 func parseAdhoc(out []byte) map[string]adhocOut {
 	res := map[string]adhocOut{}
@@ -30,17 +36,28 @@ func parseAdhoc(out []byte) map[string]adhocOut {
 		if m == nil {
 			continue
 		}
-		raw := m[4]
-		stdout := raw
-		if i := strings.Index(stdout, "(stdout) "); i >= 0 {
-			stdout = stdout[i+len("(stdout) "):]
-			if j := strings.Index(stdout, " (stderr)"); j >= 0 {
-				stdout = stdout[:j]
-			}
-		} else {
-			stdout = ""
+		if prev, seen := res[m[1]]; seen && prev.RC != "" && m[3] == "" {
+			continue // the JSON line after the rc line of the same node: the rc line says more
 		}
-		res[m[1]] = adhocOut{Status: m[2], RC: m[3], Stdout: strings.TrimSpace(stdout), Raw: raw}
+		a := adhocOut{Status: m[2], RC: m[3], Raw: m[4]}
+		if i := strings.Index(a.Raw, "(stdout) "); i >= 0 {
+			a.Stdout = a.Raw[i+len("(stdout) "):]
+			if j := strings.Index(a.Stdout, " (stderr)"); j >= 0 {
+				a.Stdout = a.Stdout[:j]
+			}
+			a.Stdout = strings.TrimSpace(a.Stdout)
+		} else if js, isJSON := strings.CutPrefix(a.Raw, "=> "); isJSON {
+			var r struct {
+				RC     *int   `json:"rc"`
+				Stdout string `json:"stdout"`
+				Stderr string `json:"stderr"`
+			}
+			if json.Unmarshal([]byte(js), &r) == nil && r.RC != nil {
+				a.RC, a.Stdout = strconv.Itoa(*r.RC), strings.TrimSpace(r.Stdout)
+				a.Raw = strings.TrimSpace(r.Stdout + " " + r.Stderr)
+			}
+		}
+		res[m[1]] = a
 	}
 	return res
 }

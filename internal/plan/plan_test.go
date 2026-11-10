@@ -44,14 +44,14 @@ func TestOrder(t *testing.T) {
 	o := testOptions()
 	o.ArchivePath = "/media/usb/a.tgz"
 	// JWKS is on for a new site, and applied after setup-aipub
-	if got, want := ids(Build(aipubState(), o)), "P1 P2 P5 P6 K1 K2 K3 K4 A1 A2 A3 A4 A5 A5.1 A5.2"; got != want {
+	if got, want := ids(Build(aipubState(), o)), "P1 P2 P5 P6 P7 K1 K2 K3 K4 A1 A2 A3 A4 A5 A5.1 A5.2"; got != want {
 		t.Errorf("with AIPub: %s, want %s", got, want)
 	}
 	if got, want := ids(Build(state.DefaultState(), o)), "P1 P2 P6 K1 K2 K3 K4"; got != want {
 		t.Errorf("without AIPub: %s, want %s", got, want)
 	}
 	o.ArchivePath, o.Monitoring = "", false
-	if got, want := ids(Build(aipubState(), o)), "P1 P2 P5 P6 K1 K2 K3 (K4) A1 A2 A3 (A4) A5 A5.1 A5.2"; got != want {
+	if got, want := ids(Build(aipubState(), o)), "P1 P2 P5 P6 P7 K1 K2 K3 (K4) A1 A2 A3 (A4) A5 A5.1 A5.2"; got != want {
 		t.Errorf("no archive, no monitoring: %s, want %s", got, want)
 	}
 }
@@ -150,7 +150,7 @@ func TestWebhookAppliedAfterCert(t *testing.T) {
 	o.ArchivePath = "/media/usb/a.tgz"
 	s := aipubState()
 	s.ControlPlane.Audit, s.ControlPlane.RuntimeConfig, s.ControlPlane.JWKS = true, true, false
-	if got, want := ids(Build(s, o)), "P1 P2 P5 P6 K1 K2 K3 K4 A1 A2 A3 A4 A5"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P5 P6 P7 K1 K2 K3 K4 A1 A2 A3 A4 A5"; got != want {
 		t.Errorf("audit and runtime-config only: %s, want %s", got, want)
 	}
 	for _, st := range Build(s, o) {
@@ -162,7 +162,7 @@ func TestWebhookAppliedAfterCert(t *testing.T) {
 	s.ControlPlane.Webhook = true
 	s.ControlPlane.WebhookURL = "https://aipub.example.com/token-review"
 	steps := Build(s, o)
-	if got, want := ids(steps), "P1 P2 P5 P6 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
+	if got, want := ids(steps), "P1 P2 P5 P6 P7 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
 		t.Errorf("with the webhook: %s, want %s", got, want)
 	}
 	var k3, a25 Step
@@ -217,7 +217,7 @@ func TestJWKSAppliedAfterAipub(t *testing.T) {
 	s := aipubState()
 	s.ControlPlane.Audit = true
 	steps := Build(s, o)
-	if got, want := ids(steps), "P1 P2 P5 P6 K1 K2 K3 K4 A1 A2 A3 A4 A5 A5.1 A5.2"; got != want {
+	if got, want := ids(steps), "P1 P2 P5 P6 P7 K1 K2 K3 K4 A1 A2 A3 A4 A5 A5.1 A5.2"; got != want {
 		t.Errorf("JWKS: %s, want %s", got, want)
 	}
 	byID := map[string]Step{}
@@ -243,7 +243,7 @@ func TestJWKSAppliedAfterAipub(t *testing.T) {
 	s.ControlPlane.Webhook = true
 	s.ControlPlane.WebhookURL = "https://aipub.example.com/token-review"
 	steps = Build(s, o)
-	if got, want := ids(steps), "P1 P2 P5 P6 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
+	if got, want := ids(steps), "P1 P2 P5 P6 P7 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
 		t.Errorf("JWKS and webhook: %s, want %s", got, want)
 	}
 	for _, st := range steps {
@@ -307,13 +307,13 @@ func TestExistingSitePlan(t *testing.T) {
 	s.ControlPlane.Audit, s.ControlPlane.Webhook = true, true
 	s.ControlPlane.WebhookURL = "https://aipub.example.com/token-review"
 
-	if got, want := ids(Build(s, o)), "P1 P2 P5 P6 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P5 P6 P7 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
 		t.Errorf("new site: %s, want %s", got, want)
 	}
 
 	o.Existing, o.AipubInstalled, o.JWKSCAReady = true, true, true
 	steps := Build(s, o)
-	if got, want := ids(steps), "P1 P2 P3 P5 P6 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
+	if got, want := ids(steps), "P1 P2 P3 P5 P6 P7 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
 		t.Errorf("existing site with the CA: %s, want %s", got, want)
 	}
 	for _, st := range steps {
@@ -327,12 +327,12 @@ func TestExistingSitePlan(t *testing.T) {
 
 	// the CA not there: as a new site, the CA filled after setup-aipub
 	o.JWKSCAReady = false
-	if got, want := ids(Build(s, o)), "P1 P2 P3 P5 P6 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P3 P5 P6 P7 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
 		t.Errorf("existing site without the CA: %s, want %s", got, want)
 	}
 	// JWKS off: nothing waits for a CA
 	s.ControlPlane.JWKS = false
-	if got, want := ids(Build(s, o)), "P1 P2 P3 P5 P6 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P3 P5 P6 P7 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
 		t.Errorf("existing site without JWKS: %s, want %s", got, want)
 	}
 	// AIPub not installed yet on the existing cluster: as a new site

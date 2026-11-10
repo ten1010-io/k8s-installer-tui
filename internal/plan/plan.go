@@ -139,6 +139,11 @@ func build(s *state.AppState, o Options) []Step {
 		Note: "sudoers 가 /bin/sh 를 막으면 Ansible become 이 'Shared connection closed' 로 실패합니다. 모든 노드에서 " +
 			"sudo -n /bin/sh -c true 를 확인 (읽기만). 막혔고 dash 가 있으면 계획의 ansible-playbook 에 " +
 			"-e ansible_shell_executable=<dash> 를 붙입니다"})
+	if s.AipubEnabled {
+		steps = append(steps, Step{ID: "P7", Title: "DNS", Kind: Check,
+			Note: "AIPub·Harbor 호스트 (<접두사>.<aipub_ingress_zone>) 가 인그레스 VIP " + s.K8sIngressVIP + " 로 풀리는지 " +
+				"control node 에서 getent hosts 로 확인. DNS 는 설치 뒤에 등록하는 경우가 많아 경고만"})
+	}
 	steps = append(steps,
 		Step{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",
 			Note: "모든 노드에 설치본 배포"},

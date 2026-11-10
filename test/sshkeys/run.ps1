@@ -2,14 +2,17 @@
 # containers with real sshd: --check-ssh and --send-ssh-key against users of the
 # container's own sshd. Nothing outside the containers is touched.
 #
-#   powershell -File test\sshkeys\run.ps1 [-K8sInstaller <checkout>] [-Images ubuntu:24.04,rockylinux:8]
+#   powershell -File test\sshkeys\run.ps1 [-K8sInstaller <checkout>] [-Images ubuntu:24.04,rockylinux:8] [-Ansible 2.17.*,2.19.*]
 #
-# Needs Docker Desktop and the network (packages, ansible-core from PyPI).
-# configure-control-node-ssh.sh is taken from the k8s-installer checkout next to
-# this repository unless given; it is mounted read only.
+# Every image runs with every ansible-core release the installer supports, with
+# /tmp a noexec tmpfs as on hardened sites. Needs Docker Desktop and the network
+# (packages, ansible-core from PyPI). configure-control-node-ssh.sh is taken from
+# the k8s-installer checkout next to this repository unless given; it is mounted
+# read only.
 param(
     [string]$K8sInstaller = "",
-    [string[]]$Images = @("ubuntu:24.04", "rockylinux:8")
+    [string[]]$Images = @("ubuntu:24.04", "rockylinux:8"),
+    [string[]]$Ansible = @("2.17.*", "2.19.*")
 )
 $ErrorActionPreference = "Stop"
 $tui = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -21,14 +24,17 @@ docker run --rm -v "${tui}:/src" -v tui-gomod:/go/pkg/mod -w /src -e CGO_ENABLED
 if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 
 $failed = @()
+$passed = @()
 foreach ($image in $Images) {
-    Write-Host "════ $image"
-    docker run --rm `
-        -v "${tui}\dist\k8s-installer-tui:/src/k8s-installer-tui:ro" `
-        -v "${configure}:/src/configure-control-node-ssh.sh:ro" `
-        -v "${PSScriptRoot}\in-container.sh:/src/in-container.sh:ro" `
-        $image bash /src/in-container.sh
-    if ($LASTEXITCODE -ne 0) { $failed += $image }
+    foreach ($core in $Ansible) {
+        Write-Host "════ $image, ansible-core $core"
+        docker run --rm --tmpfs "/tmp:rw,noexec,nosuid,size=512m" -e "ANSIBLE_CORE=$core" `
+            -v "${tui}\dist\k8s-installer-tui:/src/k8s-installer-tui:ro" `
+            -v "${configure}:/src/configure-control-node-ssh.sh:ro" `
+            -v "${PSScriptRoot}\in-container.sh:/src/in-container.sh:ro" `
+            $image bash /src/in-container.sh
+        if ($LASTEXITCODE -ne 0) { $failed += "$image/$core" } else { $passed += "$image/$core" }
+    }
 }
 if ($failed.Count -gt 0) { Write-Host "✗ failed: $($failed -join ', ')"; exit 1 }
-Write-Host "✓ passed: $($Images -join ', ')"
+Write-Host "✓ passed: $($passed -join ', ')"

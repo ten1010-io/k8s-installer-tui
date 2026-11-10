@@ -100,7 +100,7 @@ func TestScreensFitTerminal(t *testing.T) {
 			d.fits(h, "다음")
 			d.keys("ctrl+n")
 			d.at("9.설치")
-			d.fits(h, "실행 (준비 중)")
+			d.fits(h, "실행")
 		})
 	}
 }

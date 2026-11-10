@@ -22,8 +22,10 @@ import (
 )
 
 // The installation plan of the saved settings (internal/plan): the checks to make
-// and the playbooks to run, in order. This version shows the plan, its commands
-// and a script of them, and runs the checks; it runs no playbook.
+// and the playbooks to run, in order. It shows the plan, its commands and a
+// script of them, runs the checks, and runs the plan (실행, s9_run.go): the
+// checks first, then the stages, stopping once for the StorageClass driver, and
+// going on from the last run (state.json) when there is one.
 //
 // Focus layout:
 //   0  : 아카이브 경로 (K4)
@@ -32,7 +34,8 @@ import (
 //        its bottom goes on to the buttons)
 //   3  : nav slot (←/→: 이전/실행)
 //
-// Off the text input: c 사전 확인, d 명령 보기, w 스크립트 저장, and when P2
+// Off the text input: c 사전 확인, d 명령 보기, w 스크립트 저장, f 처음부터
+// (when there was a run), and when P2
 // found nodes that refuse the key of the control node: k 키 보내기 (ssh asks
 // the password of each node on the terminal), p 비밀번호 한 번 (a masked input,
 // handed to ssh through SSH_ASKPASS). Both run P2 again at the end.
@@ -82,7 +85,9 @@ type S9Install struct {
 	appState *state.AppState
 	paths    fileio.Paths
 	opts     plan.Options
+	base     plan.Options // as the wizard gave them; opts may take the last run's
 	run      plan.RunFunc
+	exec     plan.StreamFunc // the steps of a run; nil: plan.ExecStream
 
 	archive  textinput.Model
 	steps    []plan.Step
@@ -106,6 +111,17 @@ type S9Install struct {
 	vp         viewport.Model
 	planVP     viewport.Model // the plan, cut to the room under the inputs
 
+	// the run (s9_run.go): ex while it runs and after, until Esc; last the last
+	// run (state.json); confirm the y/n asked before one ("resume", "fresh")
+	ex             *execRun
+	last           *plan.RunState
+	confirm        string
+	runAfterChecks bool // 실행 ran the checks first
+	showLog        bool
+	logVP          viewport.Model
+	logStep        plan.StepState
+	selMoved       bool
+
 	focusIdx int
 	navIdx   int
 	width    int
@@ -121,7 +137,7 @@ func NewS9Install(s *state.AppState, paths fileio.Paths, opts plan.Options) *S9I
 	p.CharLimit = 256
 	p.Prompt = ""
 	return &S9Install{
-		appState: s, paths: paths, opts: opts, run: plan.ExecRun,
+		appState: s, paths: paths, opts: opts, base: opts, run: plan.ExecRun,
 		archive: a, pass: p, checks: map[string]plan.CheckResult{}, vp: viewport.New(80, 20), planVP: viewport.New(80, 20),
 	}
 }
@@ -174,6 +190,11 @@ func (s *S9Install) SyncFromState(st *state.AppState) {
 	s.focusIdx, s.navIdx = s9FocusArchive, 0
 	s.showScript = false
 	s.message = ""
+	s.confirm = ""
+	if !s.running() {
+		s.ex, s.selMoved = nil, false
+		s.loadPrev()
+	}
 	s.rebuild()
 	s.syncFocus()
 	s.planVP.GotoTop()
@@ -189,6 +210,7 @@ func (s *S9Install) rebuild() {
 	// the plan of what was saved: whether the authentication config of JWKS went
 	// out with its CA
 	s.opts.JWKSCAReady = fileio.LookupCA(s.appState).PEM != ""
+	s.opts.StorageVars = plan.ReadStorageVars(s.paths.AipubVars)
 	s.steps = plan.Build(s.appState, s.opts)
 	// wrapped here, so that the viewport counts the lines it shows and scrolls to
 	// the last of them (it would wrap a long line itself and cut what overflows)
@@ -383,10 +405,18 @@ func (s *S9Install) closePass() {
 
 // Busy holds the wizard on this screen while the password is asked or the key
 // sent: the messages of the send come to this screen only.
-func (s *S9Install) Busy() bool { return s.asking || s.sending || s.preparing }
+func (s *S9Install) Busy() bool {
+	return s.asking || s.sending || s.preparing || s.running() || s.confirm != ""
+}
 
 // BusyReason is what the wizard says when it does not leave.
 func (s *S9Install) BusyReason() string {
+	if s.running() {
+		return "설치를 실행하는 중입니다. 끝나거나 Ctrl+C 로 멈춘 뒤 이동하세요"
+	}
+	if s.confirm != "" {
+		return "y 또는 n 으로 답한 뒤 이동하세요"
+	}
 	if s.preparing {
 		return "키를 준비하는 중입니다. 끝난 뒤 이동하세요"
 	}
@@ -399,6 +429,13 @@ func (s *S9Install) BusyReason() string {
 // KeyHints are the keys of what is going on, for the footer.
 func (s *S9Install) KeyHints() []string {
 	switch {
+	case s.running():
+		if _, ok := s.waitingStep(); ok {
+			return []string{"Enter 설치함, 계속", "Ctrl+C 멈춤"}
+		}
+		return []string{"Ctrl+C 멈춤"}
+	case s.confirm != "":
+		return []string{"y 예", "n 아니오"}
 	case s.asking:
 		return []string{"Enter 보내기", "Esc 취소"}
 	case s.sending:
@@ -414,6 +451,11 @@ func (s *S9Install) KeyHints() []string {
 // stop is under way already: the second Ctrl+C quits (after Stop).
 func (s *S9Install) Interrupt() bool {
 	switch {
+	case s.running():
+		return s.interruptRun()
+	case s.confirm != "":
+		s.confirm, s.message = "", "실행하지 않았습니다"
+		return true
 	case s.send != nil && !s.send.stopping:
 		s.send.stopping = true
 		s.send.cancel()
@@ -429,6 +471,7 @@ func (s *S9Install) Interrupt() bool {
 // Stop ends a send before the program quits: cancelled, and waited for until
 // its helper directory is removed (the commands it runs are killed on cancel).
 func (s *S9Install) Stop() {
+	s.stopRun()
 	if s.asking {
 		s.closePass()
 	}
@@ -453,6 +496,9 @@ func (s *S9Install) writeScript() {
 
 func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	s.layout() // the plan as it is shown: whether it fits, its bottom
+	if cmd, ok := s.updateRun(msg); ok {
+		return s, cmd
+	}
 	switch msg := msg.(type) {
 	case checkDoneMsg:
 		for id, r := range msg.results {
@@ -465,6 +511,9 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.shellSet {
 			s.opts.ShellExecutable = msg.shell
 			s.rebuild()
+		}
+		if s.runAfterChecks && !s.checking {
+			return s, s.afterChecks()
 		}
 		return s, nil
 
@@ -513,6 +562,18 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, s.runP2()
 
 	case tea.KeyMsg:
+		if s.confirm != "" {
+			switch msg.String() {
+			case "y", "Y":
+				return s, s.answer(true)
+			case "n", "N", "esc":
+				return s, s.answer(false)
+			}
+			return s, nil
+		}
+		if s.ex != nil {
+			return s, s.runKey(msg)
+		}
 		if s.asking {
 			switch msg.String() {
 			case "esc":
@@ -555,6 +616,11 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "c":
 				if !s.checking {
 					return s, s.runChecks()
+				}
+				return s, nil
+			case "f":
+				if s.last != nil {
+					s.confirm = "fresh"
 				}
 				return s, nil
 			case "k":
@@ -615,8 +681,7 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if s.navIdx == 0 {
 					return s, Prev()
 				}
-				s.message = "실행은 다음 버전(R2)에서 지원합니다. 지금은 w로 스크립트를 저장하거나 d로 명령을 보고 실행하세요"
-				return s, nil
+				return s, s.pressRun()
 			}
 		}
 	}
@@ -667,6 +732,9 @@ func (s *S9Install) viewSend() string {
 }
 
 func (s *S9Install) View() string {
+	if s.ex != nil {
+		return s.viewRun()
+	}
 	var b strings.Builder
 	if s.showScript {
 		b.WriteString(styles.StyleTitle.Render("설치 명령") + styles.StyleMuted.Render("   ↑/↓ 스크롤   d·Esc 닫기") + "\n\n")
@@ -719,7 +787,11 @@ func (s *S9Install) View() string {
 func (s *S9Install) top() string {
 	var b strings.Builder
 	b.WriteString(styles.StyleTitle.Render("설치 계획") + "\n")
-	b.WriteString(styles.StyleMuted.Render("저장한 설정으로 실행할 순서입니다. 이 버전은 계획과 명령만 보여 주고, 실행은 하지 않습니다.") + "\n\n")
+	b.WriteString(styles.StyleMuted.Render("저장한 설정으로 실행할 순서입니다. 실행을 누르면 사전 확인 뒤 이 순서대로 실행하고, "+
+		"StorageClass 드라이버 설치 (M1) 에서 한 번 멈춥니다.") + "\n\n")
+	if prev := s.viewPrev(); prev != "" {
+		b.WriteString(prev + "\n")
+	}
 
 	if copies := plan.CopyCommands(s.opts, s.savedIn()); len(copies) > 0 {
 		b.WriteString(styles.StyleWarning.Render("! 설정을 "+s.savedIn()+" 에 저장했습니다. 설치 전에 "+
@@ -827,10 +899,16 @@ func (s *S9Install) bottom() string {
 		b.WriteString("\n" + styles.StylePrimary.Render("SSH 비밀번호 ("+strings.Join(names, " ")+" 공통): ") + s.pass.View() + "\n")
 		b.WriteString(styles.StyleMuted.Render("Enter 보내기   Esc 취소   (저장하지 않으며 보낸 뒤 지웁니다)") + "\n")
 	}
+	if s.confirm != "" {
+		b.WriteString("\n" + styles.StyleWarning.Render(s.confirmQuestion()) + "\n")
+	}
 	if s.message != "" {
 		b.WriteString("\n" + styles.StylePrimary.Render(s.message) + "\n")
 	}
 	keys := "  c 사전 확인   d 명령 보기   w 스크립트 저장 (install-plan.sh)"
+	if s.last != nil {
+		keys += "   f 처음부터"
+	}
 	if len(s.refusing()) > 0 {
 		keys += "   k·p 키 보내기"
 	}
@@ -838,6 +916,10 @@ func (s *S9Install) bottom() string {
 
 	prevFocused := s.focusIdx == s9FocusNav && s.navIdx == 0
 	runFocused := s.focusIdx == s9FocusNav && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "실행 (준비 중)", prevFocused, runFocused, s.width))
+	run := "실행"
+	if s.last != nil && len(s.last.Remaining()) > 0 {
+		run = "이어서 실행"
+	}
+	b.WriteString("\n" + RenderNavButtons("이전", run, prevFocused, runFocused, s.width))
 	return b.String()
 }

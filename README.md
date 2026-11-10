@@ -98,6 +98,11 @@ Docker와 네트워크(패키지, PyPI의 ansible-core)가 필요합니다. 이�
 | `--check-ssh` | | 화면 없이 `--inventory`의 모든 노드가 이 제어 노드의 키를 받고 비밀번호 없이 sudo 하는지 표로 출력 (읽기만). 아래 "SSH 키 배포" 참고 |
 | `--send-ssh-key` | | 화면 없이 키를 받지 않는 노드에 키를 보내고 같은 표를 출력. 비밀번호는 노드마다 ssh가 물음 |
 | `--ask-pass-once` | | `--send-ssh-key`와 함께: 비밀번호를 터미널에서 한 번만(화면에 보이지 않게) 물어 모든 노드에 씀 |
+| `--install` | | 화면 없이 설치 실행: 사전 확인 뒤 9단계의 단계를 차례로 실행. 아래 "설치 실행" 참고 |
+| `--resume` | | `--install`과 함께: 지난 실행에서 성공한 단계는 건너뛰고 이어서 실행 |
+| `--existing` | | `--install`과 함께: 클러스터가 이미 있는 사이트로 계획 (기본은 새 사이트) |
+| `--archive <path>` | (없음) | `--install`과 함께: K4의 사용자 레지스트리 아카이브 (비우면 K4 건너뜀) |
+| `--no-monitoring` | | `--install`과 함께: 모니터링(A4)을 설치하지 않음 |
 | `--version` | | 버전 출력 |
 
 `--render`의 종료 코드: `0` 검증 통과, `2` 검증 오류 있음(파일은 렌더링됨), `1` 로드·렌더링·쓰기 오류. 렌더링 결과는 `<dir>` 아래에 k8s-installer의 `ansible` 디렉터리 배치(`inventory.yml`, `group_vars/all/vars.yml`, `files/aipub/vars.yml`)로 쓰며, AIPub을 설치하지 않으면 `files/aipub/vars.yml`은 만들지 않습니다.
@@ -177,6 +182,7 @@ AIPub을 설치하지 않으면 AIPub 전용 화면(6·7단계)은 건너뜁니�
 | K4 | `push-user-registry-artifacts` (선택, 아카이브 경로를 넣었을 때) | 플레이북 |
 | A1 | `setup-network` | 플레이북 (AIPub) |
 | A2 | `setup-cert` | 플레이북 (AIPub) |
+| M1 | StorageClass 드라이버 설치 (A2와 함께, 쓰는 클래스가 없으면 건너뜀) | 수동 (AIPub) |
 | A3 | `setup-base` | 플레이북 (AIPub) |
 | A4 | `setup-monitoring` (선택) | 플레이북 (AIPub) |
 | A5 | `setup-aipub` | 플레이북 (AIPub) |
@@ -188,6 +194,7 @@ A1~A5는 AIPub을 설치할 때만 나옵니다. 화면에서 K4의 아카이브
 | `c` | 사전 확인 실행: P1(설치 디렉터리), P2(모든 노드에 `sudo -n true`) |
 | `d` | 각 단계의 명령 보기 |
 | `w` | 명령을 `install-plan.sh`로 저장 (설정을 저장한 디렉터리에) |
+| `f` | 지난 실행이 있을 때: 처음부터 다시 실행 (확인 후) |
 | `k` | 키를 받지 않는 노드에 키 보내기: 화면이 터미널을 넘기고, 노드마다 `ssh-copy-id`가 비밀번호를 물음. 끝나면 Enter로 돌아옴 |
 | `p` | 키를 받지 않는 노드에 키 보내기: 화면의 가림 입력칸에 비밀번호를 한 번 넣음. 노드별 진행이 P2 아래에 나옴. `Ctrl+C`로 중단. 중단 중에 한 번 더 누르면 보내기가 멈출 때까지 "정리 중…"을 보인 뒤 종료(그때 한 번 더 누르면 바로 종료하고, 정리는 프로그램이 끝나기 전에 마저 함) |
 
@@ -219,7 +226,38 @@ k8s-installer-tui --send-ssh-key --ask-pass-once    # 비밀번호를 한 번만
 - `sshd_config`를 고치지 않습니다. 비밀번호 로그인이 막힌 노드, 특히 비밀번호 로그인이 막힌 `root`에는 키를 보낼 수 없어 직접 넣어야 합니다(`configure-control-node-ssh.sh`가 출력하는 안내).
 - 바뀐 호스트 키를 지우지 않습니다.
 
-"실행"은 다음 버전에서 지원합니다. 이 버전은 사전 확인 외에는 아무것도 실행하지 않으므로, `d`로 명령을 보거나 `w`로 저장한 스크립트를 직접 실행하세요. 설정을 `--installer-root`의 `ansible` 디렉터리가 아닌 곳에 저장했다면 스크립트에 복사 명령이 함께 들어갑니다.
+`d`로 명령을 보거나 `w`로 저장한 스크립트를 직접 실행할 수도 있습니다. 설정을 `--installer-root`의 `ansible` 디렉터리가 아닌 곳에 저장했다면 스크립트에 복사 명령이 함께 들어갑니다. 스크립트도 M1에서 `read`로 한 번 멈춥니다(터미널이 없으면 그냥 지나감).
+
+### 설치 실행 (`실행`, `--install`)
+
+9단계의 `실행` 버튼(또는 `--install`)은 계획을 제어 노드에서 차례로 실행합니다. 플레이북은 설치 디렉터리에서 venv를 켜고 `ansible-playbook -i inventory.yml ...`로, `install-plan.sh`와 같은 명령으로 실행합니다(P6이 찾은 `-e ansible_shell_executable` 포함).
+
+1. **사전 확인**: P1~P8을 아직 실행하지 않았으면 먼저 실행합니다. ✗가 하나라도 있으면 시작하지 않습니다(경고 `!`는 계속).
+2. **단계(stage)**: 한 단계가 모두 성공해야 다음 단계로 갑니다. 순서는 `C1`(설정을 다른 곳에 저장했을 때 설치 디렉터리로 복사, sudo) → K1 → K2 → K3 → K4 → A1 → **A2 + M1** → (A2.5) → A3 → A4 → A5 → (A5.1 → A5.2).
+   - 플레이북은 언제나 하나씩 실행합니다. 두 설치 도구의 모든 플레이북이 `begin-playbook.yml`로 시작해 `sync-ansible.yml`(ansible 디렉터리를 tar로 묶어 다른 ki cp 노드의 것을 지우고 바꿈)과 `/tmp/k8s-installer`의 고정 파일(vars.yml, 아카이브)을 쓰기 때문에, 같은 제어 노드에서 둘을 동시에 돌리면 서로의 파일을 덮어씁니다. k8s-installer에는 자체 잠금도 없습니다.
+   - 함께 실행하는 것은 **M1(StorageClass 드라이버 설치, 수동)과 A2 `setup-cert`** 뿐입니다. M1이 하는 일은 읽기만 하는 `ansible <첫 k8s 컨트롤 플레인 노드> -m command -a 'kubectl get storageclass ...'`이고 ansible 디렉터리나 `/tmp/k8s-installer`를 건드리지 않습니다. 드라이버 파드는 노드가 Ready여야 하므로(A1 Cilium 뒤) 그 자리이고, 운영자가 드라이버를 까는 동안 setup-cert가 돕니다.
+3. **수동 멈춤 (M1)**: 사이트가 볼륨을 StorageClass에 청구하는 첫 단계(HA면 A3 Harbor, 그다음 A4 모니터링 `aipub_monitoring_storage_type: dynamic`, A5 백엔드 공유 볼륨 `aipub_app_file_storage_type: dynamic`) 앞입니다. 쓰는 클래스는 `files/aipub/vars.yml`에서 읽습니다(`aipub_ha_mode_storage_class`, 그리고 있으면 `aipub_monitoring_storage_class_name`·`aipub_app_file_storage_storage_class_name`·`aipub_app_storage_class_name`). 먼저 한 번 확인해 모두 있으면 멈추지 않고, 없으면 "스토리지클래스 드라이버를 설치하세요 — 위저드가 쓰는 클래스: …"를 보이고 기다립니다. `Enter`(설치함, 계속)를 누르면 다시 확인하고, 모든 클래스가 있어야 다음 단계로 갑니다. 쓰는 클래스가 없으면(HA 아님, 모니터링·공유 볼륨이 static) M1은 건너뛰고 이유를 보입니다.
+4. **진행 화면**: 단계마다 `·` 대기 `▶` 실행 중 `✓` 성공 `✗` 실패 `⏸` 기다림 `-` 건너뜀과 소요 시간, 실행 중인 단계 로그의 마지막 10줄. `↑/↓`로 단계를 고르고 `l`로 전체 로그. 실행 중에는 다른 단계로 이동하지 않습니다.
+5. **멈추기**: `Ctrl+C` 한 번은 실행 중인 단계가 끝나면 멈춤(M1 기다림은 바로 끝냄), 두 번은 실행 중인 단계의 프로세스 그룹에 SIGINT, 10초 뒤에도 남으면 SIGKILL(상태 `cancelled`). setup 플레이북은 다시 실행해도 안전하므로 그 단계부터 다시 실행하면 됩니다. 프로그램을 끝내면 실행도 멈춥니다(아직 분리 실행은 없음).
+6. **실패**: 단계가 실패하면 같은 stage의 다른 단계는 끝까지 돌게 두고(플레이북을 중간에 끊지 않음, M1 기다림은 끝냄) 거기서 멈춥니다. 끝에 실패한 단계, 종료 코드, 로그 경로, 로그 마지막 줄을 보여 줍니다.
+   - `setup-aipub`이 backend-informer에서 Workspace CRD가 없다고 실패하면, aipub-installer README대로 Python 서비스를 설치한 뒤 이어서 실행하라고 안내합니다. 다시 돌려도 같은 이유로 실패하므로 자동 재시도는 하지 않습니다.
+7. **이어서 실행**: 9단계에 들어오면 지난 실행(`state.json`)의 끝난 단계와 남은 단계를 보여 주고, 버튼이 `이어서 실행`이 됩니다. 성공한 단계는 다시 실행하지 않고 첫 미완료 단계부터 실행합니다. 지난 실행 뒤에 사이트 파일(inventory, vars, AIPub vars, 웹훅 kubeconfig)이 바뀌었으면 먼저 묻습니다. `f`는 처음부터(확인 후). 끝나지 않은 실행은 시작할 때의 사이트 사실(기존 클러스터·AIPub 여부)로 계획합니다.
+
+상태와 로그는 `<installer-root>/tui-install/`에 있습니다: `state.json`(단계별 상태·시작·끝·종료 코드·로그 경로, 사이트 파일 해시; 원자적으로 씀), `logs/<단계>.log`(시도마다 이어 씀), `lock`(flock: 두 TUI가 같은 설치를 동시에 실행하지 못함). ansible 디렉터리 안이 아닌 이유: 매 플레이북의 `sync-ansible.yml`이 그 디렉터리를 tar로 묶기 때문이고, `upgrade.sh`는 `ansible/`·`scripts/`·`bundle/`·`venv/`만 바꿉니다. 설치 디렉터리가 root 소유이면 처음 한 번 `sudo -n install -d`로 만들어 이 사용자에게 줍니다.
+
+하지 않는 일: reset·remove 플레이북과 `delete_data`·`delete_namespace`는 실행하지 않습니다(러너가 거부). 비밀번호를 묻지 않습니다(NOPASSWD sudo는 P2가 확인하는 전제).
+
+```bash
+cd /opt/k8s-installer/ansible
+k8s-installer-tui --install                 # 사전 확인, 그다음 모든 단계. M1에서 Enter를 기다림
+k8s-installer-tui --install --resume        # 실패·중단한 단계부터
+```
+
+`--install`은 단계가 바뀔 때마다 한 줄씩(`▶`·`✓`·`✗`·`⏸`) 찍고, 끝에 요약을 찍습니다. 종료 코드: `0` 모두 성공, `1` 실패(또는 M1에서 입력이 끝나 멈춤), `2` 시작하지 못함(사전 확인 ✗, 다른 실행이 잠금을 가짐, `--resume`인데 지난 실행 없음, 사이트 파일이 바뀌어 묻는 말에 아니오), `130` `Ctrl+C`(SIGTERM `143`, SIGHUP `129`). 시험: `test/install/run.sh`가 가짜 `ansible`·`ansible-playbook`으로 컨테이너 안에서 처음부터 끝까지 돌려 봅니다(서버에 접속하지 않음).
+
+```bash
+docker run --rm -v tui-gomod:/go/pkg/mod -v "$PWD:/src" -w /src golang:1.23 bash test/install/run.sh
+```
 
 ## 프로젝트 구조
 

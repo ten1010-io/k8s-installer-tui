@@ -23,35 +23,44 @@ import (
 // again to a node that joins and on every upgrade, which a hand edit of
 // /etc/kubernetes/manifests does not survive.
 //
-// Focus layout:
-//   0  : AIPub 감사 로그 (toggle)
-//   1  : runtime-config (toggle)
-//   2  : AIPub 인증 (JWKS) (toggle)
-//   3  : issuer URL
-//   4  : CA 파일
-//   5  : AIPub 인증 웹훅, 레거시 (toggle)
-//   6  : 웹훅 URL
-//   7  : 추가할 대상 (←/→)
-//   8  : 추가할 항목 (Enter: 추가)
-//   9… : 직접 넣은 항목 (d: 삭제)
-//   last: nav slot (←/→: 이전/다음)
+// The screen shows the presets, one row and one short line each; the details of
+// the focused row are shown under it. What it shows depends on the state, and so
+// do the stops of the focus (stops), in this order:
+//
+//	AIPub 감사 로그, runtime-config, AIPub 인증 (JWKS) (toggles)
+//	  issuer URL, CA 파일                  (while JWKS is on)
+//	AIPub 인증 웹훅, 레거시 (toggle)       (here on an existing site or when it was on)
+//	  웹훅 URL                              (while the webhook is on)
+//	▸ 고급: 직접 추가 (Enter/Space, →/←: 펼치기/접기)
+//	  the webhook when not above, 추가할 대상 (←/→), 추가할 항목 (Enter: 추가),
+//	  직접 넣은 항목 (d: 삭제)              (while expanded)
+//	nav slot (←/→: 이전/다음)
 //
 // Off the text inputs, on an existing site: c reads what the apiserver of the
 // first control plane node was given by hand (read only) and turns on the
 // presets that stand for it.
 
+// The kinds of focus stop.
 const (
-	s4bFocusAudit = iota
-	s4bFocusRuntime
-	s4bFocusJWKS
-	s4bFocusIssuer
-	s4bFocusCA
-	s4bFocusWebhook
-	s4bFocusURL
-	s4bFocusTarget
-	s4bFocusEntry
-	s4bFocusList // the first entry, then the nav slot after the last
+	s4bAudit = iota
+	s4bRuntime
+	s4bJWKS
+	s4bIssuer
+	s4bCA
+	s4bWebhook
+	s4bURL
+	s4bAdvanced
+	s4bTarget
+	s4bEntry
+	s4bList // an entry typed in, by its place in entries()
+	s4bNav
 )
+
+// s4bStop is a row the focus can be on.
+type s4bStop struct {
+	kind int
+	i    int // the entry, for s4bList
+}
 
 // cpTarget is a list an entry typed in goes to.
 type cpTarget struct {
@@ -99,7 +108,11 @@ type S4bControlPlane struct {
 	legacyErr string
 	checking  bool
 
-	focusIdx int
+	advanced  bool // the section of the entries typed in is expanded
+	webhookOn bool // the webhook was on when the screen was entered
+
+	focus    s4bStop
+	focusPos int // the place of the focus among the stops, where it lands when its row goes away
 	navIdx   int
 	width    int
 	height   int
@@ -176,9 +189,13 @@ func (s *S4bControlPlane) SyncFromState(st *state.AppState) {
 	s.entry.SetValue("")
 	s.entryErr = ""
 	s.site = st
-	s.focusIdx = 0
+	// nothing the site has is hidden: entries expand the section, a webhook on
+	// is shown with the presets
+	s.advanced = len(s.entries()) > 0
+	s.webhookOn = s.cp.Webhook
+	s.focus, s.focusPos = s4bStop{kind: s4bAudit}, 0
 	s.navIdx = 0
-	s.syncFocus()
+	s.settle()
 }
 
 func (s *S4bControlPlane) SyncToState(st *state.AppState) {
@@ -249,6 +266,7 @@ func (s *S4bControlPlane) issuerOverride() string {
 // from a zone, are checked on the preview, once AIPub is chosen.
 func (s *S4bControlPlane) Validate() []string {
 	if strings.TrimSpace(s.entry.Value()) != "" {
+		s.advanced = true // the input the message names is shown
 		return []string{"추가할 항목에 입력한 것이 있습니다. Enter 로 추가하거나 지워주세요"}
 	}
 	cp := copyControlPlane(s.cp)
@@ -301,28 +319,77 @@ func volumeText(v state.ExtraVolume) string {
 	return text
 }
 
-func (s *S4bControlPlane) navFocus() int { return s4bFocusList + len(s.entries()) }
+// webhookUp says whether the legacy webhook is listed with the presets: on an
+// existing site, or when it was on or found on the node. A new site finds it in
+// the advanced section.
+func (s *S4bControlPlane) webhookUp() bool {
+	return s.opts.Existing || s.webhookOn || (s.legacy != nil && s.legacy.Presets[state.PresetWebhook])
+}
+
+// stops are the rows the focus can be on now, in the order of the screen.
+func (s *S4bControlPlane) stops() []s4bStop {
+	st := []s4bStop{{kind: s4bAudit}, {kind: s4bRuntime}, {kind: s4bJWKS}}
+	if s.cp.JWKS {
+		st = append(st, s4bStop{kind: s4bIssuer}, s4bStop{kind: s4bCA})
+	}
+	webhook := func() {
+		st = append(st, s4bStop{kind: s4bWebhook})
+		if s.cp.Webhook {
+			st = append(st, s4bStop{kind: s4bURL})
+		}
+	}
+	if s.webhookUp() {
+		webhook()
+	}
+	st = append(st, s4bStop{kind: s4bAdvanced})
+	if s.advanced {
+		if !s.webhookUp() {
+			webhook()
+		}
+		st = append(st, s4bStop{kind: s4bTarget}, s4bStop{kind: s4bEntry})
+		for i := range s.entries() {
+			st = append(st, s4bStop{kind: s4bList, i: i})
+		}
+	}
+	return append(st, s4bStop{kind: s4bNav})
+}
+
+func stopIndex(st []s4bStop, x s4bStop) int {
+	for i, y := range st {
+		if y == x {
+			return i
+		}
+	}
+	return -1
+}
+
+// settle keeps the focus on a row that is shown: one hidden under it hands the
+// focus to the row now at its place. The text inputs follow the focus.
+func (s *S4bControlPlane) settle() {
+	st := s.stops()
+	p := stopIndex(st, s.focus)
+	if p < 0 {
+		p = s.focusPos
+		if p > len(st)-1 {
+			p = len(st) - 1
+		}
+		s.focus = st[p]
+	}
+	s.focusPos = p
+	s.syncFocus()
+}
 
 func (s *S4bControlPlane) syncFocus() {
-	if s.focusIdx == s4bFocusIssuer {
-		s.issuer.Focus()
-	} else {
-		s.issuer.Blur()
-	}
-	if s.focusIdx == s4bFocusCA {
-		s.caFile.Focus()
-	} else {
-		s.caFile.Blur()
-	}
-	if s.focusIdx == s4bFocusURL {
-		s.url.Focus()
-	} else {
-		s.url.Blur()
-	}
-	if s.focusIdx == s4bFocusEntry {
-		s.entry.Focus()
-	} else {
-		s.entry.Blur()
+	inputs := []struct {
+		kind int
+		in   *textinput.Model
+	}{{s4bIssuer, &s.issuer}, {s4bCA, &s.caFile}, {s4bURL, &s.url}, {s4bEntry, &s.entry}}
+	for _, x := range inputs {
+		if s.focus.kind == x.kind {
+			x.in.Focus()
+		} else {
+			x.in.Blur()
+		}
 	}
 }
 
@@ -384,6 +451,8 @@ func (s *S4bControlPlane) addEntry() {
 	s.entryErr = ""
 }
 
+// removeEntry takes an entry out; the focus stays in the list, on the entry
+// after it or else the one before, and on the input when the list is empty.
 func (s *S4bControlPlane) removeEntry(e cpEntry) {
 	t := cpTargets[e.target]
 	switch t.kind {
@@ -396,8 +465,12 @@ func (s *S4bControlPlane) removeEntry(e cpEntry) {
 	case "file":
 		s.cp.Files = append(s.cp.Files[:e.index:e.index], s.cp.Files[e.index+1:]...)
 	}
-	if s.focusIdx > s.navFocus() {
-		s.focusIdx = s.navFocus()
+	if n := len(s.entries()); s.focus.kind == s4bList && s.focus.i >= n {
+		if n > 0 {
+			s.focus.i = n - 1
+		} else {
+			s.focus = s4bStop{kind: s4bEntry}
+		}
 	}
 }
 
@@ -419,94 +492,112 @@ func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		s.legacy = msg.legacy
 		s.applyLegacy(msg.legacy)
+		s.settle()
 		return s, nil
 	}
 	if msg, ok := msg.(tea.KeyMsg); ok {
-		nav := s.navFocus()
-		inInput := s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusIssuer || s.focusIdx == s4bFocusCA || s.focusIdx == s4bFocusEntry
-		switch msg.String() {
-		case "c":
-			if !inInput && s.opts.Existing {
-				return s, s.checkLegacy()
-			}
-		case "up":
-			if s.focusIdx > 0 {
-				s.focusIdx--
-				s.syncFocus()
-			}
-			return s, nil
-		case "down":
-			if s.focusIdx < nav {
-				s.focusIdx++
-				if s.focusIdx == nav {
-					s.navIdx = 1 // 다음
-				}
-				s.syncFocus()
-			}
-			return s, nil
-		case "left", "right":
-			switch s.focusIdx {
-			case s4bFocusTarget:
-				n := len(cpTargets)
-				if msg.String() == "left" {
-					s.target = (s.target + n - 1) % n
-				} else {
-					s.target = (s.target + 1) % n
-				}
-				s.entryErr = ""
-				return s, nil
-			case nav:
-				if msg.String() == "left" {
-					s.navIdx = 0
-				} else {
-					s.navIdx = 1
-				}
-				return s, nil
-			}
-		case "enter", " ":
-			if msg.String() == " " && inInput {
-				break
-			}
-			switch {
-			case s.focusIdx == s4bFocusAudit:
-				s.cp.Audit = !s.cp.Audit
-			case s.focusIdx == s4bFocusRuntime:
-				s.cp.RuntimeConfig = !s.cp.RuntimeConfig
-			case s.focusIdx == s4bFocusJWKS:
-				s.cp.JWKS = !s.cp.JWKS
-			case s.focusIdx == s4bFocusWebhook:
-				s.cp.Webhook = !s.cp.Webhook
-			case s.focusIdx == s4bFocusEntry && msg.String() == "enter":
-				s.addEntry()
-			case s.focusIdx == nav && msg.String() == "enter":
-				if s.navIdx == 0 {
-					return s, Prev()
-				}
-				return s, Next()
-			case s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusIssuer || s.focusIdx == s4bFocusCA || s.focusIdx == s4bFocusTarget:
-				s.focusIdx++
-				s.syncFocus()
-			}
-			return s, nil
-		case "d", "delete":
-			if s.focusIdx >= s4bFocusList && s.focusIdx < nav {
-				s.removeEntry(s.entries()[s.focusIdx-s4bFocusList])
-				return s, nil
-			}
+		if cmd, done := s.key(msg); done {
+			s.settle()
+			return s, cmd
 		}
 	}
 	var cmd tea.Cmd
-	switch s.focusIdx {
-	case s4bFocusIssuer:
+	switch s.focus.kind {
+	case s4bIssuer:
 		s.issuer, cmd = s.issuer.Update(msg)
-	case s4bFocusCA:
+	case s4bCA:
 		s.caFile, cmd = s.caFile.Update(msg)
-	case s4bFocusURL:
+	case s4bURL:
 		s.url, cmd = s.url.Update(msg)
-	case s4bFocusEntry:
+	case s4bEntry:
 		s.entry, cmd = s.entry.Update(msg)
 	}
 	return s, cmd
+}
+
+// key handles the keys of the screen; done is false for a key that goes on to
+// the focused text input.
+func (s *S4bControlPlane) key(msg tea.KeyMsg) (cmd tea.Cmd, done bool) {
+	s.settle()
+	st := s.stops()
+	p := stopIndex(st, s.focus)
+	f := s.focus.kind
+	inInput := f == s4bIssuer || f == s4bCA || f == s4bURL || f == s4bEntry
+	switch msg.String() {
+	case "c":
+		if !inInput && s.opts.Existing {
+			return s.checkLegacy(), true
+		}
+	case "up":
+		if p > 0 {
+			s.focus = st[p-1]
+		}
+		return nil, true
+	case "down":
+		if p < len(st)-1 {
+			s.focus = st[p+1]
+			if s.focus.kind == s4bNav {
+				s.navIdx = 1 // 다음
+			}
+		}
+		return nil, true
+	case "left", "right":
+		switch f {
+		case s4bTarget:
+			n := len(cpTargets)
+			if msg.String() == "left" {
+				s.target = (s.target + n - 1) % n
+			} else {
+				s.target = (s.target + 1) % n
+			}
+			s.entryErr = ""
+			return nil, true
+		case s4bAdvanced:
+			s.advanced = msg.String() == "right"
+			return nil, true
+		case s4bNav:
+			if msg.String() == "left" {
+				s.navIdx = 0
+			} else {
+				s.navIdx = 1
+			}
+			return nil, true
+		}
+	case "enter", " ":
+		if msg.String() == " " && inInput {
+			break
+		}
+		switch {
+		case f == s4bAudit:
+			s.cp.Audit = !s.cp.Audit
+		case f == s4bRuntime:
+			s.cp.RuntimeConfig = !s.cp.RuntimeConfig
+		case f == s4bJWKS:
+			s.cp.JWKS = !s.cp.JWKS
+		case f == s4bWebhook:
+			s.cp.Webhook = !s.cp.Webhook
+		case f == s4bAdvanced:
+			s.advanced = !s.advanced
+		case f == s4bEntry && msg.String() == "enter":
+			s.addEntry()
+		case f == s4bNav && msg.String() == "enter":
+			if s.navIdx == 0 {
+				return Prev(), true
+			}
+			return Next(), true
+		case inInput || f == s4bTarget:
+			if p < len(st)-1 {
+				s.focus = st[p+1]
+			}
+		}
+		return nil, true
+	case "d", "delete":
+		if f == s4bList {
+			s.removeEntry(s.entries()[s.focus.i])
+			return nil, true
+		}
+	}
+	return nil, false
 }
 
 // detected marks a preset the check found on the node, and warns when it is off.
@@ -520,26 +611,75 @@ func (s *S4bControlPlane) detected(id string) string {
 	return "  (노드에서 감지됨)"
 }
 
-// caView says whether the authentication config of JWKS is written now.
-func (s *S4bControlPlane) caView() string {
-	if !s.cp.JWKS {
-		return ""
-	}
+// caStatus says in a line whether the authentication config of JWKS is written
+// now; the help of the CA field says more.
+func (s *S4bControlPlane) caStatus() string {
 	ca := s.ca()
 	var out []string
 	switch {
 	case ca.PEM != "" && !ca.FromSaved:
-		out = append(out, styles.StyleSuccess.Render("    ✓ CA 있음 ("+ca.Path+"): 저장하면 authentication-config.yaml 을 씁니다"))
+		out = append(out, styles.StyleSuccess.Render("    ✓ CA 있음: 저장하면 authentication-config.yaml 을 씁니다"))
 	case ca.PEM != "":
-		out = append(out, styles.StyleSuccess.Render("    ✓ CA: 전에 쓴 authentication-config.yaml 의 것을 그대로 둡니다 ("+ca.Path+" 없음)"))
+		out = append(out, styles.StyleSuccess.Render("    ✓ CA: 전에 쓴 authentication-config.yaml 의 것을 그대로 둡니다"))
 	default:
-		out = append(out, styles.StyleWarning.Render("    ⚠ CA 대기 ("+ca.Path+" 없음): authentication-config.yaml 을 쓰지 않고, setup-cert 뒤 A5.1 이 만듭니다"))
+		out = append(out, styles.StyleWarning.Render("    ⚠ CA 대기: 아직 파일이 없음, setup-cert 뒤 A5.1 이 설정을 만듭니다"))
 	}
 	if ca.Err != nil {
 		out = append(out, styles.StyleError.Render("    ✗ "+ca.Err.Error()))
 	}
-	out = append(out, styles.StyleMuted.Render("    CA 없이 update-cluster/노드 추가를 돌리면 설치기가 '소스 파일 없음'으로 거부합니다 (노드는 그대로)"))
 	return strings.Join(out, "\n") + "\n"
+}
+
+// help is what the screen says of the focused row, under it.
+func (s *S4bControlPlane) help(kind int) []string {
+	switch kind {
+	case s4bAudit:
+		return []string{
+			"audit-policy-file, audit-log-path=/var/log/aipub/usage/audit.log, 30일·30개·100MB. 첫 설치부터",
+			"정책 파일 ansible/files/aipub/audit-policy.yaml 은 사이트가 둡니다 (AIPub 모니터링/python 팀 제공)",
+		}
+	case s4bRuntime:
+		return []string{"runtime-config=admissionregistration.k8s.io/v1beta1=true. 첫 설치부터"}
+	case s4bJWKS:
+		return []string{
+			"authentication-config. AIPub 설치 시에만 적용. aipub-installer k8s-jwks 와 같은 플래그·볼륨·파일을 kubeadm 이 보관하게 함",
+			"새 사이트: issuer 는 AIPub 백엔드라 클러스터 생성(K3)에서는 빼고, A5 setup-aipub 뒤 A5.1 이 CA 를 넣어",
+			"파일을 만들고 A5.2 update-cluster 로 적용합니다 (노드 한 대씩 재시작)",
+		}
+	case s4bIssuer:
+		return []string{"기본은 https://<aipub_app_host_prefix>.<aipub_ingress_zone> (aipub-installer 와 같은 규칙, 존을 바꾸면 따라감)"}
+	case s4bCA:
+		ca := s.ca()
+		out := []string{"setup-cert 가 두는 공개 CA. 있을 때만 ansible/files/" + state.JWKSConfigFile + " 를 만듭니다 (CA 인라인, 평문 복사)"}
+		switch {
+		case ca.PEM != "" && !ca.FromSaved:
+			out = append(out, "CA 있음 ("+ca.Path+"): 저장하면 authentication-config.yaml 을 씁니다")
+		case ca.PEM != "":
+			out = append(out, "CA: 전에 쓴 authentication-config.yaml 의 것을 그대로 둡니다 ("+ca.Path+" 없음)")
+		default:
+			out = append(out, "CA 대기 ("+ca.Path+" 없음): authentication-config.yaml 을 쓰지 않고, setup-cert 뒤 A5.1 이 만듭니다")
+		}
+		return append(out, "CA 없이 update-cluster/노드 추가를 돌리면 설치기가 '소스 파일 없음'으로 거부합니다 (노드는 그대로)")
+	case s4bWebhook:
+		return []string{
+			"authentication-token-webhook, cache-ttl 2m. 웹훅을 쓰던 사이트만. JWKS 와 함께 켤 수 있음",
+			"(옮기는 동안 둘 다 돌리고, 확인 뒤 aipub-installer 의",
+			"scripts/aipub/migration/jwks-auth/migrate-webhook-to-jwks.sh 로 웹훅을 뺀 다음 여기서도 끔)",
+			"AIPub 설치 시에만. setup-cert 가 만드는 CA(" + state.WebhookCAPath + ")가 있어야 apiserver 가 뜨므로",
+			"클러스터 생성(K3)에서는 빼고, A2 setup-cert 다음 A2.5 update-cluster 로 적용합니다 (노드 한 대씩 재시작)",
+		}
+	case s4bURL:
+		return []string{"ansible/files/" + state.WebhookConfigFile + " (kubeconfig) 로 만들어 둡니다. 평문 복사 — 비밀 금지"}
+	case s4bAdvanced:
+		return []string{
+			"apiserver·controller-manager·scheduler·etcd 의 인자와 볼륨, 컨트롤플레인 파일. 대부분의 사이트는 필요 없음",
+			"vars.yml 에 들어가 kubeadm 이 클러스터 설정으로 보관하므로 노드 추가·업그레이드에도 다시 적용됩니다",
+			"바꾸면 update-cluster.yml 이 컨트롤 플레인 노드를 한 대씩 재시작합니다. 매니페스트를 손으로 고치지 마세요",
+		}
+	case s4bTarget:
+		return []string{"←/→ 로 항목을 넣을 곳을 고릅니다"}
+	}
+	return nil
 }
 
 // legacyView is what the check of an existing site found.
@@ -585,68 +725,172 @@ func checkbox(on bool) string {
 
 func (s *S4bControlPlane) View() string {
 	var b strings.Builder
-	f := s.focusIdx
 	w := s.width
+	// the lines of the focused row: where it starts, and where its status and
+	// help end (the line after them)
+	focusLine, focusEnd := 0, 0
+	// at says whether a row is focused, and marks the line it starts on
+	at := func(x s4bStop) bool {
+		if s.focus != x {
+			return false
+		}
+		focusLine = strings.Count(b.String(), "\n")
+		focusEnd = focusLine + 1
+		return true
+	}
+	// help is written under the focused row only
+	help := func(indent string, kind int) {
+		for _, l := range s.help(kind) {
+			b.WriteString(styles.StyleMuted.Render(indent+l) + "\n")
+		}
+		focusEnd = strings.Count(b.String(), "\n")
+	}
+	preset := func(kind int, indent, id, label, short string) {
+		focused := at(s4bStop{kind: kind})
+		b.WriteString(RenderRow(indent+checkbox(s.cp.On(id))+" "+label+s.detected(id), focused, w) + "\n")
+		b.WriteString(styles.StyleMuted.Render(indent+"    "+short) + "\n")
+		if focused {
+			help(indent+"      ", kind)
+		}
+	}
+	field := func(kind int, indent, label string, in textinput.Model, status string) {
+		focused := at(s4bStop{kind: kind})
+		b.WriteString(RenderSectionHeader(indent+label, focused) + "  " + in.View() + "\n")
+		b.WriteString(status)
+		if focused {
+			help(indent+"      ", kind)
+		}
+	}
+	webhook := func(indent string) {
+		preset(s4bWebhook, indent, state.PresetWebhook, "AIPub 인증 웹훅 (레거시)", "JWKS 이전의 토큰 웹훅 인증. 웹훅을 쓰던 사이트만 켭니다")
+		if s.cp.Webhook {
+			field(s4bURL, indent+"  ", "웹훅 URL", s.url, "")
+		}
+	}
+
 	b.WriteString(styles.StyleTitle.Render("컨트롤플레인") + "\n")
-	b.WriteString(styles.StyleMuted.Render("kube-apiserver 등에 더할 인자·볼륨·파일 (vars.yml). kubeadm 이 클러스터 설정으로 보관해 노드 추가·업그레이드에도") + "\n")
-	b.WriteString(styles.StyleMuted.Render("다시 적용합니다. 바꾸면 update-cluster.yml 이 컨트롤 플레인 노드를 한 대씩 재시작합니다. 매니페스트를 손으로 고치지 마세요") + "\n")
+	b.WriteString(styles.StyleMuted.Render("kube-apiserver 등 컨트롤 플레인에 켤 기능을 고릅니다 (고른 줄 아래에 설명)") + "\n")
 	if s.opts.Existing {
 		b.WriteString(styles.StyleMuted.Render("기존 사이트: c 로 첫 컨트롤 플레인 노드의 kube-apiserver.yaml 에 손으로 넣은 설정을 읽습니다 (읽기만 함, 입력 칸 밖에서)") + "\n")
+	} else {
+		b.WriteString(styles.StyleMuted.Render("새 사이트는 권장 프리셋이 이미 켜져 있어 그대로 다음(Ctrl+N)으로 가면 됩니다") + "\n")
 	}
 	b.WriteString(s.legacyView())
 	b.WriteString("\n")
 
 	b.WriteString(styles.StylePrimary.Render("프리셋") + styles.StyleMuted.Render("  Space/Enter: 켜기/끄기") + "\n")
-	b.WriteString(RenderRow(checkbox(s.cp.Audit)+" AIPub 감사 로그"+s.detected(state.PresetAudit), f == s4bFocusAudit, w) + "\n")
-	b.WriteString(styles.StyleMuted.Render("    audit-policy-file, audit-log-path=/var/log/aipub/usage/audit.log, 30일·30개·100MB. 첫 설치부터") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    정책 파일 ansible/files/aipub/audit-policy.yaml 은 사이트가 둡니다 (AIPub 모니터링/python 팀 제공)") + "\n")
-	b.WriteString(RenderRow(checkbox(s.cp.RuntimeConfig)+" runtime-config (admissionregistration.k8s.io/v1beta1=true)"+s.detected(state.PresetRuntimeConfig), f == s4bFocusRuntime, w) + "\n")
-	b.WriteString(styles.StyleMuted.Render("    첫 설치부터") + "\n")
-	b.WriteString(RenderRow(checkbox(s.cp.JWKS)+" AIPub 인증 (JWKS) (authentication-config, 새 사이트 기본)"+s.detected(state.PresetJWKS), f == s4bFocusJWKS, w) + "\n")
-	b.WriteString(styles.StyleMuted.Render("    AIPub 설치 시에만 적용. aipub-installer k8s-jwks 와 같은 플래그·볼륨·파일을 kubeadm 이 보관하게 함") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    새 사이트: issuer 는 AIPub 백엔드라 클러스터 생성(K3)에서는 빼고, A5 setup-aipub 뒤 A5.1 이 CA 를 넣어") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    파일을 만들고 A5.2 update-cluster 로 적용합니다 (노드 한 대씩 재시작)") + "\n")
-	b.WriteString(RenderSectionHeader("  issuer URL", f == s4bFocusIssuer) + "  " + s.issuer.View() + "\n")
-	b.WriteString(styles.StyleMuted.Render("    기본은 https://<aipub_app_host_prefix>.<aipub_ingress_zone> (aipub-installer 와 같은 규칙, 존을 바꾸면 따라감)") + "\n")
-	b.WriteString(RenderSectionHeader("  CA 파일", f == s4bFocusCA) + "  " + s.caFile.View() + "\n")
-	b.WriteString(styles.StyleMuted.Render("    setup-cert 가 두는 공개 CA. 있을 때만 ansible/files/"+state.JWKSConfigFile+" 를 만듭니다 (CA 인라인, 평문 복사)") + "\n")
-	b.WriteString(s.caView())
-	b.WriteString(RenderRow(checkbox(s.cp.Webhook)+" AIPub 인증 웹훅 (레거시 — JWKS 로 옮기기 전 사이트)"+s.detected(state.PresetWebhook), f == s4bFocusWebhook, w) + "\n")
-	b.WriteString(styles.StyleMuted.Render("    authentication-token-webhook, cache-ttl 2m. 웹훅을 쓰던 사이트만. JWKS 와 함께 켤 수 있음") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    (옮기는 동안 둘 다 돌리고, 확인 뒤 aipub-installer 의") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    scripts/aipub/migration/jwks-auth/migrate-webhook-to-jwks.sh 로 웹훅을 뺀 다음 여기서도 끔)") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    AIPub 설치 시에만. setup-cert 가 만드는 CA("+state.WebhookCAPath+")가 있어야 apiserver 가 뜨므로") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    클러스터 생성(K3)에서는 빼고, A2 setup-cert 다음 A2.5 update-cluster 로 적용합니다 (노드 한 대씩 재시작)") + "\n")
-	b.WriteString(RenderSectionHeader("  웹훅 URL", f == s4bFocusURL) + "  " + s.url.View() + "\n")
-	b.WriteString(styles.StyleMuted.Render("    ansible/files/"+state.WebhookConfigFile+" (kubeconfig) 로 만들어 둡니다. 평문 복사 — 비밀 금지") + "\n\n")
-
-	b.WriteString(styles.StylePrimary.Render("직접 추가") + styles.StyleMuted.Render("  apiserver·controller-manager·scheduler·etcd 의 인자와 볼륨, 컨트롤플레인 파일") + "\n")
-	t := cpTargets[s.target]
-	b.WriteString(RenderSectionHeader("대상", f == s4bFocusTarget) + "  ◀ " + t.label + " ▶\n")
-	b.WriteString(RenderSectionHeader("항목 (Enter: 추가)", f == s4bFocusEntry) + "  " + s.entry.View() + "\n")
-	b.WriteString(styles.StyleMuted.Render("    "+t.hint) + "\n")
-	if s.entryErr != "" {
-		b.WriteString(styles.StyleError.Render("    ✗ "+s.entryErr) + "\n")
+	preset(s4bAudit, "", state.PresetAudit, "AIPub 감사 로그", "AIPub 사용 기록용 apiserver 감사 로그 (정책 파일은 사이트가 둠)")
+	preset(s4bRuntime, "", state.PresetRuntimeConfig, "runtime-config", "admissionregistration v1beta1 API 를 켭니다")
+	preset(s4bJWKS, "", state.PresetJWKS, "AIPub 인증 (JWKS)", "AIPub 이 발급한 토큰을 apiserver 가 믿게 합니다 (AIPub 설치 시만)")
+	if s.cp.JWKS {
+		field(s4bIssuer, "  ", "issuer URL", s.issuer, "")
+		field(s4bCA, "  ", "CA 파일", s.caFile, s.caStatus())
 	}
+	if s.webhookUp() {
+		webhook("")
+	}
+	b.WriteString("\n")
+
 	entries := s.entries()
-	if len(entries) == 0 {
-		b.WriteString(styles.StyleMuted.Render("    (직접 넣은 항목 없음)") + "\n")
+	arrow := "▸"
+	if s.advanced {
+		arrow = "▾"
 	}
-	for i, e := range entries {
-		label := cpTargets[e.target].label
-		pad := 24 - lipgloss.Width(label)
-		if pad < 1 {
-			pad = 1
-		}
-		row := "  " + label + strings.Repeat(" ", pad) + e.text
-		if f == s4bFocusList+i {
-			row += "   (d: 삭제)"
-		}
-		b.WriteString(RenderRow(row, f == s4bFocusList+i, w) + "\n")
+	advFocused := at(s4bStop{kind: s4bAdvanced})
+	b.WriteString(RenderRow(fmt.Sprintf("%s 고급: 직접 추가 (항목 %d개)", arrow, len(entries)), advFocused, w) + "\n")
+	if advFocused {
+		help("    ", s4bAdvanced)
 	}
-	b.WriteString(styles.StyleMuted.Render("    컨트롤플레인 파일은 모든 컨트롤 플레인 노드에 평문으로 복사됩니다. 비밀(키·토큰)은 넣지 마세요") + "\n")
+	if s.advanced {
+		if !s.webhookUp() {
+			webhook("  ")
+		}
+		t := cpTargets[s.target]
+		targetFocused := at(s4bStop{kind: s4bTarget})
+		b.WriteString(RenderSectionHeader("  대상", targetFocused) + "  ◀ " + t.label + " ▶\n")
+		if targetFocused {
+			help("      ", s4bTarget)
+		}
+		at(s4bStop{kind: s4bEntry})
+		b.WriteString(RenderSectionHeader("  항목 (Enter: 추가)", s.focus.kind == s4bEntry) + "  " + s.entry.View() + "\n")
+		b.WriteString(styles.StyleMuted.Render("      "+t.hint) + "\n")
+		if s.entryErr != "" {
+			b.WriteString(styles.StyleError.Render("      ✗ "+s.entryErr) + "\n")
+		}
+		if len(entries) == 0 {
+			b.WriteString(styles.StyleMuted.Render("      (직접 넣은 항목 없음)") + "\n")
+		}
+		for i, e := range entries {
+			focused := at(s4bStop{kind: s4bList, i: i})
+			label := cpTargets[e.target].label
+			pad := 24 - lipgloss.Width(label)
+			if pad < 1 {
+				pad = 1
+			}
+			row := "    " + label + strings.Repeat(" ", pad) + e.text
+			if focused {
+				row += "   (d: 삭제)"
+			}
+			b.WriteString(RenderRow(row, focused, w) + "\n")
+		}
+		b.WriteString(styles.StyleWarning.Render("    ⚠ 컨트롤플레인 파일은 모든 컨트롤 플레인 노드에 평문으로 복사됩니다. 비밀(키·토큰)은 넣지 마세요") + "\n")
+	}
 
-	nav := s.navFocus()
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", f == nav && s.navIdx == 0, f == nav && s.navIdx == 1, w))
-	return b.String()
+	b.WriteString("\n")
+	at(s4bStop{kind: s4bNav})
+	b.WriteString(RenderNavButtons("이전", "다음", s.focus.kind == s4bNav && s.navIdx == 0, s.focus.kind == s4bNav && s.navIdx == 1, w))
+	return s.fit(b.String(), focusLine, focusEnd)
+}
+
+// fit cuts a view taller than the screen to the lines around the focused row:
+// the row, its status and help (up to end) and a few lines under it, and says
+// that there is more. Help taller than the screen keeps the row at the top; a
+// screen too low for the marks has none. The focused row is never cut.
+func (s *S4bControlPlane) fit(view string, focusLine, end int) string {
+	lines := strings.Split(view, "\n")
+	h := s.height
+	if h <= 0 || len(lines) <= h {
+		return view
+	}
+	marks := h >= 3
+	room := h // the lines of the view shown whatever the marks
+	if marks {
+		room = h - 2
+	}
+	last := focusLine + min(4, h/2)
+	if end-1 > last {
+		last = end - 1
+	}
+	start := last - room + 1
+	if start > focusLine {
+		start = focusLine
+	}
+	if start > len(lines)-room {
+		start = len(lines) - room
+	}
+	if start < 0 {
+		start = 0
+	}
+	// a mark only where there is more; a line not taken by one shows the view
+	top := marks && start > 0
+	stop := start + h
+	if top {
+		stop--
+	}
+	if stop > len(lines) {
+		stop = len(lines)
+	}
+	bottom := marks && stop < len(lines)
+	if bottom {
+		stop--
+	}
+	var win []string
+	if top {
+		win = append(win, styles.StyleMuted.Render("  ↑ 위에 더 있음"))
+	}
+	win = append(win, lines[start:stop]...)
+	if bottom {
+		win = append(win, styles.StyleMuted.Render("  ↓ 아래에 더 있음"))
+	}
+	return strings.Join(win, "\n")
 }

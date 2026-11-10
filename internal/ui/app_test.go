@@ -394,12 +394,15 @@ func TestWizardControlPlane(t *testing.T) {
 
 	d.keys(" ")             // AIPub 감사 로그
 	d.keys("down", "enter") // runtime-config
-	d.keys("down")          // AIPub 인증 (JWKS): on for a new site, the issuer prefilled
-	for _, want := range []string{"[x] AIPub 인증 (JWKS)", "https://aipub.example.com", "A5.2 update-cluster",
-		"AIPub 인증 웹훅 (레거시 — JWKS 로 옮기기 전 사이트)"} {
+	d.keys("down")          // AIPub 인증 (JWKS): on for a new site, the issuer prefilled, its help shown
+	for _, want := range []string{"[x] AIPub 인증 (JWKS)", "https://aipub.example.com", "A5.2 update-cluster"} {
 		if !strings.Contains(d.screen(), want) {
 			t.Errorf("S4b does not show %q:\n%s", want, d.screen())
 		}
+	}
+	// the legacy webhook is not offered up front on a new site
+	if strings.Contains(d.screen(), "AIPub 인증 웹훅") {
+		t.Errorf("S4b shows the legacy webhook up front on a new site:\n%s", d.screen())
 	}
 	d.keys("down", "ctrl+u", "http://idp.example.com") // issuer, not https
 	d.keys("ctrl+n")
@@ -409,15 +412,19 @@ func TestWizardControlPlane(t *testing.T) {
 	}
 	d.keys("ctrl+u", "https://aipub.example.com") // back to the derived one
 	d.keys("up", " ")                             // JWKS off
-	if !strings.Contains(d.screen(), "[ ] AIPub 인증 (JWKS)") {
-		t.Errorf("JWKS not switched off:\n%s", d.screen())
+	if !strings.Contains(d.screen(), "[ ] AIPub 인증 (JWKS)") || strings.Contains(d.screen(), "issuer URL") {
+		t.Errorf("JWKS not switched off, or its fields still shown:\n%s", d.screen())
 	}
 	d.keys(" ")            // and on again
 	d.keys("down", "down") // CA 파일, prefilled; nothing there yet
 	if !strings.Contains(d.screen(), "CA 대기") {
 		t.Errorf("S4b does not say the CA is waited for:\n%s", d.screen())
 	}
-	d.keys("down", " ") // AIPub 인증 웹훅 (레거시), with JWKS
+	d.keys("down", "enter") // ▸ 고급: expanded
+	d.keys("down", " ")     // AIPub 인증 웹훅 (레거시), with JWKS, inside the advanced section
+	if !strings.Contains(d.screen(), "[x] AIPub 인증 웹훅 (레거시)") || !strings.Contains(d.screen(), "웹훅 URL") {
+		t.Errorf("the webhook is not switched on in the advanced section:\n%s", d.screen())
+	}
 	d.keys("ctrl+n")
 	d.at("4b.컨트롤플레인") // refused: no URL
 	if !strings.Contains(strings.Join(d.app.screenErrors, ""), "URL") {
@@ -426,7 +433,7 @@ func TestWizardControlPlane(t *testing.T) {
 	d.keys(" ") // webhook off again
 
 	// an apiserver argument, a bad volume line, then a file
-	d.keys("down", "down") // 대상: apiserver 인자
+	d.keys("down") // 대상: apiserver 인자
 	d.keys("down", "oidc-issuer-url=https://idp.example.com", "enter")
 	d.keys("up", "right", "down")     // 대상: apiserver 볼륨
 	d.keys("oidc /etc/oidc", "enter") // too few fields

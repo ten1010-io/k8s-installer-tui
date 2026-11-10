@@ -1,12 +1,15 @@
 package screens
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 	"github.com/ten1010-io/k8s-installer-tui/internal/validator"
@@ -23,11 +26,12 @@ import (
 //   1  : runtime-config (toggle)
 //   2  : AIPub 인증 (JWKS) (toggle)
 //   3  : issuer URL
-//   4  : AIPub 인증 웹훅, 레거시 (toggle)
-//   5  : 웹훅 URL
-//   6  : 추가할 대상 (←/→)
-//   7  : 추가할 항목 (Enter: 추가)
-//   8… : 직접 넣은 항목 (d: 삭제)
+//   4  : CA 파일
+//   5  : AIPub 인증 웹훅, 레거시 (toggle)
+//   6  : 웹훅 URL
+//   7  : 추가할 대상 (←/→)
+//   8  : 추가할 항목 (Enter: 추가)
+//   9… : 직접 넣은 항목 (d: 삭제)
 //   last: nav slot (←/→: 이전/다음)
 
 const (
@@ -35,6 +39,7 @@ const (
 	s4bFocusRuntime
 	s4bFocusJWKS
 	s4bFocusIssuer
+	s4bFocusCA
 	s4bFocusWebhook
 	s4bFocusURL
 	s4bFocusTarget
@@ -74,6 +79,7 @@ type S4bControlPlane struct {
 	cp       state.ControlPlane
 	issuer   textinput.Model
 	derived  string // the issuer that follows the zone, prefilled
+	caFile   textinput.Model
 	url      textinput.Model
 	entry    textinput.Model
 	target   int
@@ -92,9 +98,12 @@ func NewS4bControlPlane() *S4bControlPlane {
 	issuer := textinput.New()
 	issuer.Placeholder = "https://<aipub_app_host_prefix>.<aipub_ingress_zone>"
 	issuer.CharLimit = 256
+	caFile := textinput.New()
+	caFile.Placeholder = state.JWKSCAPath
+	caFile.CharLimit = 256
 	entry := textinput.New()
 	entry.CharLimit = 256
-	return &S4bControlPlane{issuer: issuer, url: url, entry: entry}
+	return &S4bControlPlane{issuer: issuer, caFile: caFile, url: url, entry: entry}
 }
 
 func (s *S4bControlPlane) Title() string { return "컨트롤플레인" }
@@ -103,6 +112,7 @@ func (s *S4bControlPlane) SetSize(w, h int) {
 	s.height = h
 	s.url.Width = w - 34
 	s.issuer.Width = w - 34
+	s.caFile.Width = w - 34
 	s.entry.Width = w - 34
 }
 
@@ -130,6 +140,11 @@ func (s *S4bControlPlane) SyncFromState(st *state.AppState) {
 	} else {
 		s.issuer.SetValue(s.derived)
 	}
+	if s.cp.JWKSCAFile != "" {
+		s.caFile.SetValue(s.cp.JWKSCAFile)
+	} else {
+		s.caFile.SetValue(fileio.DefaultCAPath)
+	}
 	s.url.SetValue(s.cp.WebhookURL)
 	s.entry.SetValue("")
 	s.entryErr = ""
@@ -141,7 +156,24 @@ func (s *S4bControlPlane) SyncFromState(st *state.AppState) {
 func (s *S4bControlPlane) SyncToState(st *state.AppState) {
 	s.cp.WebhookURL = strings.TrimSpace(s.url.Value())
 	s.cp.JWKSIssuerURL = s.issuerOverride()
+	s.cp.JWKSCAFile = s.caOverride()
 	st.ControlPlane = copyControlPlane(s.cp)
+}
+
+// caOverride is the CA file typed in, empty when it is the default one.
+func (s *S4bControlPlane) caOverride() string {
+	v := strings.TrimSpace(s.caFile.Value())
+	if v == fileio.DefaultCAPath {
+		return ""
+	}
+	return v
+}
+
+// ca is the CA the authentication config would be written with now.
+func (s *S4bControlPlane) ca() fileio.CA {
+	cp := s.cp
+	cp.JWKSCAFile = s.caOverride()
+	return fileio.LookupCA(&state.AppState{ControlPlane: cp})
 }
 
 // issuerOverride is the issuer typed in, empty when it is the derived one: that
@@ -167,6 +199,11 @@ func (s *S4bControlPlane) Validate() []string {
 	var msgs []string
 	for _, e := range validator.ControlPlane(cp) {
 		msgs = append(msgs, e.Error())
+	}
+	// a CA file that is there but is not a CA: never copied, and said so. One
+	// not there yet is waited for (setup-cert puts it there)
+	if ca := s.ca(); cp.JWKS && ca.Err != nil && !errors.Is(ca.Err, fs.ErrPermission) {
+		msgs = append(msgs, "JWKS CA 파일: "+ca.Err.Error())
 	}
 	return msgs
 }
@@ -213,6 +250,11 @@ func (s *S4bControlPlane) syncFocus() {
 		s.issuer.Focus()
 	} else {
 		s.issuer.Blur()
+	}
+	if s.focusIdx == s4bFocusCA {
+		s.caFile.Focus()
+	} else {
+		s.caFile.Blur()
 	}
 	if s.focusIdx == s4bFocusURL {
 		s.url.Focus()
@@ -313,7 +355,7 @@ func contains(l []string, x string) bool {
 func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		nav := s.navFocus()
-		inInput := s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusIssuer || s.focusIdx == s4bFocusEntry
+		inInput := s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusIssuer || s.focusIdx == s4bFocusCA || s.focusIdx == s4bFocusEntry
 		switch msg.String() {
 		case "up":
 			if s.focusIdx > 0 {
@@ -370,7 +412,7 @@ func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return s, Prev()
 				}
 				return s, Next()
-			case s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusIssuer || s.focusIdx == s4bFocusTarget:
+			case s.focusIdx == s4bFocusURL || s.focusIdx == s4bFocusIssuer || s.focusIdx == s4bFocusCA || s.focusIdx == s4bFocusTarget:
 				s.focusIdx++
 				s.syncFocus()
 			}
@@ -386,12 +428,36 @@ func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch s.focusIdx {
 	case s4bFocusIssuer:
 		s.issuer, cmd = s.issuer.Update(msg)
+	case s4bFocusCA:
+		s.caFile, cmd = s.caFile.Update(msg)
 	case s4bFocusURL:
 		s.url, cmd = s.url.Update(msg)
 	case s4bFocusEntry:
 		s.entry, cmd = s.entry.Update(msg)
 	}
 	return s, cmd
+}
+
+// caView says whether the authentication config of JWKS is written now.
+func (s *S4bControlPlane) caView() string {
+	if !s.cp.JWKS {
+		return ""
+	}
+	ca := s.ca()
+	var out []string
+	switch {
+	case ca.PEM != "" && !ca.FromSaved:
+		out = append(out, styles.StyleSuccess.Render("    ✓ CA 있음 ("+ca.Path+"): 저장하면 authentication-config.yaml 을 씁니다"))
+	case ca.PEM != "":
+		out = append(out, styles.StyleSuccess.Render("    ✓ CA: 전에 쓴 authentication-config.yaml 의 것을 그대로 둡니다 ("+ca.Path+" 없음)"))
+	default:
+		out = append(out, styles.StyleWarning.Render("    ⚠ CA 대기 ("+ca.Path+" 없음): authentication-config.yaml 을 쓰지 않고, setup-cert 뒤 A5.1 이 만듭니다"))
+	}
+	if ca.Err != nil {
+		out = append(out, styles.StyleError.Render("    ✗ "+ca.Err.Error()))
+	}
+	out = append(out, styles.StyleMuted.Render("    CA 없이 update-cluster/노드 추가를 돌리면 설치기가 '소스 파일 없음'으로 거부합니다 (노드는 그대로)"))
+	return strings.Join(out, "\n") + "\n"
 }
 
 func checkbox(on bool) string {
@@ -407,7 +473,8 @@ func (s *S4bControlPlane) View() string {
 	w := s.width
 	b.WriteString(styles.StyleTitle.Render("컨트롤플레인") + "\n")
 	b.WriteString(styles.StyleMuted.Render("kube-apiserver 등에 더할 인자·볼륨·파일 (vars.yml). kubeadm 이 클러스터 설정으로 보관해 노드 추가·업그레이드에도") + "\n")
-	b.WriteString(styles.StyleMuted.Render("다시 적용합니다. 바꾸면 update-cluster.yml 이 컨트롤 플레인 노드를 한 대씩 재시작합니다. 매니페스트를 손으로 고치지 마세요") + "\n\n")
+	b.WriteString(styles.StyleMuted.Render("다시 적용합니다. 바꾸면 update-cluster.yml 이 컨트롤 플레인 노드를 한 대씩 재시작합니다. 매니페스트를 손으로 고치지 마세요") + "\n")
+	b.WriteString("\n")
 
 	b.WriteString(styles.StylePrimary.Render("프리셋") + styles.StyleMuted.Render("  Space/Enter: 켜기/끄기") + "\n")
 	b.WriteString(RenderRow(checkbox(s.cp.Audit)+" AIPub 감사 로그", f == s4bFocusAudit, w) + "\n")
@@ -417,14 +484,17 @@ func (s *S4bControlPlane) View() string {
 	b.WriteString(styles.StyleMuted.Render("    첫 설치부터") + "\n")
 	b.WriteString(RenderRow(checkbox(s.cp.JWKS)+" AIPub 인증 (JWKS) (authentication-config, 새 사이트 기본)", f == s4bFocusJWKS, w) + "\n")
 	b.WriteString(styles.StyleMuted.Render("    AIPub 설치 시에만 적용. aipub-installer k8s-jwks 와 같은 플래그·볼륨·파일을 kubeadm 이 보관하게 함") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    issuer 는 AIPub 백엔드라 A5 setup-aipub 뒤에야 답하므로 클러스터 생성(K3)에서는 빼고, A5.1 에서") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    setup-cert 의 CA("+state.JWKSCAPath+")를 설정에 넣은 뒤 A5.2 update-cluster 로 적용합니다 (노드 한 대씩 재시작)") + "\n")
+	b.WriteString(styles.StyleMuted.Render("    새 사이트: issuer 는 AIPub 백엔드라 클러스터 생성(K3)에서는 빼고, A5 setup-aipub 뒤 A5.1 이 CA 를 넣어") + "\n")
+	b.WriteString(styles.StyleMuted.Render("    파일을 만들고 A5.2 update-cluster 로 적용합니다 (노드 한 대씩 재시작)") + "\n")
 	b.WriteString(RenderSectionHeader("  issuer URL", f == s4bFocusIssuer) + "  " + s.issuer.View() + "\n")
 	b.WriteString(styles.StyleMuted.Render("    기본은 https://<aipub_app_host_prefix>.<aipub_ingress_zone> (aipub-installer 와 같은 규칙, 존을 바꾸면 따라감)") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    ansible/files/"+state.JWKSConfigFile+" 로 만들어 둡니다. 평문 복사 — 비밀 금지") + "\n")
+	b.WriteString(RenderSectionHeader("  CA 파일", f == s4bFocusCA) + "  " + s.caFile.View() + "\n")
+	b.WriteString(styles.StyleMuted.Render("    setup-cert 가 두는 공개 CA. 있을 때만 ansible/files/"+state.JWKSConfigFile+" 를 만듭니다 (CA 인라인, 평문 복사)") + "\n")
+	b.WriteString(s.caView())
 	b.WriteString(RenderRow(checkbox(s.cp.Webhook)+" AIPub 인증 웹훅 (레거시 — JWKS 로 옮기기 전 사이트)", f == s4bFocusWebhook, w) + "\n")
 	b.WriteString(styles.StyleMuted.Render("    authentication-token-webhook, cache-ttl 2m. 웹훅을 쓰던 사이트만. JWKS 와 함께 켤 수 있음") + "\n")
-	b.WriteString(styles.StyleMuted.Render("    (옮기는 동안 둘 다 돌리고, 확인 뒤 aipub-installer 의 migrate-webhook-to-jwks.sh 로 웹훅을 뺌)") + "\n")
+	b.WriteString(styles.StyleMuted.Render("    (옮기는 동안 둘 다 돌리고, 확인 뒤 aipub-installer 의") + "\n")
+	b.WriteString(styles.StyleMuted.Render("    scripts/aipub/migration/jwks-auth/migrate-webhook-to-jwks.sh 로 웹훅을 뺀 다음 여기서도 끔)") + "\n")
 	b.WriteString(styles.StyleMuted.Render("    AIPub 설치 시에만. setup-cert 가 만드는 CA("+state.WebhookCAPath+")가 있어야 apiserver 가 뜨므로") + "\n")
 	b.WriteString(styles.StyleMuted.Render("    클러스터 생성(K3)에서는 빼고, A2 setup-cert 다음 A2.5 update-cluster 로 적용합니다 (노드 한 대씩 재시작)") + "\n")
 	b.WriteString(RenderSectionHeader("  웹훅 URL", f == s4bFocusURL) + "  " + s.url.View() + "\n")

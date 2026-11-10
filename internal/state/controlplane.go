@@ -83,9 +83,16 @@ const JWKSConfigFile = "aipub/authentication-config.yaml"
 const JWKSConfigPath = "/etc/kubernetes/authentication-config.yaml"
 
 // JWKSCAPath is the CA the issuer is verified with: setup-cert of aipub-installer
-// puts it on every node. The config takes the CA inline (its schema has no path
-// option), so it is copied into the file rather than mounted.
+// puts it at {{ aipub_cert_path }}/ca.crt on the nodes, the control node among
+// them, as a file only (not in the trust store of the node). The config takes
+// the CA inline (its schema has no path option), so the wizard reads it on the
+// control node it runs on and copies it into the file rather than mounting it.
 const JWKSCAPath = "/etc/k8s-installer/certs/ca.crt"
+
+// JWKSConfigMode is the mode of the authentication config on the nodes: the one
+// k8s-jwks of aipub-installer gives it (chmod 600), so that taking the file over
+// from a site set up by k8s-jwks changes nothing on the node. It holds no secret.
+const JWKSConfigMode = "0600"
 
 // WebhookConfigFile is the kubeconfig the webhook preset points the apiserver at.
 // The wizard writes it under ansible/files from the URL given on the screen.
@@ -143,7 +150,7 @@ var Presets = []Preset{
 			{Name: "authentication-config", HostPath: JWKSConfigPath, MountPath: JWKSConfigPath, ReadOnly: true, PathType: "File"},
 		},
 		Files: []CpExtraFile{
-			{Src: JWKSConfigFile, Dest: JWKSConfigPath, Mode: "0644"},
+			{Src: JWKSConfigFile, Dest: JWKSConfigPath, Mode: JWKSConfigMode},
 		},
 		Stage: StageAfterAipub,
 	},
@@ -181,9 +188,13 @@ type ControlPlane struct {
 	// (AppState.JWKSIssuer)
 	JWKSIssuerURL string
 	// JWKSCA is the PEM of the CA as the config file holds it, read back so that
-	// saving again keeps it. Empty until the plan copies it in from the nodes
-	// after setup-cert
+	// saving again keeps it when the CA file is not there any more. Empty until a
+	// config was written with a CA
 	JWKSCA string
+	// JWKSCAFile is where the CA is read from on the machine the wizard runs on
+	// (the control node), when the site keeps it somewhere other than JWKSCAPath.
+	// Empty: JWKSCAPath. Not written to any file; the CA itself is, inline
+	JWKSCAFile string
 
 	// Entries typed in by hand, by component (CpComponents)
 	Args    map[string][]ExtraArg

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
@@ -56,7 +55,8 @@ func loadAuthConfig(path string, s *state.AppState) {
 	if is.URL == s.JWKSIssuerDerived() {
 		s.ControlPlane.JWKSIssuerURL = ""
 	}
-	if ca := strings.TrimSpace(is.CertificateAuthority); ca != JWKSCAPlaceholder {
+	// only a CA: not a placeholder, nor anything else that is not a certificate
+	if ca, err := ParseCA([]byte(is.CertificateAuthority)); err == nil {
 		s.ControlPlane.JWKSCA = ca
 	}
 }

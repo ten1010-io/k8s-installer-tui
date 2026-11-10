@@ -42,6 +42,7 @@ func newDriver(t *testing.T) (*driver, fileio.Paths) {
 	s.K8sNodes = []string{"node1", "node2", "node3"}
 	s.K8sCpNodes = []string{"node1", "node2"}
 	s.KiCpHaMode = false
+	withCA(t, "") // before setup-cert, whatever the machine running the test has
 	paths := fileio.DefaultPaths(t.TempDir())
 	d := &driver{t: t, app: NewApp(s, paths, plan.DefaultOptions(), "test")}
 	d.send(tea.WindowSizeMsg{Width: 110, Height: 60})
@@ -67,8 +68,8 @@ func (d *driver) run(cmd tea.Cmd) {
 		case screens.NavigateNextMsg, screens.NavigatePrevMsg:
 			d.send(msg)
 		default:
-			// the result of the checks of 9.설치
-			if strings.HasSuffix(fmt.Sprintf("%T", msg), "checkDoneMsg") {
+			// the result of the checks of 4b (c) and 9.설치
+			if strings.HasSuffix(fmt.Sprintf("%T", msg), "DoneMsg") {
 				d.send(msg)
 			}
 		}
@@ -193,12 +194,12 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	if got := fmt.Sprint(v["k8s_apiserver_extra_args"]); got != "[map[name:authentication-config value:/etc/kubernetes/authentication-config.yaml]]" {
 		t.Errorf("apiserver args %s", got)
 	}
-	ac, err := os.ReadFile(paths.AuthConfig())
-	if err != nil {
-		t.Fatalf("authentication config not written: %v", err)
+	// its config waits for the CA of setup-cert: not written, and said so
+	if _, err := os.Stat(paths.AuthConfig()); err == nil {
+		t.Error("authentication config written before there is a CA")
 	}
-	if !strings.Contains(string(ac), "url: https://aipub.aipub.lkjh.local\n") {
-		t.Errorf("issuer not derived from the zone:\n%s", ac)
+	if !strings.Contains(d.screen(), "AIPub 인증 (JWKS): CA 대기") || !strings.Contains(d.screen(), "'소스 파일 없음'으로 거부") {
+		t.Errorf("the preview does not say the config waits for the CA:\n%s", d.screen())
 	}
 	inv := readYAML(t, paths.Inventory)
 	hosts := inv["k8s_node"].(map[string]interface{})["hosts"].(map[string]interface{})
@@ -236,8 +237,8 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	}
 
 	d.keys("d")
-	for i := 0; i < 10; i++ {
-		d.keys("down") // past the copies and K3, whose -e leaves JWKS out
+	for i := 0; i < 12; i++ {
+		d.keys("down") // past the copies (wrapped by the length of the temp dir) and K3, whose -e leaves JWKS out
 	}
 	if !strings.Contains(d.screen(), "ansible-playbook -i inventory.yml aipub-playbooks/setup-network.yml") {
 		t.Errorf("the commands are not shown:\n%s", d.screen())
@@ -254,7 +255,8 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 		"# A4 setup-monitoring: 건너뜀",
 		// JWKS: built without, the CA copied in and applied after setup-aipub
 		`"k8s_apiserver_extra_args":[]`,
-		"echo '── A5.1 JWKS CA 복사'",
+		"echo '── A5.1 JWKS CA 채우기'",
+		" --fill-auth-config --inventory " + filepath.ToSlash(filepath.Dir(paths.Inventory)) + "/inventory.yml",
 		"echo '── A5.2 update-cluster (apiserver JWKS 인증 적용)'",
 		"/files/aipub/authentication-config.yaml /opt/k8s-installer/ansible/files/aipub/authentication-config.yaml",
 	} {
@@ -370,8 +372,12 @@ func TestWizardControlPlane(t *testing.T) {
 	if !strings.Contains(d.screen(), "[ ] AIPub 인증 (JWKS)") {
 		t.Errorf("JWKS not switched off:\n%s", d.screen())
 	}
-	d.keys(" ")                 // and on again
-	d.keys("down", "down", " ") // AIPub 인증 웹훅 (레거시), with JWKS
+	d.keys(" ")            // and on again
+	d.keys("down", "down") // CA 파일, prefilled; nothing there yet
+	if !strings.Contains(d.screen(), "CA 대기") {
+		t.Errorf("S4b does not say the CA is waited for:\n%s", d.screen())
+	}
+	d.keys("down", " ") // AIPub 인증 웹훅 (레거시), with JWKS
 	d.keys("ctrl+n")
 	d.at("4b.컨트롤플레인") // refused: no URL
 	if !strings.Contains(strings.Join(d.app.screenErrors, ""), "URL") {

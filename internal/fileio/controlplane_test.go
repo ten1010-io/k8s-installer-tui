@@ -35,6 +35,7 @@ func controlPlaneState() *state.AppState {
 // The eight variables are written in the shapes k8s-installer reads, presets
 // first, and read back into the same presets and entries.
 func TestControlPlaneRoundTrip(t *testing.T) {
+	withCA(t, "") // before setup-cert
 	p := DefaultPaths(t.TempDir())
 	s := controlPlaneState()
 	must(t, WriteAll(p, s))
@@ -76,7 +77,7 @@ func TestControlPlaneRoundTrip(t *testing.T) {
 		t.Errorf("cp extra files: %v", files)
 	}
 	if f := files[1].(map[string]interface{}); f["src"] != "aipub/authentication-config.yaml" ||
-		f["dest"] != "/etc/kubernetes/authentication-config.yaml" || f["mode"] != "0644" {
+		f["dest"] != "/etc/kubernetes/authentication-config.yaml" || f["mode"] != "0600" {
 		t.Errorf("jwks file: %v", f)
 	}
 	for _, k := range []string{"k8s_controller_manager_extra_args", "k8s_scheduler_extra_args", "k8s_etcd_extra_args",
@@ -99,14 +100,10 @@ func TestControlPlaneRoundTrip(t *testing.T) {
 		}
 	}
 
-	// the authentication config of JWKS: the issuer derived from the zone, the CA
-	// not there yet
-	ac, err := os.ReadFile(p.AuthConfig())
-	must(t, err)
-	for _, want := range []string{"url: https://aipub.aipub.example.com\n", "        REPLACE_ME_CA\n"} {
-		if !strings.Contains(string(ac), want) {
-			t.Errorf("authentication config lacks %q:\n%s", want, ac)
-		}
+	// the authentication config of JWKS: not written while there is no CA, never
+	// with a placeholder
+	if _, err := os.Stat(p.AuthConfig()); err == nil {
+		t.Error("authentication config written without a CA")
 	}
 
 	back := state.DefaultState()
@@ -115,9 +112,21 @@ func TestControlPlaneRoundTrip(t *testing.T) {
 		t.Errorf("read back\n  %+v\nwant\n  %+v", back.ControlPlane, s.ControlPlane)
 	}
 
-	// an issuer of its own and the CA, as A5.1 copies it in, are read back
+	// with the CA of setup-cert: written, the issuer derived from the zone
+	ca := newTestCA(t, "aipub-ca")
+	withCA(t, ca)
+	must(t, WriteAll(p, s))
+	ac, err := os.ReadFile(p.AuthConfig())
+	must(t, err)
+	for _, want := range []string{"url: https://aipub.aipub.example.com\n", "        -----BEGIN CERTIFICATE-----\n"} {
+		if !strings.Contains(string(ac), want) {
+			t.Errorf("authentication config lacks %q:\n%s", want, ac)
+		}
+	}
+
+	// an issuer of its own and the CA are read back
 	s.ControlPlane.JWKSIssuerURL = "https://login.example.com/aipub"
-	s.ControlPlane.JWKSCA = testCA
+	s.ControlPlane.JWKSCA = ca
 	must(t, WriteAll(p, s))
 	back = state.DefaultState()
 	must(t, LoadAll(p, back))
@@ -143,17 +152,14 @@ func TestControlPlaneRoundTrip(t *testing.T) {
 	}
 }
 
-// testCA stands for the CA setup-cert makes; the file holds it as the PEM.
-const testCA = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUTEST\nAAAA\n-----END CERTIFICATE-----"
-
 // The authentication config is the template of aipub-installer with the issuer
 // and the CA filled in, as k8s-jwks fills it: the same document otherwise.
 func TestAuthConfig(t *testing.T) {
 	s := controlPlaneState()
-	s.ControlPlane.JWKSCA = testCA
+	testCA := newTestCA(t, "aipub-ca")
 	var tmpl, got map[string]interface{}
 	must(t, yaml.Unmarshal(authConfigTemplate, &tmpl))
-	out := AuthConfig(s)
+	out := AuthConfig(s, testCA)
 	if out == nil {
 		t.Fatal("no authentication config (has the template of aipub-installer changed?)")
 	}
@@ -170,12 +176,21 @@ func TestAuthConfig(t *testing.T) {
 	}
 
 	// not written without AIPub (the issuer is AIPub), nor with the preset off
+	if strings.Contains(string(out), "REPLACE_ME") {
+		t.Errorf("a placeholder left:\n%s", out)
+	}
+
+	// not written without a CA, without AIPub (the issuer is AIPub), nor with the
+	// preset off
+	if AuthConfig(s, "") != nil {
+		t.Error("written without a CA")
+	}
 	s.AipubEnabled = false
-	if AuthConfig(s) != nil {
+	if AuthConfig(s, testCA) != nil {
 		t.Error("written without AIPub")
 	}
 	s.AipubEnabled, s.ControlPlane.JWKS = true, false
-	if AuthConfig(s) != nil {
+	if AuthConfig(s, testCA) != nil {
 		t.Error("written with the preset off")
 	}
 }

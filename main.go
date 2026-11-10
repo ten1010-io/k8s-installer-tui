@@ -30,6 +30,9 @@ func main() {
 	aipubVarsPath := flag.String("aipub-vars", "files/aipub/vars.yml", "AIPub 사이트 값 경로 (aipub-installer)")
 	renderDir := flag.String("render", "", "화면 없이 세 파일과 한눈에 보는 site-values.yml 을 이 디렉터리에 렌더링하고 검증 결과를 출력 (기존 파일은 그대로)")
 	installerRoot := flag.String("installer-root", plan.DefaultOptions().Root, "k8s-installer가 설치된 디렉터리 (setup.sh)")
+	fillAuth := flag.Bool("fill-auth-config", false, "화면 없이 AIPub 인증 (JWKS) 의 files/aipub/authentication-config.yaml 을 issuer 와 CA 로 다시 만들어 "+
+		"저장한 사이트와 <installer-root>/ansible/files 양쪽에 씀 (다시 실행해도 같음). CA 가 없으면 실패")
+	jwksCA := flag.String("jwks-ca", "", "JWKS CA 파일 (기본 "+state.JWKSCAPath+", aipub-installer setup-cert 가 둠)")
 	showVersion := flag.Bool("version", false, "버전 출력")
 	flag.Parse()
 
@@ -39,6 +42,9 @@ func main() {
 	}
 
 	paths := fileio.Paths{Inventory: abs(*inventoryPath), Vars: abs(*varsPath), AipubVars: abs(*aipubVarsPath)}
+	if *jwksCA != "" {
+		fileio.DefaultCAPath = abs(*jwksCA)
+	}
 
 	// Start from defaults, then overlay existing files
 	s := state.DefaultState()
@@ -47,6 +53,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	if *fillAuth {
+		os.Exit(fillAuthConfig(paths, s, filepath.Join(*installerRoot, "ansible", "files")))
+	}
 	if *renderDir != "" {
 		os.Exit(render(paths, s, *renderDir))
 	}
@@ -94,6 +103,12 @@ func render(from fileio.Paths, s *state.AppState, dir string) int {
 		return 1
 	}
 	fmt.Println("written:", view)
+	if r.JWKSPending(s) {
+		fmt.Println("JWKS: CA 대기 (" + r.CA.Path + " 없음) — " + state.JWKSConfigFile + " 는 쓰지 않음, 설치 계획의 --fill-auth-config 가 setup-cert 뒤에 만듦")
+	}
+	if r.CA.Err != nil && s.AppliedControlPlane().JWKS {
+		fmt.Println("JWKS: CA 파일 오류:", r.CA.Err)
+	}
 	errs := validator.Validate(s)
 	for _, e := range errs {
 		fmt.Println("✗", e.Error())
@@ -102,6 +117,21 @@ func render(from fileio.Paths, s *state.AppState, dir string) int {
 		return 2
 	}
 	fmt.Println("✓ 검증 통과")
+	return 0
+}
+
+// fillAuthConfig is --fill-auth-config (fileio.FillAuthConfig), the step of the
+// plan that puts the CA into the authentication config of the JWKS preset after
+// setup-cert. 0 when both copies hold it.
+func fillAuthConfig(p fileio.Paths, s *state.AppState, installerFiles string) int {
+	lines, err := fileio.FillAuthConfig(p, s, installerFiles)
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "--fill-auth-config:", err)
+		return 1
+	}
 	return 0
 }
 

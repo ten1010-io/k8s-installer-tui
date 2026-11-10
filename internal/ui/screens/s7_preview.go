@@ -39,6 +39,7 @@ type S7Preview struct {
 	warnings  []schema.Change     // values an existing cluster can not take, or takes by rebuilding nodes
 	loaded    *schema.Loaded      // what the site's files held when the wizard started; nil for a new site
 	missing   []state.CpExtraFile // files of k8s_cp_extra_files not under ansible/files
+	caNote    []string            // the authentication config of JWKS waiting for its CA
 	// installerFiles is ansible/files of the installer (setup.sh), where
 	// k8s_cp_extra_files are read from when the settings are saved elsewhere
 	installerFiles string
@@ -91,6 +92,15 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 	if err != nil {
 		s.tabs = []previewTab{{name: "오류", content: fmt.Sprintf("렌더링 오류: %v", err)}}
 	} else {
+		s.caNote = nil
+		if r.JWKSPending(st) {
+			s.caNote = append(s.caNote, "AIPub 인증 (JWKS): CA 대기 ("+r.CA.Path+" 없음). "+state.JWKSConfigFile+" 는 쓰지 않고, "+
+				"설치 계획의 A5.1 (--fill-auth-config) 이 setup-cert 뒤에 만듭니다",
+				"그 전에 update-cluster/노드 추가를 돌리면 설치기가 '소스 파일 없음'으로 거부합니다 (노드는 그대로)")
+		}
+		if r.CA.Err != nil && st.AppliedControlPlane().JWKS {
+			s.caNote = append(s.caNote, "JWKS CA 파일: "+r.CA.Err.Error())
+		}
 		s.tabs = []previewTab{
 			{"inventory.yml", s.paths.Inventory, string(r.Inventory)},
 			{"vars.yml", s.paths.Vars, string(r.Vars)},
@@ -288,6 +298,10 @@ func (s *S7Preview) View() string {
 		for _, f := range s.missing {
 			b.WriteString(styles.StyleWarning.Render("  • "+s.installerFiles+"/"+f.Src+schema.FileSource(f)) + "\n")
 		}
+	}
+
+	for _, n := range s.caNote {
+		b.WriteString(styles.StyleWarning.Render("⚠ "+n) + "\n")
 	}
 
 	if s.saveErr != "" {

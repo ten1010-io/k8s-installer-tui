@@ -2,7 +2,10 @@
 # typed in for the controller manager, the way the tool reads a site back: the
 # presets are the lists holding all of their entries. JWKS and the legacy webhook
 # are both on, as a site moving from one to the other runs them; files/aipub has
-# no authentication-config.yaml, so the issuer is derived from the zone
+# no authentication-config.yaml, so the issuer is derived from the zone. The CA
+# setup-cert would put on the control node is jwks-ca.crt next to this, a public
+# test certificate (simulate.sh passes it as --jwks-ca); the authentication
+# config is written with it
 ki_cp_ha_mode: false
 k8s_apiserver_extra_args:
   - name: audit-policy-file
@@ -56,7 +59,7 @@ k8s_cp_extra_files:
     mode: "0644"
   - src: aipub/authentication-config.yaml
     dest: /etc/kubernetes/authentication-config.yaml
-    mode: "0644"
+    mode: "0600"
   - src: aipub/webhook-token-auth.yaml
     dest: /etc/kubernetes/webhook-token-auth.yaml
     mode: "0644"

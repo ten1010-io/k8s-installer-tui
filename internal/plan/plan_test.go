@@ -22,6 +22,15 @@ func ids(steps []Step) string {
 	return strings.Join(out, " ")
 }
 
+// self is the binary the plan runs for --fill-auth-config, the same in every test
+const self = "/usr/local/bin/k8s-installer-tui"
+
+func testOptions() Options {
+	o := DefaultOptions()
+	o.Self = self
+	return o
+}
+
 func aipubState() *state.AppState {
 	s := state.DefaultState()
 	s.AipubEnabled = true
@@ -32,7 +41,7 @@ func aipubState() *state.AppState {
 }
 
 func TestOrder(t *testing.T) {
-	o := DefaultOptions()
+	o := testOptions()
 	o.ArchivePath = "/media/usb/a.tgz"
 	// JWKS is on for a new site, and applied after setup-aipub
 	if got, want := ids(Build(aipubState(), o)), "P1 P2 K1 K2 K3 K4 A1 A2 A3 A4 A5 A5.1 A5.2"; got != want {
@@ -48,7 +57,7 @@ func TestOrder(t *testing.T) {
 }
 
 func TestScript(t *testing.T) {
-	o := DefaultOptions()
+	o := testOptions()
 	o.ArchivePath = "/media/usb dir/a.tgz"
 	steps := Build(aipubState(), o)
 
@@ -97,7 +106,7 @@ func fakeRun(out string, err error) RunFunc {
 }
 
 func TestCheckSSH(t *testing.T) {
-	o := DefaultOptions()
+	o := testOptions()
 	ok := CheckSSH(context.Background(), o, fakeRun(
 		"node1 | CHANGED | rc=0 | (stdout) \nnode2 | CHANGED | rc=0 | (stdout) \n", nil))
 	if !ok.OK || ok.Lines[0] != "정상: node1 node2" {
@@ -120,7 +129,7 @@ func TestCheckSSH(t *testing.T) {
 }
 
 func TestCheckInstalled(t *testing.T) {
-	o := DefaultOptions()
+	o := testOptions()
 	o.Root = t.TempDir()
 	if CheckInstalled(o).OK {
 		t.Error("ok without a release file")
@@ -137,7 +146,7 @@ func TestCheckInstalled(t *testing.T) {
 // cluster without its entries, and update-cluster.yml applies them right after
 // setup-cert. The other presets stay in setup-cluster.
 func TestWebhookAppliedAfterCert(t *testing.T) {
-	o := DefaultOptions()
+	o := testOptions()
 	o.ArchivePath = "/media/usb/a.tgz"
 	s := aipubState()
 	s.ControlPlane.Audit, s.ControlPlane.RuntimeConfig, s.ControlPlane.JWKS = true, true, false
@@ -203,7 +212,7 @@ func TestWebhookAppliedAfterCert(t *testing.T) {
 // too (A2.5 -e), and after setup-aipub the CA is copied in (A5.1) and
 // update-cluster.yml applies them (A5.2).
 func TestJWKSAppliedAfterAipub(t *testing.T) {
-	o := DefaultOptions()
+	o := testOptions()
 	o.ArchivePath = "/media/usb/a.tgz"
 	s := aipubState()
 	s.ControlPlane.Audit = true
@@ -221,10 +230,10 @@ func TestJWKSAppliedAfterAipub(t *testing.T) {
 		t.Errorf("K3 does not leave JWKS out: %+v", k3)
 	}
 	fill, apply := byID["A5.1"], byID["A5.2"]
-	if fill.Kind != Shell || len(fill.Shell) != 3 ||
-		!strings.Contains(fill.Shell[0], "ansible -i inventory.yml node1 -b -m fetch -a 'src=/etc/k8s-installer/certs/ca.crt") ||
-		!strings.Contains(fill.Shell[1], "files/aipub/authentication-config.yaml") {
-		t.Errorf("A5.1: %+v", fill)
+	if want := "sudo /usr/local/bin/k8s-installer-tui --fill-auth-config --inventory /opt/k8s-installer/ansible/inventory.yml " +
+		"--vars /opt/k8s-installer/ansible/group_vars/all/vars.yml --aipub-vars /opt/k8s-installer/ansible/files/aipub/vars.yml " +
+		"--installer-root /opt/k8s-installer"; fill.Kind != Shell || len(fill.Shell) != 1 || fill.Shell[0] != want {
+		t.Errorf("A5.1: %+v\nwant %s", fill, want)
 	}
 	if apply.Playbook != "playbooks/update-cluster.yml" || len(apply.Args) != 0 || !strings.Contains(apply.Note, "한 대씩") {
 		t.Errorf("A5.2: %+v", apply)
@@ -249,34 +258,92 @@ func TestJWKSAppliedAfterAipub(t *testing.T) {
 		t.Errorf("A2.5 does not apply the webhook without JWKS: %+v", a25)
 	}
 
+	o.SiteDir = "/home/ops/site-a"
+	s.ControlPlane.JWKSCAFile = "/srv/pki/aipub ca.crt"
+	steps = Build(s, o)
 	script := Script(steps, o, "/home/ops/site-a")
 	order := []string{"setup-cluster.yml", "setup-cert.yml", "echo '── A2.5", "setup-aipub.yml",
-		"echo '── A5.1", "sudo python3 -c", "echo '── A5.2"}
+		"echo '── A5.1", "--fill-auth-config --inventory /home/ops/site-a/inventory.yml", "echo '── A5.2"}
 	last := -1
 	for _, want := range order {
 		i := strings.Index(script, want)
-		if i < last {
-			t.Errorf("%q out of order in:\n%s", want, script)
+		if i < 0 || i < last {
+			t.Errorf("%q missing or out of order in:\n%s", want, script)
 		}
 		last = i
 	}
-	if !strings.Contains(script, "/home/ops/site-a/files/aipub/authentication-config.yaml") {
-		t.Errorf("the authentication config is not copied:\n%s", script)
+	for _, want := range []string{"/home/ops/site-a/files/aipub/authentication-config.yaml",
+		"--installer-root /opt/k8s-installer --jwks-ca '/srv/pki/aipub ca.crt'"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %q:\n%s", want, script)
+		}
+	}
+	for _, gone := range []string{"python3", "-m fetch", "REPLACE_ME"} {
+		if strings.Contains(script, gone) {
+			t.Errorf("script still has %q:\n%s", gone, script)
+		}
 	}
 
-	// no control plane node to take the CA from: nothing applied with a placeholder
+	// the CA no longer comes from a control plane node: nothing skipped without one
 	s.K8sCpNodes = nil
-	steps = Build(s, o)
-	if got := ids(steps); !strings.HasSuffix(got, "A5 (A5.1) (A5.2)") {
+	if got := ids(Build(s, o)); !strings.HasSuffix(got, "A5 A5.1 A5.2") {
 		t.Errorf("without a control plane node: %s", got)
-	}
-	if script := Script(steps, o, ""); strings.Contains(script, "\nansible-playbook -i inventory.yml playbooks/update-cluster.yml\n") {
-		t.Errorf("A5.2 run although skipped:\n%s", script)
 	}
 
 	// without AIPub there is no issuer: nothing of JWKS
 	s = state.DefaultState()
 	if got := ids(Build(s, o)); strings.Contains(got, "A5") {
 		t.Errorf("without AIPub: %s", got)
+	}
+}
+
+// A site that existed before: once AIPub is there with the CA of
+// JWKS in its config, one update-cluster.yml applies the control plane, no -e,
+// no A5.1. A new site keeps its sequence.
+func TestExistingSitePlan(t *testing.T) {
+	o := testOptions()
+	o.ArchivePath = "/media/usb/a.tgz"
+	s := aipubState()
+	s.ControlPlane.Audit, s.ControlPlane.Webhook = true, true
+	s.ControlPlane.WebhookURL = "https://aipub.example.com/token-review"
+
+	if got, want := ids(Build(s, o)), "P1 P2 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
+		t.Errorf("new site: %s, want %s", got, want)
+	}
+
+	o.Existing, o.AipubInstalled, o.JWKSCAReady = true, true, true
+	steps := Build(s, o)
+	if got, want := ids(steps), "P1 P2 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
+		t.Errorf("existing site with the CA: %s, want %s", got, want)
+	}
+	for _, st := range steps {
+		if len(st.Args) != 0 && st.ID != "K4" {
+			t.Errorf("%s given %v on an existing site", st.ID, st.Args)
+		}
+		if st.ID == "A2.5" && (st.Playbook != "playbooks/update-cluster.yml" || !strings.Contains(st.Title, "컨트롤 플레인 항목")) {
+			t.Errorf("A2.5: %+v", st)
+		}
+	}
+
+	// the CA not there: as a new site, the CA filled after setup-aipub
+	o.JWKSCAReady = false
+	if got, want := ids(Build(s, o)), "P1 P2 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
+		t.Errorf("existing site without the CA: %s, want %s", got, want)
+	}
+	// JWKS off: nothing waits for a CA
+	s.ControlPlane.JWKS = false
+	if got, want := ids(Build(s, o)), "P1 P2 K1 K2 K3 K4 A1 A2 A2.5 A3 A4 A5"; got != want {
+		t.Errorf("existing site without JWKS: %s, want %s", got, want)
+	}
+	// AIPub not installed yet on the existing cluster: as a new site
+	s.ControlPlane.JWKS, o.AipubInstalled, o.JWKSCAReady = true, false, true
+	if got := ids(Build(s, o)); !strings.HasSuffix(got, "A5 A5.1 A5.2") {
+		t.Errorf("existing cluster, AIPub new: %s", got)
+	}
+	// without AIPub: the control plane applied by itself
+	s = state.DefaultState()
+	s.ControlPlane.Audit = true
+	if got, want := ids(Build(s, o)), "P1 P2 K1 K2 K3 K4 K5"; got != want {
+		t.Errorf("existing site without AIPub: %s, want %s", got, want)
 	}
 }

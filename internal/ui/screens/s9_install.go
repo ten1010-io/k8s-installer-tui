@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
@@ -33,8 +34,9 @@ const (
 	s9FocusNav
 )
 
-// checkDoneMsg carries the result of P2, which runs ansible and takes a while.
-type checkDoneMsg struct{ result plan.CheckResult }
+// checkDoneMsg carries the results of the checks that run ansible and take a
+// while (P2), by step id.
+type checkDoneMsg struct{ results map[string]plan.CheckResult }
 
 type S9Install struct {
 	appState *state.AppState
@@ -92,8 +94,14 @@ func (s *S9Install) Init() tea.Cmd                 { return nil }
 
 func (s *S9Install) rebuild() {
 	s.opts.ArchivePath = strings.TrimSpace(s.archive.Value())
+	s.opts.SiteDir = s.savedIn()
+	// the plan of what was saved: whether the authentication config of JWKS went
+	// out with its CA
+	s.opts.JWKSCAReady = fileio.LookupCA(s.appState).PEM != ""
 	s.steps = plan.Build(s.appState, s.opts)
-	s.vp.SetContent(s.script())
+	// wrapped here, so that the viewport counts the lines it shows and scrolls to
+	// the last of them (it would wrap a long line itself and cut what overflows)
+	s.vp.SetContent(lipgloss.NewStyle().Width(max(1, s.vp.Width)).Render(s.script()))
 }
 
 // savedIn is the directory the settings were saved in, the ansible directory when
@@ -131,7 +139,9 @@ func (s *S9Install) runChecks() tea.Cmd {
 	s.checks["P2"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n true')"}}
 	s.checking = true
 	opts, run := s.opts, s.run
-	return func() tea.Msg { return checkDoneMsg{plan.CheckSSH(context.Background(), opts, run)} }
+	return func() tea.Msg {
+		return checkDoneMsg{map[string]plan.CheckResult{"P2": plan.CheckSSH(context.Background(), opts, run)}}
+	}
 }
 
 func (s *S9Install) writeScript() {
@@ -146,7 +156,9 @@ func (s *S9Install) writeScript() {
 func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case checkDoneMsg:
-		s.checks["P2"] = msg.result
+		for id, r := range msg.results {
+			s.checks[id] = r
+		}
 		s.checking = false
 		return s, nil
 

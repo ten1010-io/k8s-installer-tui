@@ -12,6 +12,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -50,13 +51,47 @@ type Options struct {
 	ArchivePath string
 	// Whether the monitoring module is installed with AIPub
 	Monitoring bool
+
+	// Self is this program on the control node, which the plan runs for
+	// --fill-auth-config
+	Self string
+	// SiteDir is the directory the settings were saved in; empty: AnsibleDir
+	SiteDir string
+	// Existing: the site had its files (group_vars/all/vars.yml) when the wizard
+	// started (fileio.LoadSite), so the cluster is there already
+	Existing bool
+	// AipubInstalled: and files/aipub/vars.yml too, so AIPub is installed: the
+	// CA of setup-cert is on the nodes and the issuer of JWKS answers
+	AipubInstalled bool
+	// JWKSCAReady: the authentication config of the JWKS preset was written with
+	// its CA when the settings were saved (fileio.LookupCA)
+	JWKSCAReady bool
 }
 
 func DefaultOptions() Options {
-	return Options{Root: "/opt/k8s-installer", Monitoring: true}
+	self, err := os.Executable()
+	if err != nil {
+		self = "k8s-installer-tui"
+	}
+	return Options{Root: "/opt/k8s-installer", Monitoring: true, Self: filepath.ToSlash(self)}
 }
 
 func (o Options) AnsibleDir() string { return o.Root + "/ansible" }
+
+// siteDir is where the settings were saved.
+func (o Options) siteDir() string {
+	if o.SiteDir == "" {
+		return o.AnsibleDir()
+	}
+	return strings.TrimRight(filepath.ToSlash(o.SiteDir), "/")
+}
+
+// direct reports whether the control plane entries are applied all at once: on
+// a site whose cluster and AIPub are there already, with the CA of the JWKS
+// preset in its config (or the preset off), nothing waits for a later step.
+func (o Options) direct(cp *state.ControlPlane) bool {
+	return o.Existing && o.AipubInstalled && (!cp.JWKS || o.JWKSCAReady)
+}
 
 // Build is the plan for a new installation with these settings.
 func Build(s *state.AppState, o Options) []Step {
@@ -65,12 +100,15 @@ func Build(s *state.AppState, o Options) []Step {
 			Note: "번들을 풀고 " + o.Root + " 에 설치하는 단계. sudo가 필요해 직접 실행합니다"},
 		{ID: "P2", Title: "SSH·sudo 접속", Kind: Check,
 			Note: "configure-control-node-ssh.sh 안내대로 키를 등록한 뒤, 모든 노드에 비밀번호 없이 접속·sudo"},
-		{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",
-			Note: "모든 노드에 설치본 배포"},
-		{ID: "K2", Title: "setup-control-node", Kind: Playbook, Playbook: "playbooks/setup-control-node.yml",
-			Note: "ki cp 서비스: DNS, NTP, 레지스트리, apiserver LB"},
-		setupCluster(s),
 	}
+	steps = append(steps,
+		Step{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",
+			Note: "모든 노드에 설치본 배포"},
+		Step{ID: "K2", Title: "setup-control-node", Kind: Playbook, Playbook: "playbooks/setup-control-node.yml",
+			Note: "ki cp 서비스: DNS, NTP, 레지스트리, apiserver LB"},
+		setupCluster(s, o),
+	)
+	cp := s.AppliedControlPlane()
 
 	push := Step{ID: "K4", Title: "push-user-registry-artifacts", Kind: Playbook,
 		Playbook: "playbooks/push-user-registry-artifacts.yml", Optional: true,
@@ -83,6 +121,9 @@ func Build(s *state.AppState, o Options) []Step {
 	steps = append(steps, push)
 
 	if !s.AipubEnabled {
+		if o.Existing && !cp.Empty() {
+			steps = append(steps, applyAll("K5"))
+		}
 		return steps
 	}
 
@@ -103,9 +144,17 @@ func Build(s *state.AppState, o Options) []Step {
 			Note: "Cilium, L2 VIP " + s.K8sIngressVIP + ". 끝나면 노드가 Ready"},
 		cert,
 	)
-	cp := s.AppliedControlPlane()
-	jwks := cp.HasStage(state.StageAfterAipub)
-	if cp.HasStage(state.StageAfterCert) {
+	direct := o.direct(cp)
+	jwks := cp.HasStage(state.StageAfterAipub) && !direct
+	switch {
+	case direct:
+		// an existing site: the CA and the issuer are there, the config is
+		// written; one update-cluster.yml applies every entry, where the webhook
+		// preset is applied on a new site
+		if !cp.Empty() {
+			steps = append(steps, applyAll("A2.5"))
+		}
+	case cp.HasStage(state.StageAfterCert):
 		// The webhook preset reads the CA setup-cert has just put on the nodes;
 		// update-cluster.yml finds the entries setup-cluster left out and applies
 		// them (cp_extra_files, then control_plane), one control plane node at a time
@@ -127,9 +176,20 @@ func Build(s *state.AppState, o Options) []Step {
 			Note: "AIPub 서비스. Python 쪽 컴포넌트는 아직 aipub-installer 밖이라 포함되지 않음"},
 	)
 	if jwks {
-		steps = append(steps, jwksSteps(s)...)
+		steps = append(steps, jwksSteps(s, o)...)
 	}
 	return steps
+}
+
+// applyAll is the update-cluster.yml of an existing site: every entry of the
+// control plane as vars.yml holds it, no -e. Where the apiserver was edited by
+// hand, kubeadm writes the manifest again from the cluster
+// configuration: the same flags, kept from then on.
+func applyAll(id string) Step {
+	return Step{ID: id, Title: "update-cluster (컨트롤 플레인 항목 적용)", Kind: Playbook,
+		Playbook: "playbooks/update-cluster.yml",
+		Note: "기존 사이트: 컨트롤 플레인 항목을 한 번에 적용 (-e 없음). 손으로 고친 kube-apiserver.yaml 은 설치기가 관리하는 같은 " +
+			"플래그로 바뀜. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"}
 }
 
 // jwksSteps apply the JWKS preset where aipub-installer applies JWKS: its k8s-jwks
@@ -140,40 +200,36 @@ func Build(s *state.AppState, o Options) []Step {
 // upgrade or join; update-cluster.yml makes the same flag, volume and file part
 // of the cluster configuration, which the next ones keep.
 //
-// The config takes the CA inline, so A5.1 copies it in from a control plane node
-// first, as k8s-jwks does (yq ... certificateAuthority = the PEM).
-func jwksSteps(s *state.AppState) []Step {
-	cfg := "files/" + state.JWKSConfigFile
-	fill := Step{ID: "A5.1", Title: "JWKS CA 복사", Kind: Shell,
-		Note: "A2 setup-cert 가 노드에 둔 CA (" + state.JWKSCAPath + ") 를 " + cfg + " 에 넣음 (k8s-jwks 처럼 인라인 PEM)"}
-	if len(s.K8sCpNodes) == 0 {
-		fill.Skip, fill.SkipWhy = true, "k8s 컨트롤 플레인 노드 없음"
-	} else {
-		const tmp = "/tmp/aipub-jwks-ca.crt"
-		fill.Shell = []string{
-			"ansible -i inventory.yml " + shellQuote(s.K8sCpNodes[0]) + " -b -m fetch -a " +
-				shellQuote("src="+state.JWKSCAPath+" dest="+tmp+" flat=yes"),
-			"sudo python3 -c " + shellQuote(caSplice) + " " + shellQuote(cfg) + " " + tmp,
-			"rm -f " + tmp,
-		}
+// The config takes the CA inline and the wizard writes it only once there is a
+// CA, so A5.1 runs this program again (--fill-auth-config) on the control node,
+// where setup-cert has put the CA by then: it writes the config whole to the
+// saved site and to the installer, and stops the script when there is no CA.
+func jwksSteps(s *state.AppState, o Options) []Step {
+	site := o.siteDir()
+	cmd := []string{"sudo", o.Self, "--fill-auth-config",
+		"--inventory", site + "/inventory.yml",
+		"--vars", site + "/group_vars/all/vars.yml",
+		"--aipub-vars", site + "/files/aipub/vars.yml",
+		"--installer-root", o.Root}
+	if f := strings.TrimSpace(s.ControlPlane.JWKSCAFile); f != "" {
+		cmd = append(cmd, "--jwks-ca", f)
 	}
+	for i, c := range cmd {
+		cmd[i] = shellQuote(c)
+	}
+	ca := state.JWKSCAPath
+	if f := strings.TrimSpace(s.ControlPlane.JWKSCAFile); f != "" {
+		ca = f
+	}
+	fill := Step{ID: "A5.1", Title: "JWKS CA 채우기", Kind: Shell, Shell: []string{strings.Join(cmd, " ")},
+		Note: "A2 setup-cert 가 둔 CA (" + ca + ") 를 읽어 files/" + state.JWKSConfigFile + " 를 issuer·CA 로 다시 만들어 " +
+			"저장한 사이트와 설치 디렉터리 양쪽에 씀 (다시 실행해도 같음). CA 가 없으면 여기서 멈춤"}
 	apply := Step{ID: "A5.2", Title: "update-cluster (apiserver JWKS 인증 적용)", Kind: Playbook,
 		Playbook: "playbooks/update-cluster.yml",
 		Note: "K3 에서 뺀 JWKS 항목 (authentication-config) 을 적용. setup-aipub 의 k8s-jwks 가 손으로 넣은 것을 " +
 			"kubeadm 이 보관하게 함. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"}
-	if fill.Skip {
-		apply.Skip, apply.SkipWhy = true, "CA 를 넣지 못함 (A5.1)"
-	}
 	return []Step{fill, apply}
 }
-
-// caSplice puts the PEM of argv[2] under certificateAuthority of the config at
-// argv[1], in place of what is there (the placeholder, or a CA replaced since),
-// and fails when the block is not there.
-const caSplice = `import re,sys;f,c=sys.argv[1:3];t=open(f).read();` +
-	`ca="".join("        "+l+"\n" for l in open(c).read().strip().splitlines());` +
-	`t,n=re.subn(r"(?m)^(      certificateAuthority: \|\n)(?:        .*\n)+",lambda m:m.group(1)+ca,t);` +
-	`assert n==1,"no certificateAuthority block in "+f;open(f,"w").write(t)`
 
 // stageArgs are the extra vars that leave out of a run the presets applied after
 // step stage: the apiserver lists as they are by then. Extra vars win over
@@ -195,12 +251,13 @@ func stageArgs(cp *state.ControlPlane, stage int) []string {
 // setupCluster is K3. The entries of the control plane that need what a later
 // step makes (the webhook preset needs the CA of setup-cert, the JWKS preset the
 // issuer setup-aipub brings up) are left out of it (stageArgs) and applied by
-// update-cluster.yml after that step (A2.5, A5.2).
-func setupCluster(s *state.AppState) Step {
+// update-cluster.yml after that step (A2.5, A5.2). On a site whose AIPub is
+// there already nothing waits (Options.direct): nothing is left out.
+func setupCluster(s *state.AppState, o Options) Step {
 	st := Step{ID: "K3", Title: "setup-cluster", Kind: Playbook, Playbook: "playbooks/setup-cluster.yml",
 		Note: "kubeadm. 끝나면 CNI가 없어 노드가 NotReady인 것이 정상"}
 	cp := s.AppliedControlPlane()
-	if !s.AipubEnabled || !cp.HasLater() {
+	if !s.AipubEnabled || !cp.HasLater() || o.direct(cp) {
 		return st
 	}
 	st.Args = stageArgs(cp, state.StageCluster)
@@ -291,7 +348,8 @@ func CopyCommands(o Options, savedIn string) []string {
 		// the kubeconfig of the webhook preset of the control plane, when it is on
 		"[ -f " + shellQuote(src+"/files/"+state.WebhookConfigFile) + " ] && sudo install -D -m 0644 " +
 			shellQuote(src+"/files/"+state.WebhookConfigFile) + " " + shellQuote(dst+"/files/"+state.WebhookConfigFile) + " || true",
-		// the authentication config of the JWKS preset, when it is on
+		// the authentication config of the JWKS preset, once it has its CA (A5.1
+		// writes both copies otherwise)
 		"[ -f " + shellQuote(src+"/files/"+state.JWKSConfigFile) + " ] && sudo install -D -m 0644 " +
 			shellQuote(src+"/files/"+state.JWKSConfigFile) + " " + shellQuote(dst+"/files/"+state.JWKSConfigFile) + " || true",
 	}

@@ -23,8 +23,13 @@ for fixture in "${HERE}"/fixtures/*/; do
     echo
     echo "════ ${name}"
     echo "── 1) k8s-installer-tui --render"
-    (cd "${in}" && "${TUI}" --render "${out}") | sed 's|'"${out}"'/||; s/^/  /'
+    # the CA of the JWKS preset: the fixture's own fake one (jwks-ca.crt, a public
+    # test certificate), else none, as on a site before setup-cert
+    ca="${in}/jwks-ca.crt"; [ -f "${ca}" ] || ca="${WORK}/no-ca.crt"
+    (cd "${in}" && "${TUI}" --jwks-ca "${ca}" --render "${out}") | sed 's|'"${out}"'/||; s/^/  /'
     [ "${PIPESTATUS[0]}" = 0 ] || { echo "  ✗ the tool's own validation failed"; fail=1; }
+    # the wizard never writes the placeholder of the template of aipub-installer
+    if grep -rl REPLACE_ME "${out}"; then echo "  ✗ a placeholder written"; fail=1; fi
 
     echo "── 2) installers"
     python3 "${HERE}/check_installers.py" "${out}" "${GH}/k8s-installer" | sed 's/^/  /'

@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
+	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/screens"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
@@ -23,6 +24,13 @@ type App struct {
 }
 
 func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version string) *App {
+	// An existing site (its files were there before anything is saved): the
+	// cluster is there, and maybe AIPub: the plan applies the control plane in
+	// one update-cluster.yml once nothing waits for a later step
+	if loaded, _ := fileio.LoadSite(paths); loaded != nil {
+		opts.Existing = true
+		_, opts.AipubInstalled = loaded.Values[schema.FileAipub]
+	}
 	s1 := screens.NewS1Nodes()
 	s2 := screens.NewS2Groups()
 	s3 := screens.NewS3Network()

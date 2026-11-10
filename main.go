@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
@@ -13,6 +17,7 @@ import (
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui"
 	"github.com/ten1010-io/k8s-installer-tui/internal/validator"
+	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -33,12 +38,24 @@ func main() {
 	fillAuth := flag.Bool("fill-auth-config", false, "화면 없이 AIPub 인증 (JWKS) 의 files/aipub/authentication-config.yaml 을 issuer 와 CA 로 다시 만들어 "+
 		"저장한 사이트와 <installer-root>/ansible/files 양쪽에 씀 (다시 실행해도 같음). CA 가 없으면 실패")
 	jwksCA := flag.String("jwks-ca", "", "JWKS CA 파일 (기본 "+state.JWKSCAPath+", aipub-installer setup-cert 가 둠)")
+	checkSSH := flag.Bool("check-ssh", false, "화면 없이 --inventory 의 모든 노드가 이 제어 노드의 키 (~/.ssh/id_rsa) 를 받고 비밀번호 없이 sudo 하는지 "+
+		"표로 출력 (읽기만, known_hosts 도 그대로). 0 모두 준비됨, 1 준비 안 된 노드 있음, 2 실행 못 함")
+	sendSSHKey := flag.Bool("send-ssh-key", false, "화면 없이 키를 받지 않는 노드에 ssh-copy-id 로 키를 보내고 (비밀번호는 노드마다 ssh 가 물음) "+
+		"--check-ssh 의 표를 출력. 키가 없으면 <installer-root>/ansible/configure-control-node-ssh.sh 로 만듦. Ctrl-C 는 130")
+	askPassOnce := flag.Bool("ask-pass-once", false, "--send-ssh-key 에서 비밀번호를 터미널에서 한 번만 물어 (화면에 보이지 않음) 모든 노드에 씀")
 	showVersion := flag.Bool("version", false, "버전 출력")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println("k8s-installer-tui", version)
 		os.Exit(0)
+	}
+
+	if *checkSSH || *sendSSHKey {
+		// the nodes as ansible-inventory gives them; the settings are not read
+		opts := plan.DefaultOptions()
+		opts.Root = *installerRoot
+		os.Exit(sshKeys(opts, abs(*inventoryPath), *sendSSHKey, *askPassOnce))
 	}
 
 	paths := fileio.Paths{Inventory: abs(*inventoryPath), Vars: abs(*varsPath), AipubVars: abs(*aipubVarsPath)}
@@ -133,6 +150,143 @@ func fillAuthConfig(p fileio.Paths, s *state.AppState, installerFiles string) in
 		return 1
 	}
 	return 0
+}
+
+// sshKeys is --check-ssh, and --send-ssh-key (send) with or without
+// --ask-pass-once (once): the key of the control node on the nodes of inventory,
+// then the table of every node. 0 when every node is ready, 1 when one is not,
+// 2 when it could not run, 130 on Ctrl-C.
+func sshKeys(o plan.Options, inventory string, send, once bool) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	run, key := plan.ExecRun, plan.DefaultSSHKey()
+
+	if send {
+		if err := plan.PrepareKey(ctx, o, run, key); err != nil {
+			fmt.Fprintln(os.Stderr, "키 준비 실패:", err)
+			return interrupted(ctx, 2)
+		}
+	} else if _, err := os.Stat(key.Private); err != nil {
+		fmt.Fprintln(os.Stderr, "!", key.Private, "가 없습니다: 어느 노드도 준비되지 않았습니다. --send-ssh-key 가 만들고 보냅니다")
+	}
+	nodes, warnings, err := plan.ListSSHNodes(ctx, o, run, inventory)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "노드 목록 실패:", err)
+		return interrupted(ctx, 2)
+	}
+	if len(nodes) == 0 {
+		fmt.Fprintln(os.Stderr, inventory, "에 노드가 없습니다")
+		return 2
+	}
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "!", w)
+	}
+
+	results, err := plan.ProbeNodes(ctx, run, key, nodes, !send)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "확인 실패:", err)
+		return interrupted(ctx, 2)
+	}
+	if ctx.Err() != nil {
+		return 130
+	}
+	if refusing := plan.Refusing(results); send && len(refusing) > 0 {
+		byName := map[string]int{}
+		for i, r := range results {
+			byName[r.Node.Name] = i
+		}
+		if once {
+			password, err := readPassword(ctx)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "--ask-pass-once:", err)
+				return interrupted(ctx, 2)
+			}
+			fmt.Fprintf(os.Stderr, "── 키 보내는 중 (%d대)\n", len(refusing))
+			err = plan.SendKeyWithPassword(ctx, run, key, refusing, password, func(r plan.NodeSSH) {
+				results[byName[r.Node.Name]] = r
+				verdict := "키 받음"
+				if r.Key != plan.KeyOK {
+					verdict = r.Label() + ": " + r.Note()
+				}
+				fmt.Fprintf(os.Stderr, "── %s: %s\n", r.Node.Name, verdict)
+			})
+			for i := range password {
+				password[i] = 0
+			}
+			if err != nil {
+				return interrupted(ctx, 2)
+			}
+		} else {
+			// ssh asks each password on this terminal; Ctrl-C reaches it and ends
+			// the script, and this process sees it through ctx
+			cmd := exec.Command("bash", "-c", plan.AskSendScript(key, refusing, false))
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
+			_ = cmd.Run()
+			if ctx.Err() != nil {
+				return 130
+			}
+			for _, n := range refusing {
+				results[byName[n.Name]] = plan.ProbeNode(ctx, run, key, n, "")
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		return 130
+	}
+
+	fmt.Print("\n" + plan.SSHTable(results))
+	for _, r := range results {
+		if !r.Ready() {
+			fmt.Println("✗ 준비되지 않은 노드가 있습니다. 비고대로 고친 뒤 다시 실행하세요")
+			return 1
+		}
+	}
+	fmt.Println("✓ 모든 노드가 이 제어 노드의 키를 받고 비밀번호 없이 sudo 합니다")
+	return 0
+}
+
+// interrupted is 130 after Ctrl-C, else code.
+func interrupted(ctx context.Context, code int) int {
+	if ctx.Err() != nil {
+		fmt.Fprintln(os.Stderr, "중단했습니다")
+		return 130
+	}
+	return code
+}
+
+// readPassword asks the password on the terminal without echo. On Ctrl-C the
+// terminal gets its echo back.
+func readPassword(ctx context.Context) ([]byte, error) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return nil, fmt.Errorf("비밀번호를 물을 터미널이 필요합니다")
+	}
+	saved, err := term.GetState(fd)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprint(os.Stderr, "노드의 SSH 비밀번호 (화면에 보이지 않음): ")
+	type read struct {
+		pw  []byte
+		err error
+	}
+	ch := make(chan read, 1)
+	go func() {
+		pw, err := term.ReadPassword(fd)
+		ch <- read{pw, err}
+	}()
+	select {
+	case r := <-ch:
+		fmt.Fprintln(os.Stderr)
+		if r.err == nil && len(r.pw) == 0 {
+			r.err = fmt.Errorf("비밀번호가 비어 있습니다")
+		}
+		return r.pw, r.err
+	case <-ctx.Done():
+		_ = term.Restore(fd, saved)
+		fmt.Fprintln(os.Stderr)
+		return nil, ctx.Err()
+	}
 }
 
 func abs(p string) string {

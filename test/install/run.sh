@@ -125,9 +125,10 @@ for l in C1 K1 K3 A2 M1 A3; do [ -s "${STATE}/logs/${l}.log" ] || bad "no log ${
 ok "logs: $(ls "${STATE}/logs" | paste -sd' ')"
 cmp -s "${SITE}/inventory.yml" "${ROOT}/ansible/inventory.yml" && ok "C1 copied the site into the installer" || bad "C1 did not copy"
 
-echo "── 2) --install --resume: from the failed step only"
+echo "── 2) --install --resume after the site was saved again: the copy, then from the failed step only"
 : > "${CALLS}"
-${install_cmd} --resume < /dev/null > "${W}/out2.txt" 2>&1
+echo "# saved again" >> "${SITE}/group_vars/all/vars.yml"
+echo y | ${install_cmd} --resume > "${W}/out2.txt" 2>&1
 code=$?
 sed 's/^/    /' "${W}/out2.txt"
 [ "${code}" = 0 ] && ok "exit 0" || bad "exit ${code}, want 0"
@@ -136,6 +137,8 @@ case "${order}" in
 "setup-base setup-monitoring setup-aipub "*) ok "resumed: ${order}" ;;
 *) bad "resumed: ${order}" ;;
 esac
+grep -q '✓ C1' "${W}/out2.txt" && grep -q '# saved again' "${ROOT}/ansible/group_vars/all/vars.yml" &&
+    ok "C1 ran again: the installer has the site as saved again" || bad "the resume did not copy the site again"
 grep -q '"outcome": "ok"' "${STATE}/state.json" && ok "state.json outcome ok" || bad "outcome"
 
 echo "── 3) a site changed since: --resume asks first"

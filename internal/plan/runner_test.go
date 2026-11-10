@@ -362,6 +362,30 @@ func TestRunnerResumesFromTheFailedStep(t *testing.T) {
 	}
 }
 
+// The copy of a site saved elsewhere runs on every run: a resume after the
+// site was saved again copies it before the playbooks read it.
+func TestRunnerResumeCopiesTheSiteAgain(t *testing.T) {
+	o := testOptions()
+	o.ArchivePath = "/media/usb/a.tgz"
+	stages := Stages(Build(aipubState(), o), o, "/home/ops/site")
+	r, f, inputs := newTestRunner(t, stages)
+	f.classes["nfs-client"] = true
+	f.fail["A3"] = 1
+	if outcome, _ := r.Run(context.Background(), false); outcome != OutcomeFailed || !strings.HasPrefix(f.ranIDs(), "C1 K1") {
+		t.Fatalf("first run: %s, ran %s", outcome, f.ranIDs())
+	}
+	r2 := NewRunner(r.Opts, r.State, stages, inputs)
+	f2 := newFakeSite(stages)
+	f2.classes["nfs-client"] = true
+	r2.Exec, r2.Cmd = f2.exec, f2.cmd
+	if outcome, err := r2.Run(context.Background(), true); outcome != OutcomeOK || err != nil {
+		t.Fatalf("resume: %s %v", outcome, err)
+	}
+	if got := f2.ranIDs(); got != "C1 A3 A4 A5 A5.1 A5.2" {
+		t.Errorf("resume ran %s, want the copy first", got)
+	}
+}
+
 // Stop lets the running step finish and starts no other; Kill ends it now.
 func TestRunnerStopAndKill(t *testing.T) {
 	stages := [][]Step{{{ID: "X1", Kind: Shell, Shell: []string{"x1"}}}, {{ID: "X2", Kind: Shell, Shell: []string{"x2"}}}}

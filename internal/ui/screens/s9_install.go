@@ -89,11 +89,14 @@ type S9Install struct {
 	run      plan.RunFunc
 	exec     plan.StreamFunc // the steps of a run; nil: plan.ExecStream
 
-	archive  textinput.Model
-	steps    []plan.Step
-	checks   map[string]plan.CheckResult
-	checking bool
-	message  string
+	archive textinput.Model
+	steps   []plan.Step
+	checks  map[string]plan.CheckResult
+	// checksFor is checkKey when the checks ran: a gate on the checks of another
+	// site (saved again since, or other options) runs them again
+	checksFor string
+	checking  bool
+	message   string
 
 	// sending the key (k, p): ssh holds what P2 found, pass the masked input of
 	// p while asking, and while sending cancel stops it and progress gives each
@@ -116,7 +119,8 @@ type S9Install struct {
 	ex             *execRun
 	last           *plan.RunState
 	confirm        string
-	runAfterChecks bool // 실행 ran the checks first
+	runAfterChecks bool // 실행 (or f) waits for the checks, then goes on (gate)
+	fresh          bool // the run that waits is from the first step (f)
 	showLog        bool
 	logVP          viewport.Model
 	logStep        plan.StepState
@@ -195,6 +199,10 @@ func (s *S9Install) SyncFromState(st *state.AppState) {
 		s.ex, s.selMoved = nil, false
 		s.loadPrev()
 	}
+	if s.checksFor != s.checkKey() && !s.checking {
+		// of another site, or other options: not shown, and run again before a run
+		s.checks, s.ssh = map[string]plan.CheckResult{}, nil
+	}
 	s.rebuild()
 	s.syncFocus()
 	s.planVP.GotoTop()
@@ -254,6 +262,7 @@ func (s *S9Install) prev(i int) int {
 }
 
 func (s *S9Install) runChecks() tea.Cmd {
+	s.checks, s.checksFor = map[string]plan.CheckResult{}, s.checkKey()
 	s.checks["P1"] = plan.CheckInstalled(s.opts)
 	if s.appState.AipubEnabled {
 		// local reads, nothing to wait for
@@ -512,8 +521,9 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.opts.ShellExecutable = msg.shell
 			s.rebuild()
 		}
-		if s.runAfterChecks && !s.checking {
-			return s, s.afterChecks()
+		if s.runAfterChecks {
+			// shellSet: all of them ran (runChecks), not P2 alone after a key send
+			return s, s.gate(msg.shellSet)
 		}
 		return s, nil
 
@@ -619,10 +629,7 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return s, nil
 			case "f":
-				if s.last != nil {
-					s.confirm = "fresh"
-				}
-				return s, nil
+				return s, s.pressFresh()
 			case "k":
 				if nodes := s.refusing(); len(nodes) > 0 {
 					return s, s.prepareKey(nodes)

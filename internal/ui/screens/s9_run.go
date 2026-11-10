@@ -73,33 +73,66 @@ func (s *S9Install) loadPrev() {
 	}
 }
 
-// pressRun is 실행: the checks first when they have not run (then the run, when
-// they pass), none of them ✗; then the run, from where the last one stopped.
+// pressRun is 실행: through the checks (gate), then the run, from where the
+// last one stopped.
 func (s *S9Install) pressRun() tea.Cmd {
-	if s.running() || s.checking {
+	s.fresh = false
+	return s.gate(false)
+}
+
+// pressFresh is f: through the checks too, then asked, the run from the first step.
+func (s *S9Install) pressFresh() tea.Cmd {
+	if s.last == nil {
 		return nil
+	}
+	s.fresh = true
+	return s.gate(false)
+}
+
+// gate lets a run start only on checks that passed (none ✗) for the site as it
+// is now: P3 keeps update-cluster from wiping what was set by hand, P6 gives the
+// shell every playbook becomes with. Checks of another site (checksFor) are
+// dropped; checks not run yet run first, and checks under way are waited for,
+// then the run goes on (runAfterChecks). after: the checks it waited for have
+// ended.
+func (s *S9Install) gate(after bool) tea.Cmd {
+	s.runAfterChecks = false
+	if s.running() {
+		return nil
+	}
+	if s.checking {
+		s.runAfterChecks = true
+		s.message = "사전 확인이 끝나면 실행합니다"
+		return nil
+	}
+	if s.checksFor != s.checkKey() {
+		s.checks, s.ssh = map[string]plan.CheckResult{}, nil
 	}
 	notRun, failed := plan.CheckVerdict(s.steps, s.checks)
 	switch {
+	case len(failed) > 0:
+		s.message = "사전 확인 ✗: " + strings.Join(failed, " ") + ". 고친 뒤 c 로 다시 확인하고 실행하세요"
+		return nil
+	case len(notRun) > 0 && after:
+		// they ran and still gave nothing: never loop on them
+		s.message = "사전 확인 결과가 없습니다 (" + strings.Join(notRun, " ") + "). c 로 다시 확인하고 실행하세요"
+		return nil
 	case len(notRun) > 0:
 		s.runAfterChecks = true
 		s.message = "사전 확인을 먼저 실행합니다 (" + strings.Join(notRun, " ") + "). 통과하면 바로 실행합니다"
 		return s.runChecks()
-	case len(failed) > 0:
-		s.message = "사전 확인 ✗: " + strings.Join(failed, " ") + ". 고친 뒤 c 로 다시 확인하고 실행하세요"
+	}
+	if s.fresh {
+		s.confirm = "fresh"
 		return nil
 	}
 	return s.offerRun()
 }
 
-// afterChecks goes on with a 실행 that waited for the checks.
-func (s *S9Install) afterChecks() tea.Cmd {
-	s.runAfterChecks = false
-	if _, failed := plan.CheckVerdict(s.steps, s.checks); len(failed) > 0 {
-		s.message = "사전 확인 ✗: " + strings.Join(failed, " ") + ". 고친 뒤 c 로 다시 확인하고 실행하세요"
-		return nil
-	}
-	return s.offerRun()
+// checkKey is what the checks were made for: the site files and the options
+// that change them (P3 only on an existing site, the installer root).
+func (s *S9Install) checkKey() string {
+	return fmt.Sprintf("%s|%t|%s", plan.InputHash(s.inputs()), s.opts.Existing, s.opts.Root)
 }
 
 // offerRun starts the run, or asks first: when the last one finished (start
@@ -118,6 +151,7 @@ func (s *S9Install) offerRun() tea.Cmd {
 	return s.startRun(true)
 }
 
+// confirmQuestion is asked after the checks passed (gate): y starts the run.
 func (s *S9Install) confirmQuestion() string {
 	if s.confirm == "resume" {
 		return "지난 실행 뒤에 사이트 파일이 바뀌었습니다. 끝난 단계는 다시 실행하지 않고 이어서 실행할까요? (y 예, n 아니오)"

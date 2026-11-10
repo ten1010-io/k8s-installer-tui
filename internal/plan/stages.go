@@ -23,12 +23,13 @@ import "strings"
 // Stages are the steps that run, in stages: the checks are left out (the screen
 // and --install run them first), a skipped step stays to be recorded. When the
 // settings were saved elsewhere, a first step copies them where k8s-installer
-// reads them (CopyCommands, as the script does).
+// reads them (CopyCommands, as the script does), on every run: a resume after
+// the site was saved again must not run the playbooks on the old copy.
 func Stages(steps []Step, o Options, savedIn string) [][]Step {
 	var stages [][]Step
 	if copies := CopyCommands(o, savedIn); len(copies) > 0 {
-		stages = append(stages, []Step{{ID: "C1", Title: "설정 복사", Kind: Shell, Shell: copies,
-			Note: "저장한 설정 파일을 " + o.AnsibleDir() + " 로 (sudo)"}})
+		stages = append(stages, []Step{{ID: "C1", Title: "설정 복사", Kind: Shell, Shell: copies, AlwaysRun: true,
+			Note: "저장한 설정 파일을 " + o.AnsibleDir() + " 로 (sudo, 이어서 실행할 때도 다시 복사)"}})
 	}
 	for _, st := range steps {
 		if st.Kind == Check {

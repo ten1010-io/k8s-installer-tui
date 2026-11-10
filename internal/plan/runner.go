@@ -376,7 +376,7 @@ func (r *Runner) init(prev *RunState) {
 			s := StepState{ID: st.ID, Title: st.Title, Stage: i, Status: StatusPending}
 			if st.Skip {
 				s.Status, s.Note = StatusSkipped, st.SkipWhy
-			} else if prev != nil {
+			} else if prev != nil && !st.AlwaysRun {
 				if p := prev.Step(st.ID); p != nil && p.Status == StatusOK {
 					s = *p
 					s.Stage = i

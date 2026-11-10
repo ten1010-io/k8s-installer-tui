@@ -49,6 +49,9 @@ type Step struct {
 	SkipWhy  string
 	// WithPrev: runs in the stage of the step before it, at the same time (Stages)
 	WithPrev bool
+	// AlwaysRun: a resume runs it again even when the last run finished it (the
+	// copy C1: the site may have been saved again since, and copying is safe to repeat)
+	AlwaysRun bool
 	// Classes are the StorageClasses a Manual step waits for (StorageNeeds)
 	Classes []string
 }

@@ -28,6 +28,7 @@ type runSite struct {
 	sudoFails  bool
 	classReady bool
 	kubectl    int
+	p2         int                      // the ansible runs of P2, which every round of the checks makes
 	ran        []string                 // playbooks (or "shell"), in order
 	block      map[string]chan struct{} // by playbook name: held until closed or cancelled
 	fail       map[string]int
@@ -45,6 +46,9 @@ func (f *runSite) run(ctx context.Context, dir, name string, args ...string) ([]
 		return nil, nil // getent of P7: no answer, a warning
 	}
 	script := args[len(args)-1]
+	if strings.Contains(script, "'sudo -n true'") {
+		f.p2++
+	}
 	switch {
 	case strings.Contains(script, "get storageclass"):
 		f.kubectl++
@@ -300,13 +304,121 @@ func TestRunResumesFromTheFailedStep(t *testing.T) {
 	f.ran, f.fail = nil, map[string]int{}
 	f.mu.Unlock()
 	p.pressRun()
+	// the checks again first (of the site as it is now), then the question
+	p.until(t, "the question", func() bool { return s9.confirm != "" })
 	if v := plainView(s9); !strings.Contains(v, "사이트 파일이 바뀌었습니다") || s9.ex != nil || !s9.Busy() {
 		t.Fatalf("no question:\n%s", v)
 	}
 	p.key(runeKey("y"))
 	p.until(t, "the resume ends", func() bool { return s9.ex != nil && s9.ex.done })
-	if got := f.playbooks(); !strings.HasPrefix(got, "setup-base setup-monitoring setup-aipub") || s9.ex.outcome != plan.OutcomeOK {
+	// the copy first: the playbooks read the site as it was saved again
+	if got := f.playbooks(); !strings.HasPrefix(got, "shell setup-base setup-monitoring setup-aipub") || s9.ex.outcome != plan.OutcomeOK {
 		t.Errorf("resumed %s: %s", got, s9.ex.outcome)
+	}
+}
+
+func (f *runSite) checksRun() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.p2
+}
+
+// reopen is the install screen of s9's site and installer root as the program
+// shows it when started again: the last run read from state.json, no checks.
+func reopen(s9 *S9Install, f *runSite) *S9Install {
+	n := NewS9Install(s9.appState, s9.paths, s9.base)
+	n.SetRunner(f.run)
+	n.SetExec(f.exec)
+	n.SetSize(120, 300)
+	n.SyncFromState(s9.appState)
+	return n
+}
+
+// f (from the first step) goes through the checks as 실행 does: run first when
+// they have not, waited for when they run, and no run on a ✗.
+func TestFreshNeedsTheChecks(t *testing.T) {
+	s9, f := newRunScreen(t)
+	f.classReady = true
+	p := newPump(s9)
+	p.pressRun()
+	p.until(t, "the first run ends", func() bool { return s9.ex != nil && s9.ex.done })
+	if s9.ex.outcome != plan.OutcomeOK {
+		t.Fatalf("first run: %s", s9.ex.outcome)
+	}
+
+	// not run yet (the program started again): they run, then the question
+	s9 = reopen(s9, f)
+	p = newPump(s9)
+	before := f.checksRun()             // one round, of the first run
+	p.key(tea.KeyMsg{Type: tea.KeyTab}) // off the archive path, where f is text
+	p.key(runeKey("f"))
+	if !strings.Contains(plainView(s9), "사전 확인을 먼저 실행합니다") || s9.confirm != "" {
+		t.Fatalf("f asks before the checks:\n%s", plainView(s9))
+	}
+	p.until(t, "the question after the checks", func() bool { return s9.confirm == "fresh" })
+	if f.checksRun() != 2*before {
+		t.Errorf("%d P2 runs, want %d", f.checksRun()-before, before)
+	}
+	f.mu.Lock()
+	f.ran = nil
+	f.mu.Unlock()
+	p.key(runeKey("y"))
+	p.until(t, "the fresh run ends", func() bool { return s9.ex != nil && s9.ex.done })
+	if got := f.playbooks(); !strings.HasPrefix(got, "shell setup-k8s-installer setup-control-node") {
+		t.Errorf("from the start ran %s", got)
+	}
+
+	// a check ✗: no question, nothing runs
+	s9 = reopen(s9, f)
+	p = newPump(s9)
+	f.mu.Lock()
+	f.sudoFails, f.ran = true, nil
+	f.mu.Unlock()
+	p.key(tea.KeyMsg{Type: tea.KeyTab})
+	p.key(runeKey("c"))
+	p.until(t, "the checks end", func() bool { return !s9.checking })
+	p.key(runeKey("f"))
+	p.key(runeKey("y"))
+	if v := plainView(s9); !strings.Contains(v, "사전 확인 ✗: P2") || s9.confirm != "" || s9.ex != nil || f.playbooks() != "" {
+		t.Errorf("f ran past P2 ✗ (%q):\n%s", f.playbooks(), v)
+	}
+
+	// checks under way: waited for, then the question
+	s9 = reopen(s9, f)
+	p = newPump(s9)
+	f.mu.Lock()
+	f.sudoFails = false
+	f.mu.Unlock()
+	p.key(tea.KeyMsg{Type: tea.KeyTab})
+	p.key(runeKey("c"))
+	p.key(runeKey("f"))
+	if !strings.Contains(plainView(s9), "사전 확인이 끝나면 실행합니다") || s9.confirm != "" || s9.ex != nil {
+		t.Errorf("f during the checks:\n%s", plainView(s9))
+	}
+	p.until(t, "the question after the checks", func() bool { return s9.confirm == "fresh" })
+}
+
+// Checks of a site saved again since do not let a run start: 실행 runs them
+// again for the site as it is now.
+func TestRunAfterTheSiteChangedRunsTheChecksAgain(t *testing.T) {
+	s9, f := newRunScreen(t)
+	f.classReady = true
+	p := newPump(s9)
+	p.key(tea.KeyMsg{Type: tea.KeyTab})
+	p.key(runeKey("c"))
+	p.until(t, "the checks end", func() bool { return !s9.checking })
+	once := f.checksRun()
+	if _, failed := plan.CheckVerdict(s9.steps, s9.checks); len(failed) > 0 || once == 0 {
+		t.Fatalf("checks: %v, ran %d", failed, once)
+	}
+	os.WriteFile(s9.paths.Inventory, []byte("all: {children: {}}\n"), 0644)
+	p.pressRun()
+	if !strings.Contains(plainView(s9), "사전 확인을 먼저 실행합니다") || s9.ex != nil {
+		t.Fatalf("ran on the checks of the old site:\n%s", plainView(s9))
+	}
+	p.until(t, "the run ends", func() bool { return s9.ex != nil && s9.ex.done })
+	if f.checksRun() != 2*once || s9.ex.outcome != plan.OutcomeOK {
+		t.Errorf("%d P2 runs, want %d; %s", f.checksRun(), 2*once, s9.ex.outcome)
 	}
 }
 

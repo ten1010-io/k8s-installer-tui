@@ -59,6 +59,7 @@ type checkDoneMsg struct {
 // keyReadyMsg: the key pair is there (or err), the terminal can go to ssh-copy-id
 // for nodes.
 type keyReadyMsg struct {
+	id    int // of the k it answers (S9Install.prepID)
 	err   error
 	nodes []plan.SSHNode
 }
@@ -96,6 +97,8 @@ type S9Install struct {
 	pass      textinput.Model
 	asking    bool
 	sending   bool
+	preparing bool // k: the key pair is being made, prepID is its answer
+	prepID    int
 	send      *sendRun // the one-password send under way, nil for k
 	sendLines []string
 
@@ -282,19 +285,21 @@ func (s *S9Install) runP2() tea.Cmd {
 
 // refusing are the nodes P2 found refusing the key, which k and p send it to.
 func (s *S9Install) refusing() []plan.SSHNode {
-	if s.checking || s.sending {
+	if s.checking || s.sending || s.preparing {
 		return nil
 	}
 	return plan.Refusing(s.ssh)
 }
 
 // prepareKey makes the key pair when there is none, before the terminal goes to
-// ssh-copy-id (k).
+// ssh-copy-id (k). Until its answer comes nothing else starts (preparing).
 func (s *S9Install) prepareKey(nodes []plan.SSHNode) tea.Cmd {
-	s.message = "키 준비 중... (configure-control-node-ssh.sh)"
-	opts, run := s.opts, s.run
+	s.message = "키 준비 중..."
+	s.preparing = true
+	s.prepID++
+	id, opts, run := s.prepID, s.opts, s.run
 	return func() tea.Msg {
-		return keyReadyMsg{err: plan.PrepareKey(context.Background(), opts, run, plan.DefaultSSHKey()), nodes: nodes}
+		return keyReadyMsg{id: id, err: plan.PrepareKey(context.Background(), opts, run, plan.DefaultSSHKey()), nodes: nodes}
 	}
 }
 
@@ -302,12 +307,21 @@ func (s *S9Install) prepareKey(nodes []plan.SSHNode) tea.Cmd {
 // password lives on only in the goroutine that sends, which zeroes it at the end.
 func (s *S9Install) sendWithPassword() tea.Cmd {
 	password := []byte(s.pass.Value())
+	started := false
+	defer func() {
+		if !started {
+			for i := range password {
+				password[i] = 0
+			}
+		}
+	}()
 	s.closePass()
 	nodes := s.refusing()
 	if len(password) == 0 || len(nodes) == 0 {
 		s.message = "비밀번호가 비어 있어 보내지 않았습니다"
 		return nil
 	}
+	started = true // the goroutine zeroes it from here
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &sendRun{ch: make(chan tea.Msg), cancel: cancel, done: make(chan struct{})}
 	s.send, s.sending = r, true
@@ -369,10 +383,13 @@ func (s *S9Install) closePass() {
 
 // Busy holds the wizard on this screen while the password is asked or the key
 // sent: the messages of the send come to this screen only.
-func (s *S9Install) Busy() bool { return s.asking || s.sending }
+func (s *S9Install) Busy() bool { return s.asking || s.sending || s.preparing }
 
 // BusyReason is what the wizard says when it does not leave.
 func (s *S9Install) BusyReason() string {
+	if s.preparing {
+		return "키를 준비하는 중입니다. 끝난 뒤 이동하세요"
+	}
 	if s.sending {
 		return "키를 보내는 중입니다. 끝나거나 Ctrl+C 로 중단한 뒤 이동하세요"
 	}
@@ -452,12 +469,19 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, nil
 
 	case keyReadyMsg:
+		if msg.id != s.prepID || !s.preparing || s.sending {
+			return s, nil // of a k that is over, or a send runs already
+		}
+		s.preparing = false
 		if msg.err != nil {
 			s.message = "키 준비 실패: " + msg.err.Error()
 			return s, nil
 		}
 		s.message = ""
-		// the terminal goes to ssh-copy-id, which asks each password itself
+		// the terminal goes to ssh-copy-id, which asks each password itself;
+		// sending until it gives the terminal back (sendDoneMsg without a run)
+		s.sending = true
+		s.sendLines = []string{"터미널에서 키를 보내는 중 (ssh-copy-id)"}
 		cmd := exec.Command("bash", "-c", plan.AskSendScript(plan.DefaultSSHKey(), msg.nodes, true))
 		return s, tea.ExecProcess(cmd, func(err error) tea.Msg { return sendDoneMsg{err: err} })
 

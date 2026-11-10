@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,7 +42,7 @@ func main() {
 	checkSSH := flag.Bool("check-ssh", false, "화면 없이 --inventory 의 모든 노드가 이 제어 노드의 키 (~/.ssh/id_rsa) 를 받고 비밀번호 없이 sudo 하는지 "+
 		"표로 출력 (읽기만, known_hosts 도 그대로). 0 모두 준비됨, 1 준비 안 된 노드 있음, 2 실행 못 함")
 	sendSSHKey := flag.Bool("send-ssh-key", false, "화면 없이 키를 받지 않는 노드에 ssh-copy-id 로 키를 보내고 (비밀번호는 노드마다 ssh 가 물음) "+
-		"--check-ssh 의 표를 출력. 키가 없으면 <installer-root>/ansible/configure-control-node-ssh.sh 로 만듦. Ctrl-C 는 130")
+		"--check-ssh 의 표를 출력. 키가 없으면 <installer-root>/ansible/configure-control-node-ssh.sh 로 만듦. Ctrl-C 130, SIGTERM 143, SIGHUP 129")
 	askPassOnce := flag.Bool("ask-pass-once", false, "--send-ssh-key 에서 비밀번호를 터미널에서 한 번만 물어 (화면에 보이지 않음) 모든 노드에 씀")
 	showVersion := flag.Bool("version", false, "버전 출력")
 	flag.Parse()
@@ -81,9 +82,28 @@ func main() {
 	opts.Root = *installerRoot
 	app := ui.NewApp(s, paths, opts, version)
 	p := tea.NewProgram(app, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	// SIGTERM and SIGHUP (the ssh session dropped) end the program too, by way
+	// of the cleanup below; bubbletea alone would quit on SIGTERM without it and
+	// die on SIGHUP
+	// not Ctrl-C: it is a key here, and a signal only while ssh-copy-id has the
+	// terminal (k), where it stops that and comes back
+	ctx, code, release := stopSignals(syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		<-ctx.Done()
+		p.Quit()
+	}()
+	_, err := p.Run()
+	// whatever ended it: a key send still running stops, its commands are
+	// killed and its helper directory is removed, in a bounded time
+	app.Stop()
+	stopped := ctx.Err() != nil
+	release()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "오류: %v\n", err)
 		os.Exit(1)
+	}
+	if stopped {
+		os.Exit(code())
 	}
 }
 
@@ -155,16 +175,17 @@ func fillAuthConfig(p fileio.Paths, s *state.AppState, installerFiles string) in
 // sshKeys is --check-ssh, and --send-ssh-key (send) with or without
 // --ask-pass-once (once): the key of the control node on the nodes of inventory,
 // then the table of every node. 0 when every node is ready, 1 when one is not,
-// 2 when it could not run, 130 on Ctrl-C.
+// 2 when it could not run, 128 + the signal when stopped (130 Ctrl-C, 143
+// SIGTERM, 129 SIGHUP: the ssh session dropped).
 func sshKeys(o plan.Options, inventory string, send, once bool) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, code, stop := stopSignals(os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	run, key := plan.ExecRun, plan.DefaultSSHKey()
 
 	if send {
 		if err := plan.PrepareKey(ctx, o, run, key); err != nil {
 			fmt.Fprintln(os.Stderr, "키 준비 실패:", err)
-			return interrupted(ctx, 2)
+			return interrupted(ctx, code, 2)
 		}
 	} else if _, err := os.Stat(key.Private); err != nil {
 		fmt.Fprintln(os.Stderr, "!", key.Private, "가 없습니다: 어느 노드도 준비되지 않았습니다. --send-ssh-key 가 만들고 보냅니다")
@@ -172,7 +193,7 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 	nodes, warnings, err := plan.ListSSHNodes(ctx, o, run, inventory)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "노드 목록 실패:", err)
-		return interrupted(ctx, 2)
+		return interrupted(ctx, code, 2)
 	}
 	if len(nodes) == 0 {
 		fmt.Fprintln(os.Stderr, inventory, "에 노드가 없습니다")
@@ -185,10 +206,10 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 	results, err := plan.ProbeNodes(ctx, run, key, nodes, !send)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "확인 실패:", err)
-		return interrupted(ctx, 2)
+		return interrupted(ctx, code, 2)
 	}
 	if ctx.Err() != nil {
-		return 130
+		return interrupted(ctx, code, 130)
 	}
 	if refusing := plan.Refusing(results); send && len(refusing) > 0 {
 		byName := map[string]int{}
@@ -199,7 +220,7 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 			password, err := readPassword(ctx)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "--ask-pass-once:", err)
-				return interrupted(ctx, 2)
+				return interrupted(ctx, code, 2)
 			}
 			fmt.Fprintf(os.Stderr, "── 키 보내는 중 (%d대)\n", len(refusing))
 			err = plan.SendKeyWithPassword(ctx, run, key, refusing, password, func(r plan.NodeSSH) {
@@ -217,16 +238,26 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 				if ctx.Err() == nil {
 					fmt.Fprintln(os.Stderr, "키 보내기 실패:", err)
 				}
-				return interrupted(ctx, 2)
+				return interrupted(ctx, code, 2)
 			}
 		} else {
 			// ssh asks each password on this terminal; Ctrl-C reaches it and ends
-			// the script, and this process sees it through ctx
+			// the script, and this process sees it through ctx. A SIGTERM or
+			// SIGHUP to this process alone is passed on to the job
 			cmd := exec.Command("bash", "-c", plan.AskSendScript(key, refusing, false))
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
+			ran := make(chan struct{})
+			go func() {
+				select {
+				case <-ctx.Done():
+					plan.TerminateJob()
+				case <-ran:
+				}
+			}()
 			_ = cmd.Run()
+			close(ran)
 			if ctx.Err() != nil {
-				return 130
+				return interrupted(ctx, code, 130)
 			}
 			for _, n := range refusing {
 				results[byName[n.Name]] = plan.ProbeNode(ctx, run, key, n, "")
@@ -234,7 +265,7 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 		}
 	}
 	if ctx.Err() != nil {
-		return 130
+		return interrupted(ctx, code, 130)
 	}
 
 	fmt.Print("\n" + plan.SSHTable(results))
@@ -248,13 +279,35 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 	return 0
 }
 
-// interrupted is 130 after Ctrl-C, else code.
-func interrupted(ctx context.Context, code int) int {
+// interrupted is the exit status of the signal that stopped ctx, else def.
+func interrupted(ctx context.Context, code func() int, def int) int {
 	if ctx.Err() != nil {
-		fmt.Fprintln(os.Stderr, "중단했습니다")
-		return 130
+		fmt.Fprintf(os.Stderr, "중단했습니다 (종료 코드 %d)\n", code())
+		return code()
 	}
-	return code
+	return def
+}
+
+// stopSignals: ctx ends on one of sigs (Ctrl-C, SIGTERM, SIGHUP: the ssh session dropped);
+// code is then the exit status, 128 + the first signal: 130, 143 or 129.
+func stopSignals(sigs ...os.Signal) (ctx context.Context, code func() int, release func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan os.Signal, 4)
+	signal.Notify(ch, sigs...)
+	var got atomic.Int32
+	go func() {
+		for s := range ch {
+			if sig, ok := s.(syscall.Signal); ok {
+				got.CompareAndSwap(0, int32(sig))
+			}
+			cancel()
+		}
+	}()
+	return ctx, func() int { return 128 + int(got.Load()) }, func() {
+		signal.Stop(ch)
+		close(ch)
+		cancel()
+	}
 }
 
 // readPassword asks the password on the terminal without echo. On Ctrl-C the

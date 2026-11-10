@@ -367,10 +367,98 @@ func TestPlanScreenQuitsOnASecondCtrlC(t *testing.T) {
 	if _, quit := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit != nil {
 		t.Fatal("the first Ctrl+C quits")
 	}
-	if _, quit := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit == nil {
-		t.Fatal("the second Ctrl+C does not quit")
+	// the wait for the send runs off the update loop: the footer says so, and
+	// the program quits on its message
+	_, cleanup := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cleanup == nil || !strings.Contains(app.keyHints(200), "정리 중") {
+		t.Fatalf("the second Ctrl+C: %v %s", cleanup, app.keyHints(200))
 	}
+	msg := cleanup()
 	if left := helperDirs(); len(left) > 0 {
 		t.Errorf("quit before the helper directory was removed: %v", left)
+	}
+	if _, quit := app.Update(msg); quit == nil || fmt.Sprintf("%T", quit()) != "tea.QuitMsg" {
+		t.Error("no quit after the cleanup")
+	}
+}
+
+// k twice, or p while k prepares the key: one terminal send, never a terminal
+// send during a password send, and the configure script once.
+func TestPlanScreenStartsOneSendAtATime(t *testing.T) {
+	app, s9, site := newSSHApp(t)
+	_, first := s9.Update(key("k"))
+	_, second := s9.Update(key("k"))
+	if first == nil || second != nil || !s9.Busy() {
+		t.Fatalf("k twice: %v %v busy %v", first != nil, second != nil, s9.Busy())
+	}
+	if _, p := s9.Update(key("p")); p != nil || strings.Contains(view(s9), "SSH 비밀번호") {
+		t.Error("p asks a password while k prepares the key")
+	}
+	at := app.current
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if app.current != at || !strings.Contains(strings.Join(app.screenErrors, " "), "키를 준비하는 중") {
+		t.Errorf("left while preparing: %q", app.screenErrors)
+	}
+	ready := first()
+	if _, exec := s9.Update(ready); exec == nil {
+		t.Fatal("no terminal after the key is ready")
+	}
+	if _, again := s9.Update(ready); again != nil {
+		t.Error("the same answer hands the terminal over twice")
+	}
+	var configures int
+	for _, c := range site.calls {
+		if strings.Contains(c, "configure-control-node-ssh.sh") {
+			configures++
+		}
+	}
+	if configures != 1 {
+		t.Errorf("configure-control-node-ssh.sh ran %d times", configures)
+	}
+}
+
+// Ctrl+C with the last message of a send already on its way: the send ends as
+// it is, and the next Ctrl+C quits.
+func TestPlanScreenCtrlCAsTheSendEnds(t *testing.T) {
+	app, s9, _ := newSSHApp(t)
+	s9.Update(key("p"))
+	s9.Update(key("pw"))
+	_, cmd := s9.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	var last tea.Msg
+	for i := 0; cmd != nil && i < 10; i++ {
+		last = cmd()
+		if strings.HasSuffix(fmt.Sprintf("%T", last), "sendDoneMsg") {
+			break
+		}
+		_, cmd = s9.Update(last)
+	}
+	if _, quit := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit != nil {
+		t.Error("the first Ctrl+C quits during the send")
+	}
+	if _, p2 := s9.Update(last); p2 != nil {
+		s9.Update(p2())
+	}
+	if s9.Busy() {
+		t.Error("busy after the send ended")
+	}
+	if _, quit := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quit == nil {
+		t.Error("Ctrl+C does not quit after the send ended")
+	}
+}
+
+// The program ended some other way (SIGTERM, SIGHUP: main quits it): App.Stop,
+// which main calls after Run, ends a send under way and removes its helper.
+func TestAppStopEndsASend(t *testing.T) {
+	app, s9, site := newSSHApp(t)
+	site.block = true
+	s9.Update(key("p"))
+	s9.Update(key("pw"))
+	s9.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for i := 0; i < 200 && len(helperDirs()) == 0; i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	app.Stop()
+	if left := helperDirs(); len(left) > 0 {
+		t.Errorf("left after Stop: %v", left)
 	}
 }

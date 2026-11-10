@@ -15,3 +15,14 @@ func fileOwner(fi os.FileInfo) (int, bool) { return 0, false }
 
 // TerminateJob: no process groups here.
 func TerminateJob() {}
+
+// setGroup: no process groups here.
+func setGroup(cmd *exec.Cmd) {}
+
+// interruptTree: no signals here; the command is killed.
+func interruptTree(cmd *exec.Cmd) error { return cmd.Process.Kill() }
+
+// lockFile: no flock here; the file is opened, nothing is held.
+func lockFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+}

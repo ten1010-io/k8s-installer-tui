@@ -3,8 +3,12 @@
 package plan
 
 import (
+	"errors"
+	"io"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -35,4 +39,39 @@ func TerminateJob() {
 	if syscall.Getpgrp() == os.Getpid() {
 		_ = syscall.Kill(-os.Getpid(), syscall.SIGTERM)
 	}
+}
+
+// setGroup makes the command the leader of a process group of its own, which
+// interruptTree and killTree reach whole, and which Ctrl-C on the terminal does
+// not (this program decides what it stops).
+func setGroup(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
+
+// interruptTree sends SIGINT to the process group the command leads: ansible
+// stops as on Ctrl-C.
+func interruptTree(cmd *exec.Cmd) error {
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGINT); err == nil {
+		return nil
+	}
+	return cmd.Process.Signal(syscall.SIGINT)
+}
+
+// lockFile takes the lock of a run (flock, released when the file is closed or
+// the program ends) and writes this pid into it; a LockedError with the pid of
+// the holder when another has it.
+func lockFile(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		pid, _ := io.ReadAll(f)
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, &LockedError{Path: path, PID: strings.TrimSpace(string(pid))}
+		}
+		return nil, err
+	}
+	_ = f.Truncate(0)
+	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
+	return f, nil
 }

@@ -19,14 +19,16 @@ import (
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
-// Kind tells a check (looked at, nothing changes) from a playbook (run) and from
-// commands of the control node (run).
+// Kind tells a check (looked at, nothing changes) from a playbook (run), from
+// commands of the control node (run) and from what a person does (Manual: the run
+// stops there until the operator says it is done and a check agrees).
 type Kind int
 
 const (
 	Check Kind = iota
 	Playbook
 	Shell
+	Manual
 )
 
 type Step struct {
@@ -45,6 +47,10 @@ type Step struct {
 	Optional bool // the operator may leave it out
 	Skip     bool // left out: optional and turned off, or missing what it needs
 	SkipWhy  string
+	// WithPrev: runs in the stage of the step before it, at the same time (Stages)
+	WithPrev bool
+	// Classes are the StorageClasses a Manual step waits for (StorageNeeds)
+	Classes []string
 }
 
 // Options are what the screen asks besides the settings.
@@ -79,6 +85,9 @@ type Options struct {
 	// (fileio.Paths.AuditPolicy): the check of an existing site puts the policy of
 	// the node there when nothing is. Empty: the check writes nothing
 	AuditPolicy string
+	// StorageVars are the storage keys of files/aipub/vars.yml the wizard does
+	// not manage (ReadStorageVars), which say what StorageClasses AIPub claims
+	StorageVars map[string]string
 }
 
 func DefaultOptions() Options {
@@ -205,6 +214,9 @@ func build(s *state.AppState, o Options) []Step {
 		Step{ID: "A1", Title: "setup-network", Kind: Playbook, Playbook: "aipub-playbooks/setup-network.yml",
 			Note: "Cilium, L2 VIP " + s.K8sIngressVIP + ". 끝나면 노드가 Ready"},
 		cert,
+		// beside setup-cert, which touches no storage: the driver needs the nodes
+		// Ready (A1), and base, monitoring and aipub its classes (manual.go)
+		storageStep(s, o),
 	)
 	direct := o.direct(cp)
 	jwks := cp.HasStage(state.StageAfterAipub) && !direct
@@ -384,6 +396,12 @@ func Script(steps []Step, o Options, savedIn string) string {
 		switch {
 		case st.Kind == Check:
 			fmt.Fprintf(&b, "# %s %s: %s\n", st.ID, st.Title, st.Note)
+		case st.Kind == Manual && st.Skip:
+			fmt.Fprintf(&b, "# %s %s: 건너뜀 (%s)\n", st.ID, st.Title, st.SkipWhy)
+		case st.Kind == Manual:
+			// a person running the script stops here too; without a terminal it goes on
+			fmt.Fprintf(&b, "# %s %s (수동): %s\nread -r -p %s _ || true\n", st.ID, st.Title, st.Note,
+				shellQuote("── "+st.ID+" "+ManualPrompt(st)+". 설치했으면 Enter: "))
 		case st.Skip:
 			fmt.Fprintf(&b, "# %s %s: 건너뜀 (%s)\n#   %s\n", st.ID, st.Title, st.SkipWhy, strings.ReplaceAll(Command(st), "\n", "\n#   "))
 		default:

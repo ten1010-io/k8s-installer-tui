@@ -154,10 +154,19 @@ expect "check before a key exists" '^node-nopw +erin@127\.0\.0\.1:2224 +비밀�
 # file there): the cause is said, nothing is sent
 rm -rf /home/ops/.cache && su - ops -c 'touch ~/.cache'
 RUN_ENV=XDG_RUNTIME_DIR=/tmp/xdg run "no place to run the helper" 2 password --send-ssh-key --ask-pass-once
-expect "no place to run the helper" 'SSH_ASKPASS 도우미를 실행할 수 있는 디렉터리가 없어 키를 보내지 않았습니다 \(noexec'
+expect "no place to run the helper" 'SSH_ASKPASS 도우미를 안전하게 실행할 수 있는 디렉터리가 없어 키를 보내지 않았습니다 \(noexec'
 reject "no place to run the helper" 'node-sudo:'
 reject "no place to run the helper" "p@ss"
 rm -f /home/ops/.cache
+
+# ~/.cache/k8s-installer-tui made by someone else (root, for alice): never used
+install -d -o ops -g ops -m 700 /home/ops/.cache
+install -d -o alice -g alice -m 700 /home/ops/.cache/k8s-installer-tui
+run "helper directory of another user" 2 password --send-ssh-key --ask-pass-once
+expect "helper directory of another user" 'k8s-installer-tui 의 소유자 \(uid [0-9]+\) 가 이 사용자'
+reject "helper directory of another user" "p@ss"
+rm -rf /home/ops/.cache
+
 if [[ -s /home/alice/.ssh/authorized_keys ]]; then
     echo "!!! no place to run the helper: alice got a key"
     failures=$((failures + 1))
@@ -293,6 +302,29 @@ if [[ -s /home/dave/.ssh/authorized_keys ]]; then
     echo "!!! interrupted: dave got a key"
     failures=$((failures + 1))
 fi
+
+# SIGTERM, and SIGHUP as when the ssh session of the operator drops, to the tool
+# alone during the same held send: 143 and 129, no ssh-copy-id or ssh under it
+# left (it holds the password in its environment), the helper gone
+for sig in TERM:143 HUP:129; do
+    name="SIG${sig%%:*}"
+    signal_feed() { sleep 8; printf '%s\n' "$PASSWORD"; sleep 2; pkill "-${sig%%:*}" -x k8s-installer-t; sleep 1; }
+    sed -i '1i auth optional pam_exec.so quiet /bin/sleep 6' /etc/pam.d/sshd
+    run "$name" "${sig##*:}" signal_feed --send-ssh-key --ask-pass-once
+    sed -i '1d' /etc/pam.d/sshd
+    expect "$name" '키 보내는 중 \(2대\)'
+    expect "$name" "중단했습니다 \\(종료 코드 ${sig##*:}\\)"
+    reject "$name" "$PASSWORD"
+    clean_tmp "$name"
+    if pgrep -u ops -f 'ssh-copy-id|^ssh ' >/dev/null; then
+        echo "!!! $name: left running: $(pgrep -u ops -af 'ssh-copy-id|^ssh ')"
+        failures=$((failures + 1))
+    fi
+    if [[ -s /home/dave/.ssh/authorized_keys ]]; then
+        echo "!!! $name: dave got a key"
+        failures=$((failures + 1))
+    fi
+done
 
 echo
 if [[ $failures -ne 0 ]]; then

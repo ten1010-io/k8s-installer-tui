@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
 )
 
 // becomeNodes answers the three ansible runs of P6 by what the script runs:

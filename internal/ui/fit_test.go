@@ -84,7 +84,7 @@ func TestScreensFitTerminal(t *testing.T) {
 
 			d.at("8.저장")
 			// on a low screen the viewport has a line or two, cut to fit
-			if h >= 30 && (!strings.Contains(d.screen(), "[ 확인할 점 ]") || !strings.Contains(d.screen(), "audit-policy.yaml")) {
+			if h >= 30 && !strings.Contains(d.screen(), "[ 확인할 점 ]") {
 				t.Errorf("the preview does not open on what it reports:\n%s", d.screen())
 			}
 			d.fits(h, "저장 (s)")

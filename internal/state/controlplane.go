@@ -72,6 +72,9 @@ const (
 	StageAll = StageAfterAipub
 )
 
+// AuditPolicyFile is the audit policy the audit preset points the apiserver at.
+const AuditPolicyFile = "aipub/audit-policy.yaml"
+
 // JWKSConfigFile is the Structured Authentication Config the JWKS preset points
 // the apiserver at. The wizard writes it under ansible/files from the issuer URL,
 // after the template of aipub-installer
@@ -131,7 +134,7 @@ var Presets = []Preset{
 			{Name: "audit-log", HostPath: "/var/log/aipub/usage", MountPath: "/var/log/aipub/usage", PathType: "DirectoryOrCreate"},
 		},
 		Files: []CpExtraFile{
-			{Src: "aipub/audit-policy.yaml", Dest: "/etc/kubernetes/audit-policy.yaml", Mode: "0644"},
+			{Src: AuditPolicyFile, Dest: "/etc/kubernetes/audit-policy.yaml", Mode: "0644"},
 		},
 		Provider: "AIPub 모니터링/python 팀",
 	},

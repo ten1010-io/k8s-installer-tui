@@ -360,13 +360,14 @@ func TestPreviewSiteValuesTab(t *testing.T) {
 // preview with nothing to report has no such tab.
 func TestPreviewNotesTab(t *testing.T) {
 	d, paths := newDriver(t)
+	d.app.appState.ControlPlane.Files = []state.CpExtraFile{{Src: "site/custom.yaml", Dest: "/etc/custom.yaml", Mode: "0644"}}
 	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
 	d.at("4b.컨트롤플레인")
-	d.keys(" ", "ctrl+n") // AIPub 감사 로그: its policy file is not there
+	d.keys("ctrl+n")
 	d.at("5.AIPub")
 	d.keys("ctrl+n")
 	d.at("8.저장")
-	for _, want := range []string{"[ 확인할 점 ]", "inventory.yml", "⚠ 확인할 점 1건 — '확인할 점' 탭", "audit-policy.yaml"} {
+	for _, want := range []string{"[ 확인할 점 ]", "inventory.yml", "⚠ 확인할 점 1건 — '확인할 점' 탭", "custom.yaml"} {
 		if !strings.Contains(d.screen(), want) {
 			t.Errorf("the preview lacks %q:\n%s", want, d.screen())
 		}
@@ -508,15 +509,7 @@ func TestWizardControlPlane(t *testing.T) {
 	d.at("5.AIPub")
 	d.keys("ctrl+n")
 	d.at("8.저장")
-	// the audit policy is the site's to provide; the preview says so, first, and
-	// saves (the tab is wrapped to the screen: the words compared, not the lines)
-	words := strings.Join(strings.Fields(d.screen()), " ")
-	for _, want := range []string{"[ 확인할 점 ]", "⚠ 확인할 점 1건", "컨트롤플레인 파일 1건이 ansible/files 에 없습니다",
-		"/opt/k8s-installer/ansible/files/aipub/audit-policy.yaml", "AIPub 모니터링/python 팀 제공"} {
-		if !strings.Contains(words, want) {
-			t.Errorf("preview does not warn %q:\n%s", want, d.screen())
-		}
-	}
+	// audit policy is written from template on save
 	d.keys("s")
 	if !strings.Contains(d.screen(), "저장 완료") {
 		t.Fatalf("not saved:\n%s", d.screen())
@@ -539,6 +532,9 @@ func TestWizardControlPlane(t *testing.T) {
 	files := v["k8s_cp_extra_files"].([]interface{})
 	if len(files) != 1 || files[0].(map[string]interface{})["src"] != "aipub/audit-policy.yaml" {
 		t.Errorf("cp extra files %v", files)
+	}
+	if _, err := os.Stat(paths.AuditPolicy()); err != nil {
+		t.Errorf("audit policy not written: %v", err)
 	}
 	if _, err := os.Stat(paths.WebhookConfig()); err == nil {
 		t.Error("webhook kubeconfig written with the preset off")

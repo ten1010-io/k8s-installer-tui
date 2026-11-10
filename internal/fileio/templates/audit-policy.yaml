@@ -1,0 +1,61 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - "RequestReceived"
+  - "ResponseStarted"
+  - "Panic"
+omitManagedFields: true
+rules:
+  # ── 기존 정책 ──
+  - level: RequestResponse
+    verbs: ["create", "patch", "update", "delete"]
+    resources:
+    - group: ""
+      resources: ["pods", "pods/status"]
+  - level: RequestResponse
+    verbs: ["create", "delete"]
+    resources:
+    - group: "project.aipub.ten1010.io"
+      resources: ["projects"]
+
+  # ── 노이즈 제외 ──
+  # 기존 정책 아래에 둔다 — 위 규칙들은 pods/projects 만 매칭하므로
+  # jobs·secrets 를 깎는 아래 규칙이 기존 동작을 가로챌 수 없다.
+  # 단, 뒤따르는 '추가' 규칙들보다는 반드시 위여야 한다 (first-match-wins).
+
+  # project-controller 의 Job reconcile update.
+  # 고유 오브젝트에 걸친 정상 reconcile — create/delete 는 남긴다.
+  - level: None
+    users: ["system:serviceaccount:aipub:project-controller"]
+    verbs: ["update"]
+    resources:
+    - group: "batch"
+      resources: ["jobs"]
+
+  # 오퍼레이터가 자기 설정 읽는 Secret GET.
+  # 사람(kubernetes-admin)의 조회는 그대로 남는다.
+  - level: None
+    users:
+    - "system:serviceaccount:aipub-monitoring:vmstack-operator-victoria-metrics-operator"
+    - "system:serviceaccount:trident:trident-operator"
+    verbs: ["get"]
+    resources:
+    - group: ""
+      resources: ["secrets"]
+
+  # ── 추가: aipub CR 주 리소스 + k8s native Job (주 리소스만, /status 제외) ──
+  - level: RequestResponse
+    verbs: ["create", "update", "patch", "delete"]
+    resources:
+    - group: "aipub.ten1010.io"
+      resources: ["operations", "workspaces", "chainjobs"]
+    - group: "batch"
+      resources: ["jobs"]
+
+  # ── 추가: Secret 조회 추적 ──
+  - level: Metadata
+    verbs: ["get"]
+    resources:
+    - group: ""
+      resources: ["secrets"]
+

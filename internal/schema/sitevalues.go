@@ -248,6 +248,9 @@ func FileSource(f state.CpExtraFile) string {
 			if p.ID == state.PresetJWKS {
 				return " (위저드가 issuer URL 과 CA 로 만듦, CA 가 생기기 전이면 A5.1 --fill-auth-config 가)"
 			}
+			if p.ID == state.PresetAudit {
+				return " (위저드가 템플릿으로 만듦)"
+			}
 			if p.Provider != "" {
 				return " (" + p.Title + " 정책: " + p.Provider + " 제공)"
 			}

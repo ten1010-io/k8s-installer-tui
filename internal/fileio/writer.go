@@ -22,6 +22,8 @@ var (
 	aipubVarsTemplate []byte
 	//go:embed templates/authentication-config.yaml
 	authConfigTemplate []byte
+	//go:embed templates/audit-policy.yaml
+	auditPolicyTemplate []byte
 )
 
 // The label base and the services of aipub run on (aipub_cp_node_label_key).
@@ -62,6 +64,12 @@ func (p Paths) AuthConfig() string {
 	return filepath.Join(p.FilesDir(), filepath.FromSlash(state.JWKSConfigFile))
 }
 
+// AuditPolicy is where the audit policy of the audit preset is written:
+// files/aipub/audit-policy.yaml.
+func (p Paths) AuditPolicy() string {
+	return filepath.Join(p.FilesDir(), filepath.FromSlash(state.AuditPolicyFile))
+}
+
 // DefaultPaths are the places k8s-installer reads the files from, relative to
 // its ansible directory (/opt/k8s-installer/ansible).
 func DefaultPaths(ansibleDir string) Paths {
@@ -83,6 +91,7 @@ type Rendered struct {
 	AipubVars     []byte
 	WebhookConfig []byte
 	AuthConfig    []byte
+	AuditPolicy   []byte
 	CA            CA
 }
 
@@ -110,6 +119,7 @@ func Render(p Paths, s *state.AppState) (*Rendered, error) {
 	r.WebhookConfig = WebhookConfig(s)
 	r.CA = LookupCA(s)
 	r.AuthConfig = AuthConfig(s, r.CA.PEM)
+	r.AuditPolicy = AuditPolicy(s)
 	return &r, nil
 }
 
@@ -123,10 +133,22 @@ func WriteAll(p Paths, s *state.AppState) error {
 	files := []struct {
 		path string
 		data []byte
-	}{{p.Inventory, r.Inventory}, {p.Vars, r.Vars}, {p.AipubVars, r.AipubVars}, {p.WebhookConfig(), r.WebhookConfig}, {p.AuthConfig(), r.AuthConfig}}
+	}{
+		{p.Inventory, r.Inventory},
+		{p.Vars, r.Vars},
+		{p.AipubVars, r.AipubVars},
+		{p.WebhookConfig(), r.WebhookConfig},
+		{p.AuthConfig(), r.AuthConfig},
+		{p.AuditPolicy(), r.AuditPolicy},
+	}
 	for _, f := range files {
 		if f.data == nil {
 			continue
+		}
+		if f.path == p.AuditPolicy() {
+			if _, err := os.Stat(f.path); err == nil {
+				continue // keep existing audit-policy.yaml if already placed
+			}
 		}
 		if err := writeWithBackup(f.path, f.data); err != nil {
 			return err
@@ -360,6 +382,19 @@ func WebhookConfig(s *state.AppState) []byte {
 	return out
 }
 
+// AuditPolicy is the audit policy for kube-apiserver (--audit-policy-file), nil
+// when the audit preset is off. It is the template of aipub-installer
+// (templates/audit-policy.yaml), copied to every control plane node in the clear
+// (k8s_cp_extra_files).
+func AuditPolicy(s *state.AppState) []byte {
+	if !s.AppliedControlPlane().Audit {
+		return nil
+	}
+	header := "# Written by k8s-installer-tui (AIPub 감사 로그) from the template of aipub-installer.\n" +
+		"# Copied to every control plane node in the clear by k8s_cp_extra_files.\n"
+	return append([]byte(header), auditPolicyTemplate...)
+}
+
 // addMissingKeys appends to cur, with their comments, the keys of the template it
 // does not have: variables a newer installer added since the file was written.
 func addMissingKeys(cur, tpl *yaml.Node) {
@@ -575,6 +610,7 @@ func MissingCpFiles(s *state.AppState, filesDirs ...string) []state.CpExtraFile 
 	generated := map[string]bool{
 		state.WebhookConfigFile: WebhookConfig(s) != nil,
 		state.JWKSConfigFile:    s.AppliedControlPlane().JWKS && s.JWKSIssuer() != "",
+		state.AuditPolicyFile:   AuditPolicy(s) != nil,
 	}
 	var out []state.CpExtraFile
 	for _, f := range s.AppliedControlPlane().ExtraFiles(state.StageAll) {

@@ -42,7 +42,9 @@ type S7Preview struct {
 	missing   []state.CpExtraFile // files of k8s_cp_extra_files not under ansible/files
 	caNote    []string            // the authentication config of JWKS waiting for its CA
 	binNote   []string            // helmfile chosen and the package carries no helmfile/kustomize
-	installer plan.Options        // where the installer is, for what the preview reads of the package
+	catalog   string              // one line on the catalog of the package, when it has one
+	catalogOK bool
+	installer plan.Options // where the installer is, for what the preview reads of the package
 	// installerFiles is ansible/files of the installer (setup.sh), where
 	// k8s_cp_extra_files are read from when the settings are saved elsewhere
 	installerFiles string
@@ -97,6 +99,12 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.binNote = nil
 	if r := plan.CheckAipubBin(s.installer, st); r.Warn {
 		s.binNote = r.Lines
+	}
+	s.catalog = ""
+	if st.AipubEnabled {
+		if line, ok, found := plan.CatalogSummary(s.installer); found {
+			s.catalog, s.catalogOK = line, ok
+		}
 	}
 
 	s.tabs = nil
@@ -317,6 +325,13 @@ func (s *S7Preview) View() string {
 	}
 	for _, n := range s.binNote {
 		b.WriteString(styles.StyleWarning.Render("⚠ "+n) + "\n")
+	}
+	if s.catalog != "" {
+		if s.catalogOK {
+			b.WriteString(styles.StyleMuted.Render("✓ "+s.catalog) + "\n")
+		} else {
+			b.WriteString(styles.StyleWarning.Render("⚠ "+s.catalog) + "\n")
+		}
 	}
 
 	if s.saveErr != "" {

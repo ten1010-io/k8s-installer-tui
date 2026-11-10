@@ -138,7 +138,10 @@ func (s *S9Install) runChecks() tea.Cmd {
 	s.checks["P1"] = plan.CheckInstalled(s.opts)
 	if s.appState.AipubEnabled {
 		// local reads, nothing to wait for
-		s.checks["P4"] = plan.CheckAipubBin(s.opts, s.appState)
+		if plan.HelmfileChosen(s.appState) {
+			s.checks["P4"] = plan.CheckAipubBin(s.opts, s.appState)
+		}
+		s.checks["P5"] = plan.CheckCatalog(s.opts)
 	}
 	s.checks["P2"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n true')"}}
 	s.checking = true

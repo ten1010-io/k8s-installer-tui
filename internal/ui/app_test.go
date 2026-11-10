@@ -505,3 +505,76 @@ func TestPreviewWarnsHelmfileWithoutAipubBin(t *testing.T) {
 		t.Errorf("warned although the package has aipub-bin:\n%s", view)
 	}
 }
+
+// The catalog of the package: a summary line on the preview, and P5 on the plan
+// screen, which names what the playbooks would refuse.
+func TestCatalogOnPreviewAndPlan(t *testing.T) {
+	fixture := "../../test/simulate/fixtures/new-site-helmfile/installer-root"
+	d, paths := newDriver(t)
+	s := d.app.appState
+	s.AipubEnabled = true
+	s.AipubHaModeStorageClass = "nfs-client"
+	s.AipubCpNodes = []string{"node1"}
+	s.K8sIngressVIP = "192.168.0.100"
+
+	opts := plan.DefaultOptions()
+	opts.Root = fixture
+	p := screens.NewS7Preview(s, paths, opts.AnsibleDir()+"/files")
+	p.SetInstaller(opts)
+	p.SetSize(100, 60)
+	p.SyncFromState(s)
+	if view := ansi.ReplaceAllString(p.View(), ""); !strings.Contains(view, "✓ 카탈로그 이상 없음: network 3 · base 8 · aipub 12 · monitoring 29") {
+		t.Errorf("no catalog summary:\n%s", view)
+	}
+
+	// the same package without aipub-web in its catalog
+	root := t.TempDir()
+	data, err := os.ReadFile(filepath.Join(fixture, "ansible/aipub_vars/catalog.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if !strings.Contains(l, "/aipub-web:") {
+			kept = append(kept, l)
+		}
+	}
+	broken := plan.Options{Root: root, Monitoring: true}
+	if err := os.MkdirAll(filepath.Dir(broken.CatalogPath()), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(broken.CatalogPath(), []byte(strings.Join(kept, "\n")), 0644); err != nil {
+		t.Fatal(err)
+	}
+	p.SetInstaller(broken)
+	p.SyncFromState(s)
+	if view := ansi.ReplaceAllString(p.View(), ""); !strings.Contains(view, "⚠ 카탈로그 문제 1건") || !strings.Contains(view, "module[aipub]: aipub-web 없음") {
+		t.Errorf("the preview does not say what is missing:\n%s", view)
+	}
+
+	// 9.설치: c runs the checks; P5 is read at once
+	s9 := screens.NewS9Install(s, paths, broken)
+	s9.SetSize(100, 60)
+	s9.SyncFromState(s)
+	s9.SetRunner(func(ctx context.Context, dir, name string, args ...string) ([]byte, error) { return nil, nil })
+	s9.Update(tea.KeyMsg{Type: tea.KeyDown}) // off the archive path
+	s9.Update(tea.KeyMsg{Type: tea.KeyDown})
+	s9.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	view := ansi.ReplaceAllString(s9.View(), "")
+	if !strings.Contains(view, "✗ P5  카탈로그") || !strings.Contains(view, "module[aipub]: aipub-web 없음") {
+		t.Errorf("P5 not failed on the plan screen:\n%s", view)
+	}
+
+	// without the file: skipped, with the reason
+	s9 = screens.NewS9Install(s, paths, plan.Options{Root: t.TempDir(), Monitoring: true})
+	s9.SetSize(100, 60)
+	s9.SyncFromState(s)
+	s9.SetRunner(func(ctx context.Context, dir, name string, args ...string) ([]byte, error) { return nil, nil })
+	s9.Update(tea.KeyMsg{Type: tea.KeyDown})
+	s9.Update(tea.KeyMsg{Type: tea.KeyDown})
+	s9.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	view = ansi.ReplaceAllString(s9.View(), "")
+	if !strings.Contains(view, "- P5  카탈로그") || !strings.Contains(view, "건너뜀: 카탈로그 파일이 없음") {
+		t.Errorf("P5 not skipped without the file:\n%s", view)
+	}
+}

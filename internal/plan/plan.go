@@ -113,6 +113,11 @@ func Build(s *state.AppState, o Options) []Step {
 			Note: "배포 도구가 helmfile: 패키지가 helmfile·kustomize 를 실었는지 (" + PackageFile + " 의 aipub_bin). " +
 				"없으면 사이트가 노드에 직접 두고 경로를 변수로 지정해야 함"})
 	}
+	if s.AipubEnabled {
+		steps = append(steps, Step{ID: "P5", Title: "카탈로그", Kind: Check,
+			Note: "aipub 플레이북은 모듈이 쓰는 이미지가 카탈로그 (ansible/aipub_vars/catalog.yml) 에 이름으로 없으면 실행 전에 거부합니다. " +
+				"같은 규칙으로 미리 확인 (카탈로그 파일이 없으면 건너뜀)"})
+	}
 	steps = append(steps,
 		Step{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",
 			Note: "모든 노드에 설치본 배포"},

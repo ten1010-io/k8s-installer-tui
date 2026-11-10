@@ -22,6 +22,8 @@ type App struct {
 	screenErrors []string
 	heldBusy     bool // screenErrors is the message of busy: a sub-edit held the move
 	version      string
+	// quitting: Ctrl+C was pressed and what the screen runs is being stopped
+	quitting bool
 }
 
 func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version string) *App {
@@ -63,6 +65,19 @@ var aipubOnlyScreens = map[int]bool{6: true, 7: true, 8: true}
 
 func (a *App) Init() tea.Cmd { return nil }
 
+// quitMsg: what the screen ran has stopped, the program can end.
+type quitMsg struct{}
+
+// Stop ends what any screen still runs (a key send), in a bounded time: main
+// calls it after the program ends for whatever reason, a signal included.
+func (a *App) Stop() {
+	for _, sc := range a.screenList {
+		if st, ok := sc.(interface{ Stop() }); ok {
+			st.Stop()
+		}
+	}
+}
+
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := a.update(msg)
 	a.resize()
@@ -92,6 +107,22 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			if a.quitting {
+				return a, tea.Quit // a third one: Run returns, main stops the rest
+			}
+			// a screen that runs something stops it instead (sending the key)
+			if in, ok := a.screenList[a.current].(interface{ Interrupt() bool }); ok && in.Interrupt() {
+				return a, nil
+			}
+			// and what it still runs ends before the program does, off the
+			// update loop: the screen keeps drawing meanwhile
+			if st, ok := a.screenList[a.current].(interface{ Stop() }); ok {
+				a.quitting = true
+				return a, func() tea.Msg {
+					st.Stop()
+					return quitMsg{}
+				}
+			}
 			return a, tea.Quit
 		// control keys, so no text input takes them as text: they work on every screen
 		case "pgup", "ctrl+p":
@@ -104,6 +135,9 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 		}
+
+	case quitMsg:
+		return a, tea.Quit
 
 	case screens.NavigateNextMsg:
 		return a.goNext()
@@ -148,8 +182,15 @@ func (a *App) onPreview() bool {
 // order of importance (the preview leads with its save key), as many as fit.
 func (a *App) keyHints(width int) string {
 	hints := []string{"Ctrl+N 다음", "Ctrl+P 이전", "↑↓ 이동", "Enter 선택", "Ctrl+C 종료"}
+	if a.quitting {
+		return "  정리 중… (보내던 키를 멈추는 중, Ctrl+C 로 바로 종료)"
+	}
 	if a.onPreview() {
 		hints = append([]string{"Ctrl+S 저장"}, hints...)
+	}
+	// what the screen has going on leads (the install screen sending the key)
+	if h, ok := a.screenList[a.current].(interface{ KeyHints() []string }); ok {
+		hints = append(h.KeyHints(), hints...)
 	}
 	for n := len(hints); n > 1; n-- {
 		if line := "  " + strings.Join(hints[:n], " · "); lipgloss.Width(line) <= width {
@@ -169,6 +210,9 @@ func (a *App) busy() bool {
 	if b, ok := a.screenList[a.current].(screens.Busy); ok && b.Busy() {
 		a.screenErrors = []string{"입력 중인 항목을 저장하거나 취소한 뒤 이동하세요"}
 		a.heldBusy = true
+		if r, ok := b.(interface{ BusyReason() string }); ok {
+			a.screenErrors = []string{r.BusyReason()}
+		}
 		return true
 	}
 	return false

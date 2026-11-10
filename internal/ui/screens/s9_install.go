@@ -2,10 +2,13 @@ package screens
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -29,7 +32,10 @@ import (
 //        its bottom goes on to the buttons)
 //   3  : nav slot (←/→: 이전/실행)
 //
-// Off the text input: c 사전 확인, d 명령 보기, w 스크립트 저장
+// Off the text input: c 사전 확인, d 명령 보기, w 스크립트 저장, and when P2
+// found nodes that refuse the key of the control node: k 키 보내기 (ssh asks
+// the password of each node on the terminal), p 비밀번호 한 번 (a masked input,
+// handed to ssh through SSH_ASKPASS). Both run P2 again at the end.
 
 const (
 	s9FocusArchive = iota
@@ -45,6 +51,31 @@ type checkDoneMsg struct {
 	results  map[string]plan.CheckResult
 	shell    string
 	shellSet bool
+	// what P2 found with ssh on the nodes ansible could not reach; set when P2 ran
+	ssh    []plan.NodeSSH
+	sshSet bool
+}
+
+// keyReadyMsg: the key pair is there (or err), the terminal can go to ssh-copy-id
+// for nodes.
+type keyReadyMsg struct {
+	id    int // of the k it answers (S9Install.prepID)
+	err   error
+	nodes []plan.SSHNode
+}
+
+// sendProgressMsg is a node done by the one-password send. Neither it nor
+// sendDoneMsg carries the password.
+type sendProgressMsg struct {
+	run    *sendRun
+	result plan.NodeSSH
+}
+
+// sendDoneMsg ends a send: of run for the one-password send, nil for the
+// terminal (k).
+type sendDoneMsg struct {
+	run *sendRun
+	err error
 }
 
 type S9Install struct {
@@ -58,6 +89,18 @@ type S9Install struct {
 	checks   map[string]plan.CheckResult
 	checking bool
 	message  string
+
+	// sending the key (k, p): ssh holds what P2 found, pass the masked input of
+	// p while asking, and while sending cancel stops it and progress gives each
+	// node as it is done
+	ssh       []plan.NodeSSH
+	pass      textinput.Model
+	asking    bool
+	sending   bool
+	preparing bool // k: the key pair is being made, prepID is its answer
+	prepID    int
+	send      *sendRun // the one-password send under way, nil for k
+	sendLines []string
 
 	showScript bool
 	vp         viewport.Model
@@ -73,9 +116,13 @@ func NewS9Install(s *state.AppState, paths fileio.Paths, opts plan.Options) *S9I
 	a := textinput.New()
 	a.Placeholder = "예: /media/usb/ki-cp-user-registry-artifacts.tgz (이미 넣었으면 비움)"
 	a.CharLimit = 256
+	p := textinput.New()
+	p.EchoMode = textinput.EchoPassword
+	p.CharLimit = 256
+	p.Prompt = ""
 	return &S9Install{
 		appState: s, paths: paths, opts: opts, run: plan.ExecRun,
-		archive: a, checks: map[string]plan.CheckResult{}, vp: viewport.New(80, 20), planVP: viewport.New(80, 20),
+		archive: a, pass: p, checks: map[string]plan.CheckResult{}, vp: viewport.New(80, 20), planVP: viewport.New(80, 20),
 	}
 }
 
@@ -120,6 +167,9 @@ func (s *S9Install) planFits() bool {
 }
 
 func (s *S9Install) SyncFromState(st *state.AppState) {
+	if s.asking {
+		s.closePass()
+	}
 	s.archive.SetValue(s.opts.ArchivePath)
 	s.focusIdx, s.navIdx = s9FocusArchive, 0
 	s.showScript = false
@@ -190,8 +240,7 @@ func (s *S9Install) runChecks() tea.Cmd {
 		}
 		s.checks["P5"] = plan.CheckCatalog(s.opts)
 	}
-	s.checks["P2"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n true')"}}
-	s.checking = true
+	p2 := s.runP2()
 	if s.appState.AipubEnabled {
 		s.checks["P7"] = plan.CheckResult{Lines: []string{"확인 중... (getent hosts " + strings.Join(plan.AccessHosts(s.appState), " ") + ")"}}
 	}
@@ -205,7 +254,8 @@ func (s *S9Install) runChecks() tea.Cmd {
 		s.checks["P3"] = plan.CheckResult{Lines: []string{"확인 중... (ansible -m slurp " + plan.APIServerManifest + ")"}}
 	}
 	return func() tea.Msg {
-		r := map[string]plan.CheckResult{"P2": plan.CheckSSH(context.Background(), opts, run)}
+		done := p2().(checkDoneMsg)
+		r := done.results
 		var shell string
 		r["P6"], shell = plan.CheckBecomeShell(context.Background(), opts, run)
 		if st.AipubEnabled {
@@ -218,7 +268,177 @@ func (s *S9Install) runChecks() tea.Cmd {
 			opts.ShellExecutable = shell
 			r["P3"] = plan.CheckLegacy(context.Background(), opts, st, run)
 		}
-		return checkDoneMsg{results: r, shell: shell, shellSet: true}
+		return checkDoneMsg{results: r, shell: shell, shellSet: true, ssh: done.ssh, sshSet: true}
+	}
+}
+
+// runP2 is P2 alone, which sending the key ends with.
+func (s *S9Install) runP2() tea.Cmd {
+	s.checks["P2"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n true')"}}
+	s.checking = true
+	opts, run := s.opts, s.run
+	return func() tea.Msg {
+		r, nodes := plan.CheckSSHNodes(context.Background(), opts, run)
+		return checkDoneMsg{results: map[string]plan.CheckResult{"P2": r}, ssh: nodes, sshSet: true}
+	}
+}
+
+// refusing are the nodes P2 found refusing the key, which k and p send it to.
+func (s *S9Install) refusing() []plan.SSHNode {
+	if s.checking || s.sending || s.preparing {
+		return nil
+	}
+	return plan.Refusing(s.ssh)
+}
+
+// prepareKey makes the key pair when there is none, before the terminal goes to
+// ssh-copy-id (k). Until its answer comes nothing else starts (preparing).
+func (s *S9Install) prepareKey(nodes []plan.SSHNode) tea.Cmd {
+	s.message = "키 준비 중..."
+	s.preparing = true
+	s.prepID++
+	id, opts, run := s.prepID, s.opts, s.run
+	return func() tea.Msg {
+		return keyReadyMsg{id: id, err: plan.PrepareKey(context.Background(), opts, run, plan.DefaultSSHKey()), nodes: nodes}
+	}
+}
+
+// sendWithPassword starts the one-password send (p) and clears the input: the
+// password lives on only in the goroutine that sends, which zeroes it at the end.
+func (s *S9Install) sendWithPassword() tea.Cmd {
+	password := []byte(s.pass.Value())
+	started := false
+	defer func() {
+		if !started {
+			for i := range password {
+				password[i] = 0
+			}
+		}
+	}()
+	s.closePass()
+	nodes := s.refusing()
+	if len(password) == 0 || len(nodes) == 0 {
+		s.message = "비밀번호가 비어 있어 보내지 않았습니다"
+		return nil
+	}
+	started = true // the goroutine zeroes it from here
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &sendRun{ch: make(chan tea.Msg), cancel: cancel, done: make(chan struct{})}
+	s.send, s.sending = r, true
+	s.message = ""
+	s.sendLines = []string{fmt.Sprintf("키 보내는 중 (%d대, Ctrl+C 중단)", len(nodes))}
+	opts, run := s.opts, s.run
+	go func() {
+		defer close(r.done)
+		defer close(r.ch)
+		defer func() {
+			for i := range password {
+				password[i] = 0
+			}
+		}()
+		// a screen that no longer reads (cancelled) must not hold the send up
+		put := func(m tea.Msg) {
+			select {
+			case r.ch <- m:
+			case <-ctx.Done():
+			}
+		}
+		key := plan.DefaultSSHKey()
+		if err := plan.PrepareKey(ctx, opts, run, key); err != nil {
+			put(sendDoneMsg{run: r, err: err})
+			return
+		}
+		err := plan.SendKeyWithPassword(ctx, run, key, nodes, password, func(n plan.NodeSSH) { put(sendProgressMsg{run: r, result: n}) })
+		put(sendDoneMsg{run: r, err: err})
+	}()
+	return r.wait()
+}
+
+// sendRun is one one-password send: its goroutine gives each node on ch, and
+// closes done once it has stopped and the helper directory is gone.
+type sendRun struct {
+	ch       chan tea.Msg
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopping bool
+}
+
+// wait is the next message of the send; when the goroutine stopped without its
+// last one (cancelled), the send is done as cancelled.
+func (r *sendRun) wait() tea.Cmd {
+	return func() tea.Msg {
+		if m, ok := <-r.ch; ok {
+			return m
+		}
+		return sendDoneMsg{run: r, err: context.Canceled}
+	}
+}
+
+func (s *S9Install) closePass() {
+	s.pass.Reset()
+	s.pass.Blur()
+	s.asking = false
+	s.syncFocus()
+}
+
+// Busy holds the wizard on this screen while the password is asked or the key
+// sent: the messages of the send come to this screen only.
+func (s *S9Install) Busy() bool { return s.asking || s.sending || s.preparing }
+
+// BusyReason is what the wizard says when it does not leave.
+func (s *S9Install) BusyReason() string {
+	if s.preparing {
+		return "키를 준비하는 중입니다. 끝난 뒤 이동하세요"
+	}
+	if s.sending {
+		return "키를 보내는 중입니다. 끝나거나 Ctrl+C 로 중단한 뒤 이동하세요"
+	}
+	return "비밀번호 입력 중입니다. Enter 로 보내거나 Esc 로 취소한 뒤 이동하세요"
+}
+
+// KeyHints are the keys of what is going on, for the footer.
+func (s *S9Install) KeyHints() []string {
+	switch {
+	case s.asking:
+		return []string{"Enter 보내기", "Esc 취소"}
+	case s.sending:
+		return []string{"Ctrl+C 중단"}
+	case len(s.refusing()) > 0:
+		return []string{"k·p 키 보내기"}
+	}
+	return nil
+}
+
+// Interrupt is Ctrl+C on this screen: it stops a send, or leaves the password
+// input, instead of quitting. False when there is nothing to stop, or when a
+// stop is under way already: the second Ctrl+C quits (after Stop).
+func (s *S9Install) Interrupt() bool {
+	switch {
+	case s.send != nil && !s.send.stopping:
+		s.send.stopping = true
+		s.send.cancel()
+		s.message = "중단하는 중... (한 번 더 Ctrl+C 면 종료)"
+		return true
+	case s.asking:
+		s.closePass()
+		return true
+	}
+	return false
+}
+
+// Stop ends a send before the program quits: cancelled, and waited for until
+// its helper directory is removed (the commands it runs are killed on cancel).
+func (s *S9Install) Stop() {
+	if s.asking {
+		s.closePass()
+	}
+	if s.send == nil {
+		return
+	}
+	s.send.cancel()
+	select {
+	case <-s.send.done:
+	case <-time.After(15 * time.Second):
 	}
 }
 
@@ -239,13 +459,75 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.checks[id] = r
 		}
 		s.checking = false
+		if msg.sshSet {
+			s.ssh = msg.ssh
+		}
 		if msg.shellSet {
 			s.opts.ShellExecutable = msg.shell
 			s.rebuild()
 		}
 		return s, nil
 
+	case keyReadyMsg:
+		if msg.id != s.prepID || !s.preparing || s.sending {
+			return s, nil // of a k that is over, or a send runs already
+		}
+		s.preparing = false
+		if msg.err != nil {
+			s.message = "키 준비 실패: " + msg.err.Error()
+			return s, nil
+		}
+		s.message = ""
+		// the terminal goes to ssh-copy-id, which asks each password itself;
+		// sending until it gives the terminal back (sendDoneMsg without a run)
+		s.sending = true
+		s.sendLines = []string{"터미널에서 키를 보내는 중 (ssh-copy-id)"}
+		cmd := exec.Command("bash", "-c", plan.AskSendScript(plan.DefaultSSHKey(), msg.nodes, true))
+		return s, tea.ExecProcess(cmd, func(err error) tea.Msg { return sendDoneMsg{err: err} })
+
+	case sendProgressMsg:
+		if msg.run != s.send {
+			return s, nil // of a send that is over
+		}
+		r := msg.result
+		line := r.Node.Name + ": 키 받음"
+		if r.Key != plan.KeyOK {
+			line = r.Node.Name + ": " + r.Label() + " — " + r.Note()
+		}
+		s.sendLines = append(s.sendLines, line)
+		return s, s.send.wait()
+
+	case sendDoneMsg:
+		if msg.run != s.send {
+			return s, nil
+		}
+		s.sending, s.send = false, nil
+		switch {
+		case errors.Is(msg.err, context.Canceled):
+			s.message = "키 보내기를 중단했습니다. P2 를 다시 확인합니다"
+		case msg.err != nil:
+			s.message = "키 보내기가 끝나지 않았습니다 (" + msg.err.Error() + "). P2 를 다시 확인합니다"
+		default:
+			s.message = "키 보내기를 마쳤습니다. P2 를 다시 확인합니다"
+		}
+		return s, s.runP2()
+
 	case tea.KeyMsg:
+		if s.asking {
+			switch msg.String() {
+			case "esc":
+				s.closePass()
+				return s, nil
+			case "enter":
+				return s, s.sendWithPassword()
+			}
+			var cmd tea.Cmd
+			s.pass, cmd = s.pass.Update(msg)
+			return s, cmd
+		}
+		if s.sending {
+			return s, nil // Ctrl+C stops it (Interrupt)
+		}
 		typing := s.focusIdx == s9FocusArchive && !s.showScript && msg.Type == tea.KeyRunes
 		if s.showScript {
 			switch msg.String() {
@@ -273,6 +555,19 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "c":
 				if !s.checking {
 					return s, s.runChecks()
+				}
+				return s, nil
+			case "k":
+				if nodes := s.refusing(); len(nodes) > 0 {
+					return s, s.prepareKey(nodes)
+				}
+				return s, nil
+			case "p":
+				if len(s.refusing()) > 0 {
+					s.asking = true
+					s.archive.Blur()
+					s.pass.Reset()
+					return s, s.pass.Focus()
 				}
 				return s, nil
 			}
@@ -344,6 +639,33 @@ func preflightOf(key string) (schema.Var, bool) {
 	return schema.Var{}, false
 }
 
+// viewSend is what goes under P2 about sending the key: the offer when nodes
+// refuse it, or the progress of a send. The password input is in bottom(),
+// where the plan scrolled anywhere does not hide it.
+func (s *S9Install) viewSend() string {
+	var b strings.Builder
+	switch {
+	case s.sending:
+		for _, l := range s.sendLines {
+			b.WriteString(styles.StylePrimary.Render("        "+l) + "\n")
+		}
+	case s.asking:
+		b.WriteString(styles.StylePrimary.Render("        비밀번호는 아래 입력칸에") + "\n")
+	default:
+		nodes := s.refusing()
+		if len(nodes) == 0 {
+			break
+		}
+		var names []string
+		for _, n := range nodes {
+			names = append(names, n.Name)
+		}
+		b.WriteString(styles.StyleWarning.Render("        키를 받지 않는 노드: "+strings.Join(names, " ")+
+			" — k 키 보내기 (ssh 가 노드마다 비밀번호를 물음)   p 비밀번호 한 번 입력") + "\n")
+	}
+	return b.String()
+}
+
 func (s *S9Install) View() string {
 	var b strings.Builder
 	if s.showScript {
@@ -365,11 +687,16 @@ func (s *S9Install) View() string {
 			b.WriteString(styles.StyleMuted.Render("  "+bar+" ── Tab·↓ 로 와서 ↑/↓ 스크롤") + "\n")
 		}
 	}
+	above := strings.Count(b.String(), "\n") // where bottom() starts
 	b.WriteString(s.bottom())
 
 	// a screen too low even for a line of the plan: the buttons stay, the
 	// focused part in sight over them. top ends on a blank line after the inputs
 	view := b.String()
+	if s.asking {
+		// the password input, the first lines of bottom()
+		return FitView(view, above+1, above+3, s.width, s.height)
+	}
 	n := strings.Count(top, "\n")
 	start, end := n-1, n // 모니터링
 	switch s.focusIdx {
@@ -481,6 +808,9 @@ func (s *S9Install) planText() string {
 				b.WriteString(style.Render("        "+l) + "\n")
 			}
 		}
+		if st.ID == "P2" {
+			b.WriteString(s.viewSend())
+		}
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -488,10 +818,23 @@ func (s *S9Install) planText() string {
 // bottom is what is under the plan: a message, the keys and the buttons.
 func (s *S9Install) bottom() string {
 	var b strings.Builder
+	if s.asking {
+		// first, for View to keep it in sight (askLines)
+		var names []string
+		for _, n := range s.refusing() {
+			names = append(names, n.Name)
+		}
+		b.WriteString("\n" + styles.StylePrimary.Render("SSH 비밀번호 ("+strings.Join(names, " ")+" 공통): ") + s.pass.View() + "\n")
+		b.WriteString(styles.StyleMuted.Render("Enter 보내기   Esc 취소   (저장하지 않으며 보낸 뒤 지웁니다)") + "\n")
+	}
 	if s.message != "" {
 		b.WriteString("\n" + styles.StylePrimary.Render(s.message) + "\n")
 	}
-	b.WriteString("\n" + styles.StyleMuted.Render("  c 사전 확인   d 명령 보기   w 스크립트 저장 (install-plan.sh)   — 입력 칸 밖에서") + "\n")
+	keys := "  c 사전 확인   d 명령 보기   w 스크립트 저장 (install-plan.sh)"
+	if len(s.refusing()) > 0 {
+		keys += "   k·p 키 보내기"
+	}
+	b.WriteString("\n" + styles.StyleMuted.Render(keys+"   — 입력 칸 밖에서") + "\n")
 
 	prevFocused := s.focusIdx == s9FocusNav && s.navIdx == 0
 	runFocused := s.focusIdx == s9FocusNav && s.navIdx == 1

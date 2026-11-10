@@ -60,6 +60,7 @@ type S7Preview struct {
 	missing   []state.CpExtraFile // files of k8s_cp_extra_files not under ansible/files
 	caNote    []string            // the authentication config of JWKS waiting for its CA
 	binNote   []string            // helmfile chosen and the package carries no helmfile/kustomize
+	vipNote   []string            // validator.Warnings: worth a look, saving does not wait on it
 	catalog   string              // one line on the catalog of the package, when it has one
 	catalogOK bool
 	installer plan.Options // where the installer is, for what the preview reads of the package
@@ -223,6 +224,9 @@ func (s *S7Preview) buildNotes() {
 	for _, n := range s.caNote {
 		add(styles.StyleWarning, "⚠ "+n)
 	}
+	for _, n := range s.vipNote {
+		add(styles.StyleWarning, "⚠ "+n)
+	}
 	for _, n := range s.binNote {
 		add(styles.StyleWarning, "⚠ "+n)
 	}
@@ -238,7 +242,7 @@ func (s *S7Preview) buildNotes() {
 // warningCount is the number of warnings and notes of the 확인할 점 tab (the
 // errors are counted apart).
 func (s *S7Preview) warningCount() int {
-	n := len(s.warnings) + len(s.missing) + len(s.caNote) + len(s.binNote)
+	n := len(s.warnings) + len(s.missing) + len(s.caNote) + len(s.vipNote) + len(s.binNote)
 	if s.catalog != "" && !s.catalogOK {
 		n++
 	}
@@ -263,6 +267,7 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.saved = false
 	s.saveErr = ""
 
+	s.vipNote = validator.Warnings(st)
 	s.binNote = nil
 	if r := plan.CheckAipubBin(s.installer, st); r.Warn {
 		s.binNote = r.Lines

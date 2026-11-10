@@ -331,6 +331,16 @@ func validateKubernetes(s *state.AppState) []Error {
 		}
 	}
 
+	// the VIPs that passed the checks above, against the rest of the network
+	if ip := net.ParseIP(s.K8sIngressVIP); ip != nil {
+		errs = append(errs, checkLBVIP(s, "k8s_ingress_vip", ip)...)
+	}
+	if s.K8sIngressMode == 1 && s.K8sGatewayVIP != s.K8sIngressVIP {
+		if ip := net.ParseIP(s.K8sGatewayVIP); ip != nil {
+			errs = append(errs, checkLBVIP(s, "k8s_gateway_vip", ip)...)
+		}
+	}
+
 	if s.K8sIngressHostNetworkPort <= 0 || s.K8sIngressHostNetworkPort > 65535 {
 		errs = append(errs, Error{"k8s_ingress_host_network_port", "포트는 1-65535 범위여야 합니다"})
 	}
@@ -340,6 +350,71 @@ func validateKubernetes(s *state.AppState) []Error {
 		errs = append(errs, Error{"aipub_load_balancers", "VIP를 받을 마스터(k8s_cp) 노드가 없습니다"})
 	}
 
+	return errs
+}
+
+// Warnings are what may be meant and is worth a look, which saving does not
+// wait on: a load balancer VIP outside every internal subnet works on a second
+// (external) network of the nodes, nothing of the installers limits it to the
+// internal one.
+func Warnings(s *state.AppState) []string {
+	if !s.AipubEnabled {
+		return nil
+	}
+	var subnets []*net.IPNet
+	for _, cidr := range s.InternalNetworkSubnets {
+		if _, n, err := net.ParseCIDR(cidr); err == nil {
+			subnets = append(subnets, n)
+		}
+	}
+	if len(subnets) == 0 {
+		return nil
+	}
+	vips := []struct{ field, vip string }{{"k8s_ingress_vip", s.K8sIngressVIP}}
+	if s.K8sIngressMode == 1 && s.K8sGatewayVIP != s.K8sIngressVIP {
+		vips = append(vips, struct{ field, vip string }{"k8s_gateway_vip", s.K8sGatewayVIP})
+	}
+	var out []string
+	for _, v := range vips {
+		ip := net.ParseIP(v.vip)
+		if ip == nil {
+			continue
+		}
+		inside := false
+		for _, n := range subnets {
+			inside = inside || n.Contains(ip)
+		}
+		if !inside {
+			out = append(out, fmt.Sprintf("%s: VIP %s가 내부망 대역 (%s) 밖 — 의도한 구성인지 확인하세요",
+				v.field, v.vip, strings.Join(s.InternalNetworkSubnets, ", ")))
+		}
+	}
+	return out
+}
+
+// checkLBVIP checks a VIP of the AIPub load balancers against the rest of the
+// network: it must not be taken by the ki cp VIP or a node, nor fall inside the
+// subnets of the cluster. A sub-check whose other side is empty or does not
+// parse is left to the rule of that value. Outside the internal subnets is only
+// a warning (Warnings).
+func checkLBVIP(s *state.AppState, field string, vip net.IP) []Error {
+	var errs []Error
+	if s.KiCpHaMode {
+		if cp := net.ParseIP(s.KiCpHaModeVIP); cp != nil && cp.Equal(vip) {
+			errs = append(errs, Error{field, fmt.Sprintf("VIP %s가 ki cp HA VIP (ki_cp_ha_mode_vip) 와 같습니다. 둘 중 하나를 다른 IP로 바꿔주세요", vip)})
+		}
+	}
+	for _, n := range s.Nodes {
+		if ip := net.ParseIP(n.AnsibleHost); ip != nil && ip.Equal(vip) {
+			errs = append(errs, Error{field, fmt.Sprintf("VIP %s가 노드 %s의 ansible_host 와 같습니다. 어느 노드도 쓰지 않는 IP로 바꿔주세요", vip, n.Name)})
+		}
+	}
+	for _, sub := range []struct{ name, cidr string }{{"k8s_pod_subnet", s.K8sPodSubnet}, {"k8s_service_subnet", s.K8sServiceSubnet}} {
+		if _, n, err := net.ParseCIDR(sub.cidr); err == nil && n.Contains(vip) {
+			errs = append(errs, Error{field, fmt.Sprintf("VIP %s가 %s (%s) 안입니다. 내부 서브넷의 IP로 바꾸거나 %s 를 바꿔주세요",
+				vip, sub.name, sub.cidr, sub.name)})
+		}
+	}
 	return errs
 }
 

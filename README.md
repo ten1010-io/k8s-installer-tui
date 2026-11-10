@@ -67,6 +67,14 @@ powershell -File test\simulate\run.ps1          # -Keep <dir> 로 렌더링 결�
 
 Docker와 aipub-installer의 `tools/chart-images`가 만드는 `aipub-chart-images` 이미지가 필요하고, `k8s-installer`, `aipub-installer`가 이 레포와 같은 상위 디렉터리에 있어야 합니다. `test/simulate/fixtures/`의 각 사이트(`legacy-0.1`, `new-site-non-ha`)를 `--render`로 렌더링한 뒤 두 설치 도구의 검증과 차트 렌더링에 통과하는지 확인합니다.
 
+SSH 키 배포(`--check-ssh`, `--send-ssh-key`)는 진짜 sshd가 도는 버리는 컨테이너(ubuntu:24.04의 OpenSSH 9.6, rockylinux:8의 OpenSSH 8.0)에서 확인합니다. 이 PC나 다른 호스트에는 접속하지 않습니다.
+
+```powershell
+powershell -File test\sshkeys\run.ps1                 # -K8sInstaller <checkout> -Images ubuntu:24.04
+```
+
+Docker와 네트워크(패키지, PyPI의 ansible-core)가 필요합니다. 이미지마다 ansible-core 2.17.x와 2.19.x로 한 번씩, `/tmp`를 noexec tmpfs로 둔 채 돌립니다. `configure-control-node-ssh.sh`는 이 레포 옆의 `k8s-installer`에서 읽기 전용으로 마운트합니다.
+
 ## 실행
 
 ```bash
@@ -87,6 +95,9 @@ Docker와 aipub-installer의 `tools/chart-images`가 만드는 `aipub-chart-imag
 | `--aipub-vars` | `files/aipub/vars.yml` | aipub-installer의 사이트 값 경로 |
 | `--installer-root` | `/opt/k8s-installer` | `setup.sh`로 k8s-installer를 설치한 디렉터리 (9단계에서 사용) |
 | `--render <dir>` | (없음) | 화면 없이 저장될 세 파일을 `<dir>`에 렌더링하고 검증 결과를 출력. 기존 파일은 그대로 둠 |
+| `--check-ssh` | | 화면 없이 `--inventory`의 모든 노드가 이 제어 노드의 키를 받고 비밀번호 없이 sudo 하는지 표로 출력 (읽기만). 아래 "SSH 키 배포" 참고 |
+| `--send-ssh-key` | | 화면 없이 키를 받지 않는 노드에 키를 보내고 같은 표를 출력. 비밀번호는 노드마다 ssh가 물음 |
+| `--ask-pass-once` | | `--send-ssh-key`와 함께: 비밀번호를 터미널에서 한 번만(화면에 보이지 않게) 물어 모든 노드에 씀 |
 | `--version` | | 버전 출력 |
 
 `--render`의 종료 코드: `0` 검증 통과, `2` 검증 오류 있음(파일은 렌더링됨), `1` 로드·렌더링·쓰기 오류. 렌더링 결과는 `<dir>` 아래에 k8s-installer의 `ansible` 디렉터리 배치(`inventory.yml`, `group_vars/all/vars.yml`, `files/aipub/vars.yml`)로 쓰며, AIPub을 설치하지 않으면 `files/aipub/vars.yml`은 만들지 않습니다.
@@ -114,6 +125,7 @@ vars.yml      ←  수정한 내용으로 저장
 | `Space` / `Enter` | 토글·선택·편집 |
 | `s` | 8단계 미리보기에서 저장 |
 | `c` / `d` / `w` | 9단계: 사전 확인 / 명령 보기 / 스크립트 저장 |
+| `k` / `p` | 9단계: P2에서 키를 받지 않는 노드가 있을 때만, 키 보내기 (ssh가 노드마다 비밀번호를 물음 / 비밀번호 한 번 입력) |
 
 ## 9단계 Wizard
 
@@ -147,6 +159,7 @@ AIPub을 설치하지 않으면 AIPub 전용 화면(6·7단계)은 건너뜁니�
 | R2 | `ki_cp_ha_mode=true`이면 `ki_cp_ha_mode_vip` 필수 |
 | R5 | `aipub_ha_mode=true`이면 StorageClass 필수, 아니면 Harbor 데이터 노드 필수 |
 | R6 | AIPub 서비스 노드는 k8s control plane 노드의 부분집합이어야 함 |
+| R7 | AIPub LB VIP(인그레스, 별도 IP 모드의 게이트웨이)는 `ki_cp_ha_mode_vip`(HA일 때)·노드의 `ansible_host`(IP일 때)와 다르고, 파드·서비스 서브넷 밖이어야 함. `internal_network_subnets` 밖이면 오류가 아니라 8단계 미리보기의 경고(두 번째 NIC의 대역일 수 있음) |
 
 그 밖에 형식(CIDR, IP, 크기 등)과 필수 항목(`k8s_node` 최소 1개 등)도 같은 곳에서 검사합니다.
 
@@ -175,6 +188,36 @@ A1~A5는 AIPub을 설치할 때만 나옵니다. 화면에서 K4의 아카이브
 | `c` | 사전 확인 실행: P1(설치 디렉터리), P2(모든 노드에 `sudo -n true`) |
 | `d` | 각 단계의 명령 보기 |
 | `w` | 명령을 `install-plan.sh`로 저장 (설정을 저장한 디렉터리에) |
+| `k` | 키를 받지 않는 노드에 키 보내기: 화면이 터미널을 넘기고, 노드마다 `ssh-copy-id`가 비밀번호를 물음. 끝나면 Enter로 돌아옴 |
+| `p` | 키를 받지 않는 노드에 키 보내기: 화면의 가림 입력칸에 비밀번호를 한 번 넣음. 노드별 진행이 P2 아래에 나옴. `Ctrl+C`로 중단. 중단 중에 한 번 더 누르면 보내기가 멈출 때까지 "정리 중…"을 보인 뒤 종료(그때 한 번 더 누르면 바로 종료하고, 정리는 프로그램이 끝나기 전에 마저 함) |
+
+`k`·`p`는 P2가 키를 받지 않는 노드(키 거부)를 찾았을 때만 P2 아래 한 줄 안내와 함께 나옵니다. 둘 다 끝나면 P2를 자동으로 다시 확인합니다. P2는 ansible이 접속하지 못한 노드를 ssh로 직접 다시 보고 이유를 붙입니다: `키 거부`(키 보내기), `접속 불가`(주소·포트·방화벽·sshd 확인), `호스트 키 변경`(노드를 다시 설치했다면 `ssh-keygen -R <주소>`), `sudo 비밀번호 필요`(NOPASSWD 설정). 키 거부가 아닌 노드에는 키를 보내지 않고 고칠 방법만 보여 줍니다. 비밀번호를 입력하거나 키를 보내는 동안에는 다른 단계로 이동하지 않습니다(`Esc`·`Ctrl+C`로 끝낸 뒤 이동). P2는 접속하지 못한 노드를 8대씩 동시에, 노드마다 시간을 따로 두고 봅니다. 시간 안에 못 본 노드는 `확인 못 함`으로 나옵니다. sshd가 비밀번호 로그인을 받지 않는 노드는 `비밀번호 로그인 꺼짐`으로, 키를 보내 줄 수 없으니 직접 넣어야 합니다.
+
+### SSH 키 배포 (`k`·`p`, `--check-ssh`, `--send-ssh-key`)
+
+노드가 "준비됨"이란 이 제어 노드 사용자의 키 `~/.ssh/id_rsa`로 (에이전트나 다른 키 없이) 접속되고 `sudo -n true`가 통과한다는 뜻입니다. 플레이북이 접속하는 방법과 같습니다. 노드 목록은 설치 디렉터리 venv의 `ansible-inventory -i <inventory> --list`로 읽습니다(group_vars 포함, `ansible_connection: local` 노드는 제외). 노드가 `ansible_ssh_private_key_file`, `ansible_ssh_common_args`, `ansible_password`, `ansible_become_method` 같은 값을 설정했으면 경고합니다. 이 경로는 그 값을 쓰지 않으므로 결과가 플레이북과 다를 수 있습니다.
+
+```bash
+cd /opt/k8s-installer/ansible
+k8s-installer-tui --check-ssh                       # 읽기만: 표 출력
+k8s-installer-tui --send-ssh-key                    # 노드마다 ssh가 비밀번호를 물음
+k8s-installer-tui --send-ssh-key --ask-pass-once    # 비밀번호를 한 번만 물음 (노드가 같은 비밀번호일 때)
+```
+
+표의 열은 노드, 사용자@주소, 키(`ok`/`거부`/`접속불가`/`호스트키변경`/`비밀번호로그인꺼짐`/`키읽기실패`/`미확인`), sudo(`ok`/`비밀번호필요`/`미확인`/`-`), 비고(고칠 방법과 ssh의 마지막 줄)입니다. 종료 코드: `0` 모든 노드 준비됨, `1` 준비 안 된 노드 있음, `2` 실행하지 못함(노드 목록·키 준비·터미널 없음 등), 중단되면 128+신호 번호: `130` `Ctrl+C`, `143` SIGTERM, `129` SIGHUP(운영자의 ssh 세션이 끊김). `키읽기실패`는 이 제어 노드의 `~/.ssh/id_rsa`를 ssh가 읽지 못한 것(권한·소유자 확인)이라 키를 보내 줄 수 없고, sudo `미확인`은 키로는 접속됐지만 sudo를 시간 안에 확인하지 못한 것(다시 확인)입니다. 시리얼 콘솔처럼 전체 화면을 쓸 수 없는 곳에서도 씁니다. 다시 실행하면 이미 키를 받는 노드는 건드리지 않습니다.
+
+하는 일:
+
+- 키 준비: `~/.ssh/id_rsa.pub`가 있으면 아무것도 하지 않습니다(이 제어 노드의 `authorized_keys`도 그대로). `~/.ssh/id_rsa`만 있고 `.pub`가 없으면 멈추고, `ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub`로 공개 키를 되살리라고 안내합니다(스크립트를 실행하지 않고 아무것도 만들지 않음). 둘 다 없을 때만 k8s-installer의 `<installer-root>/ansible/configure-control-node-ssh.sh`를 실행해 키 쌍을 만듭니다(출력하는 수동 안내는 버림). 키를 받지 않는 노드에만 `ssh-copy-id`로 공개 키를 보냅니다.
+- `--check-ssh`와 P2는 읽기만 합니다. `~/.ssh/known_hosts`도 바꾸지 않습니다(복사본에 기록하고 버림).
+- 키를 보낼 때는 `StrictHostKeyChecking=accept-new`: 처음 보는 노드의 호스트 키는 기록하고, 바뀐 호스트 키는 거부합니다(`ssh-keygen -R`은 사람이 판단해서 실행).
+- 비밀번호 한 번 입력(`p`, `--ask-pass-once`): 비밀번호는 `ssh-copy-id` 자식 프로세스의 환경 변수로만 넘어가고, ssh는 `SSH_ASKPASS` 도우미(비밀번호가 아니라 변수 이름만 담김)로 읽습니다. 도우미는 실행할 수 있는 사용자 전용 디렉터리(`$XDG_RUNTIME_DIR`, 안 되면 `~/.cache/k8s-installer-tui/`) 안에 매번 새로 만든 0700 디렉터리에 둡니다. 도우미를 바꿔치기하면 비밀번호를 받을 수 있으므로, 가는 길의 디렉터리가 심볼릭 링크이거나 이 사용자 소유가 아니거나 그룹·다른 사용자가 쓸 수 있으면 그 위치는 쓰지 않습니다. 이 디렉터리는 보내기가 끝날 때, `Ctrl+C`로 중단할 때, 화면 모드와 `--send-ssh-key`가 SIGTERM·SIGHUP을 받았을 때 지웁니다. SIGKILL처럼 프로그램이 정리할 틈이 없이 끝나면 남을 수 있습니다(비밀번호는 담겨 있지 않음). `/tmp`가 noexec여도 동작하고, 둘 다 실행할 수 없으면 "키 거부"가 아니라 그 이유를 말하고 보내지 않습니다. 터미널은 `setsid`로 떼어 OpenSSH 8.4 이전에서도 동작합니다. 노드마다 한 번만 시도하므로 틀린 비밀번호는 노드당 로그인 실패 한 번입니다. 비밀번호는 디스크, 명령 인자, 로그, 저장한 설정, 화면·메시지에 쓰지 않으며, 보내기가 끝날 때까지 이 프로세스의 메모리에만 있습니다(직접 가진 바이트 버퍼는 끝나면 0으로 지우지만, Go 문자열 사본까지 지운다고 보장하지는 않음). 중단하거나 SIGTERM·SIGHUP을 받으면 비밀번호를 환경에 가진 `ssh-copy-id`와 그 아래 ssh까지 세션째 끝냅니다. (`k`로 터미널을 넘긴 동안에는 그 명령이 신호를 직접 받고, 화면은 그 명령이 끝난 뒤 종료합니다.)
+
+하지 않는 일:
+
+- 노드에 사용자를 만들거나 sudo 규칙(NOPASSWD)을 넣지 않습니다. `sudo 비밀번호 필요`는 사이트가 고칩니다.
+- `sshd_config`를 고치지 않습니다. 비밀번호 로그인이 막힌 노드, 특히 비밀번호 로그인이 막힌 `root`에는 키를 보낼 수 없어 직접 넣어야 합니다(`configure-control-node-ssh.sh`가 출력하는 안내).
+- 바뀐 호스트 키를 지우지 않습니다.
 
 "실행"은 다음 버전에서 지원합니다. 이 버전은 사전 확인 외에는 아무것도 실행하지 않으므로, `d`로 명령을 보거나 `w`로 저장한 스크립트를 직접 실행하세요. 설정을 `--installer-root`의 `ansible` 디렉터리가 아닌 곳에 저장했다면 스크립트에 복사 명령이 함께 들어갑니다.
 
@@ -197,7 +240,8 @@ k8s-installer-tui/
 │       ├── app.go           # Bubbletea App, 화면 라우팅
 │       ├── styles/
 │       └── screens/         # s1~s9 화면
-└── test/simulate/           # 설치 도구와 맞춰 보는 시뮬레이션
+├── test/simulate/           # 설치 도구와 맞춰 보는 시뮬레이션
+└── test/sshkeys/            # SSH 키 배포를 진짜 sshd 컨테이너에서 확인
 ```
 
 ## 의존성

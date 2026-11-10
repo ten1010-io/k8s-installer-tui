@@ -189,6 +189,9 @@ func (s *S6AipubLB) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "down", "j":
 			if next := s.nextFocus(); next <= s6FocusMax {
+				if next == s6FocusNav {
+					s.navIdx = 1 // 다음
+				}
 				s.focusIdx = next
 				s.syncFocus()
 			}
@@ -228,10 +231,6 @@ func (s *S6AipubLB) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					s.mode = 1
 				}
 			}
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	var cmd tea.Cmd

@@ -336,6 +336,9 @@ func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return s, nil
 			}
 			if next := s.nextFocus(); next <= s5FocusMax {
+				if next == s5FocusNav {
+					s.navIdx = 1 // 다음
+				}
 				s.focusIdx = next
 				s.cpNodeCursor = 0
 				s.syncFocus()
@@ -373,10 +376,6 @@ func (s *S5Aipub) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case s5FocusMonDryRun:
 				s.monDryRun = !s.monDryRun
 			}
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	var cmd tea.Cmd

@@ -99,6 +99,9 @@ func (s *S1Nodes) Validate() []string {
 
 func (s *S1Nodes) Init() tea.Cmd { return nil }
 
+// Busy: the node form is open.
+func (s *S1Nodes) Busy() bool { return s.editing }
+
 // navFocus is the focusIdx value for the nav area.
 func (s *S1Nodes) navFocus() int { return len(s.nodes) + 1 }
 
@@ -130,6 +133,9 @@ func (s *S1Nodes) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			if s.focusIdx < s.navFocus() {
 				s.focusIdx++
+				if s.focusIdx == s.navFocus() {
+					s.navIdx = 1 // 다음
+				}
 			}
 		case "left", "h":
 			if s.focusIdx == s.navFocus() && s.navIdx > 0 {
@@ -149,10 +155,6 @@ func (s *S1Nodes) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.nodes = append(s.nodes[:s.focusIdx], s.nodes[s.focusIdx+1:]...)
 				s.clampFocus()
 			}
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	return s, nil

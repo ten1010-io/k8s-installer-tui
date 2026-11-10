@@ -70,6 +70,9 @@ func (s *S6CertMode) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			if s.focusIdx < navFocus {
 				s.focusIdx++
+				if s.focusIdx == navFocus {
+					s.navIdx = 1 // 다음
+				}
 			}
 		case "left", "h":
 			if s.focusIdx == navFocus && s.navIdx > 0 {
@@ -81,10 +84,6 @@ func (s *S6CertMode) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter", " ":
 			return s.activate()
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	return s, nil

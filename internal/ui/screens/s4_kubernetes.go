@@ -128,6 +128,9 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down":
 			if s.focusIdx < s4FocusMax {
 				s.focusIdx++
+				if s.focusIdx == s4FocusNav {
+					s.navIdx = 1 // 다음
+				}
 				s.syncFocus()
 			}
 		case "left":
@@ -150,10 +153,6 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.syncFocus()
 			}
 			return s, nil
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	var cmd tea.Cmd

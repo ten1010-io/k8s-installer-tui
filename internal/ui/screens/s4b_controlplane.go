@@ -438,13 +438,12 @@ func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down":
 			if s.focusIdx < nav {
 				s.focusIdx++
+				if s.focusIdx == nav {
+					s.navIdx = 1 // 다음
+				}
 				s.syncFocus()
 			}
 			return s, nil
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		case "left", "right":
 			switch s.focusIdx {
 			case s4bFocusTarget:

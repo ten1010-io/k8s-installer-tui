@@ -273,8 +273,6 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.message = "실행은 다음 버전(R2)에서 지원합니다. 지금은 w로 스크립트를 저장하거나 d로 명령을 보고 실행하세요"
 				return s, nil
 			}
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	var cmd tea.Cmd

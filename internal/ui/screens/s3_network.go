@@ -120,6 +120,9 @@ func (s *S3Network) Validate() []string {
 
 func (s *S3Network) Init() tea.Cmd { return nil }
 
+// Busy: a subnet, DNS or NTP server is being typed in.
+func (s *S3Network) Busy() bool { return s.editMode != editNone }
+
 func (s *S3Network) syncFocusedInputs() {
 	s.vip.Blur()
 	if s.editMode != editNone {
@@ -137,6 +140,10 @@ func (s *S3Network) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Letters typed into the VIP are text: h/j/k/l/d act only elsewhere
+		if (msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace) && s.focusIdx == s3FocusVIP {
+			break
+		}
 		switch msg.String() {
 		case "up", "k":
 			if s.focusIdx > 0 {
@@ -146,6 +153,9 @@ func (s *S3Network) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			if s.focusIdx < s3FocusMax {
 				s.focusIdx++
+				if s.focusIdx == s3FocusNav {
+					s.navIdx = 1 // 다음
+				}
 				s.syncFocusedInputs()
 			}
 		case "left", "h":
@@ -160,10 +170,6 @@ func (s *S3Network) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s.activate()
 		case "d", "delete":
 			s.deleteLastItem()
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	var cmd tea.Cmd

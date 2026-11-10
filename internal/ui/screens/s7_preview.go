@@ -16,7 +16,9 @@ import (
 
 // Focus layout:
 //   0  : content (viewport — ↑/↓ scroll, ←/→ 탭 전환)
-//   1  : nav slot (←/→: 이전/저장)
+//   1  : nav slot (←/→: 이전/저장, 이전/다음 once saved; reached by Tab or ↓ at the bottom)
+//
+// s and Ctrl+S save from anywhere.
 
 const (
 	s7FocusContent = iota
@@ -172,6 +174,7 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if s.focusIdx == s7FocusContent {
 				if s.vp.AtBottom() {
 					s.focusIdx = s7FocusNav
+					s.navIdx = 1 // 저장, then 다음
 				} else {
 					s.vp.LineDown(1)
 				}
@@ -201,25 +204,27 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					s.navIdx++
 				}
 			}
-		case "tab":
-			s.focusIdx = s7FocusNav
+		case "tab", "shift+tab":
+			// files and their content ↔ the buttons, which open on 저장 (다음 once saved)
+			if s.focusIdx == s7FocusNav {
+				s.focusIdx = s7FocusContent
+			} else {
+				s.focusIdx = s7FocusNav
+				s.navIdx = 1
+			}
+			return s, nil
 		case "enter", " ":
+			if s.focusIdx == s7FocusNav && s.navIdx == 0 {
+				return s, Prev()
+			}
 			if s.saved {
 				return s, Next()
 			}
 			if s.focusIdx == s7FocusNav {
-				if s.navIdx == 0 {
-					return s, Prev()
-				}
 				return s.doSave()
 			}
-		case "s":
+		case "s", "ctrl+s":
 			return s.doSave()
-		case "ctrl+n":
-			// the app checks Validate, which asks for the save first
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	var cmd tea.Cmd
@@ -228,6 +233,11 @@ func (s *S7Preview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
+	// saved already: writing again would put the files just saved into .bak,
+	// over the ones that were there before
+	if s.saved {
+		return s, nil
+	}
 	if len(s.errors) > 0 {
 		s.saveErr = "검증 오류가 있어 저장할 수 없습니다"
 		return s, nil
@@ -238,6 +248,8 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 	}
 	s.saved = true
 	s.saveErr = ""
+	// on the button that now reads 다음: Enter goes on to the plan
+	s.focusIdx, s.navIdx = s7FocusNav, 1
 	return s, nil
 }
 
@@ -351,7 +363,11 @@ func (s *S7Preview) View() string {
 
 	prevFocused := s.focusIdx == s7FocusNav && s.navIdx == 0
 	saveFocused := s.focusIdx == s7FocusNav && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "저장 (s)", prevFocused, saveFocused, s.width))
+	right := "저장 (s)"
+	if s.saved {
+		right = "다음"
+	}
+	b.WriteString("\n" + RenderNavButtons("이전", right, prevFocused, saveFocused, s.width))
 
 	return b.String()
 }

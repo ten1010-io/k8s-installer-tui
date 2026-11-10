@@ -193,6 +193,9 @@ func (s *S5bMonitoring) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if s.focusIdx < s5bFocusMax {
 				s.focusIdx++
+				if s.focusIdx == s5bFocusNav {
+					s.navIdx = 1 // 다음
+				}
 				s.nodeCursor = 0
 				s.syncFocus()
 			}
@@ -218,10 +221,6 @@ func (s *S5bMonitoring) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					s.nodeChecks[s.nodeCursor] = !s.nodeChecks[s.nodeCursor]
 				}
 			}
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	var cmd tea.Cmd

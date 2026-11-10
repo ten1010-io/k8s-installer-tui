@@ -119,7 +119,7 @@ func (s *S2Groups) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					s.curRow++
 				} else {
 					s.focusNav = true
-					s.navIdx = 0
+					s.navIdx = 1 // 다음
 				}
 			}
 		case "left", "h":
@@ -148,10 +148,6 @@ func (s *S2Groups) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(s.rows) > 0 {
 				s.toggle(s.curRow, s.curCol)
 			}
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
 		}
 	}
 	return s, nil

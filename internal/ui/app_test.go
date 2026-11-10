@@ -86,12 +86,33 @@ func (d *driver) keys(names ...string) {
 			d.send(tea.KeyMsg{Type: tea.KeyDown})
 		case "up":
 			d.send(tea.KeyMsg{Type: tea.KeyUp})
+		case "left":
+			d.send(tea.KeyMsg{Type: tea.KeyLeft})
+		case "right":
+			d.send(tea.KeyMsg{Type: tea.KeyRight})
+		case "tab":
+			d.send(tea.KeyMsg{Type: tea.KeyTab})
 		case "ctrl+n":
 			d.send(tea.KeyMsg{Type: tea.KeyCtrlN})
+		case "ctrl+p":
+			d.send(tea.KeyMsg{Type: tea.KeyCtrlP})
+		case "ctrl+s":
+			d.send(tea.KeyMsg{Type: tea.KeyCtrlS})
 		case "ctrl+u": // clears a text input
 			d.send(tea.KeyMsg{Type: tea.KeyCtrlU})
+		case "esc":
+			d.send(tea.KeyMsg{Type: tea.KeyEsc})
+		case "pgdown":
+			d.send(tea.KeyMsg{Type: tea.KeyPgDown})
 		default:
-			d.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(n)})
+			// typed: one key per character, as at a terminal
+			for _, r := range n {
+				if r == ' ' {
+					d.send(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+				} else {
+					d.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+				}
+			}
 		}
 	}
 }
@@ -576,5 +597,198 @@ func TestCatalogOnPreviewAndPlan(t *testing.T) {
 	view = ansi.ReplaceAllString(s9.View(), "")
 	if !strings.Contains(view, "- P5  카탈로그") || !strings.Contains(view, "건너뜀: 카탈로그 파일이 없음") {
 		t.Errorf("P5 not skipped without the file:\n%s", view)
+	}
+}
+
+// Ctrl+N and Ctrl+P are the app's, on every screen: Ctrl+N checks the screen
+// first, as the 다음 button does.
+func TestGlobalNavKeys(t *testing.T) {
+	d, _ := newDriver(t)
+	d.keys("ctrl+n")
+	d.at("2.그룹")
+	d.keys("ctrl+p")
+	d.at("1.노드")
+
+	// no nodes: refused, and said why
+	s := state.DefaultState()
+	s.Nodes = nil
+	e := &driver{t: t, app: NewApp(s, fileio.DefaultPaths(t.TempDir()), plan.DefaultOptions(), "test")}
+	e.send(tea.WindowSizeMsg{Width: 110, Height: 60})
+	e.keys("ctrl+n")
+	e.at("1.노드")
+	if !strings.Contains(strings.Join(e.app.screenErrors, ""), "노드를 최소 1개") {
+		t.Errorf("no reason given: %v", e.app.screenErrors)
+	}
+	e.keys("ctrl+s") // not the preview: nothing
+	e.at("1.노드")
+
+	// in a text input the keys still navigate, and letters stay text
+	d.keys("ctrl+n", "ctrl+n")
+	d.at("3.네트워크")
+	d.keys("down", "down", "10.0.0.1 hjkld") // the VIP, a key per character
+	d.keys("ctrl+n")
+	d.at("4.K8s")
+	if d.app.appState.KiCpHaModeVIP != "10.0.0.1 hjkld" {
+		t.Errorf("VIP = %q (h/j/k/l/d and space typed into it must stay text)", d.app.appState.KiCpHaModeVIP)
+	}
+	d.keys("ctrl+p")
+	d.at("3.네트워크")
+}
+
+func TestFooterKeyHints(t *testing.T) {
+	d, _ := newDriver(t)
+	view := ansi.ReplaceAllString(d.app.View(), "")
+	if !strings.Contains(view, "Ctrl+N 다음 · Ctrl+P 이전 · ↑↓ 이동 · Enter 선택") {
+		t.Errorf("no key hints on 1.노드:\n%s", view)
+	}
+	if strings.Contains(view, "Ctrl+S 저장") {
+		t.Error("the save key shown off the preview")
+	}
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("8.저장")
+	view = ansi.ReplaceAllString(d.app.View(), "")
+	if !strings.Contains(view, "Ctrl+S 저장 · Ctrl+N 다음") {
+		t.Errorf("no save hint on the preview:\n%s", view)
+	}
+	if n := strings.Count(view, "Ctrl+N 다음"); n != 1 {
+		t.Errorf("key hints shown %d times", n)
+	}
+}
+
+// On the narrowest box the footer keeps one line and its first hints: save on
+// the preview, next and previous.
+func TestFooterKeyHintsNarrow(t *testing.T) {
+	d, _ := newDriver(t)
+	d.send(tea.WindowSizeMsg{Width: 40, Height: 60}) // the box is at its minimum
+	footer := func() string {
+		for _, l := range strings.Split(ansi.ReplaceAllString(d.app.View(), ""), "\n") {
+			if strings.Contains(l, "Ctrl+") {
+				return l
+			}
+		}
+		return ""
+	}
+	if f := footer(); !strings.Contains(f, "Ctrl+N 다음 · Ctrl+P 이전") || strings.Contains(f, "종료") {
+		t.Errorf("footer on a narrow box: %q", f)
+	}
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("8.저장")
+	if f := footer(); !strings.Contains(f, "Ctrl+S 저장 · Ctrl+N 다음 · Ctrl+P 이전") {
+		t.Errorf("footer of the preview on a narrow box: %q", f)
+	}
+}
+
+// While a node is typed into the form of 1.노드, the wizard stays and says why.
+func TestNavHeldBySubEdit(t *testing.T) {
+	d, _ := newDriver(t)
+	d.keys("a", "node4")
+	for _, k := range []string{"ctrl+n", "pgdown"} {
+		d.keys(k)
+		d.at("1.노드")
+		if !strings.Contains(strings.Join(d.app.screenErrors, ""), "저장하거나 취소한 뒤") {
+			t.Fatalf("%s: no reason given: %v", k, d.app.screenErrors)
+		}
+	}
+	if !strings.Contains(d.screen(), "node4") {
+		t.Fatalf("the form was left:\n%s", d.screen())
+	}
+	d.keys("esc", "ctrl+n")
+	d.at("2.그룹")
+	if len(d.app.screenErrors) != 0 {
+		t.Errorf("errors left: %v", d.app.screenErrors)
+	}
+	d.keys("ctrl+n")
+	d.at("3.네트워크")
+	d.keys("enter", "10.1.0.0/16") // a subnet typed in
+	d.keys("ctrl+p")
+	d.at("3.네트워크")
+	d.keys("enter", "ctrl+p")
+	d.at("2.그룹")
+}
+
+var (
+	nextFocused = regexp.MustCompile(`▶\s*< 다음 >`)
+	prevFocused = regexp.MustCompile(`▶\s*< 이전 >`)
+)
+
+// ↓ past the last item lands on 다음, ↑ goes back, ←/→ switch, Enter goes on.
+func TestArrowsReachNextButton(t *testing.T) {
+	d, _ := newDriver(t)
+	for _, step := range []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "4b.컨트롤플레인", "5.AIPub"} {
+		d.at(step)
+		for i := 0; i < 40; i++ {
+			d.keys("down")
+		}
+		if !nextFocused.MatchString(d.screen()) {
+			t.Fatalf("%s: ↓ to the end is not on 다음:\n%s", step, d.screen())
+		}
+		d.keys("up")
+		if nextFocused.MatchString(d.screen()) || prevFocused.MatchString(d.screen()) {
+			t.Fatalf("%s: ↑ stays on the buttons:\n%s", step, d.screen())
+		}
+		d.keys("down", "left")
+		if !prevFocused.MatchString(d.screen()) {
+			t.Fatalf("%s: ← is not on 이전:\n%s", step, d.screen())
+		}
+		d.keys("right", "enter")
+	}
+	d.at("8.저장") // AIPub off: its screens skipped
+}
+
+// The preview: Tab reaches the button that saves, which then reads 다음; Ctrl+S
+// saves from the files as well.
+func TestPreviewSaveKeys(t *testing.T) {
+	d, paths := newDriver(t)
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("8.저장")
+	d.keys("tab")
+	if !regexp.MustCompile(`▶\s*< 저장 \(s\) >`).MatchString(d.screen()) {
+		t.Fatalf("Tab is not on 저장:\n%s", d.screen())
+	}
+	d.keys("enter")
+	if !strings.Contains(d.screen(), "저장 완료") || !nextFocused.MatchString(d.screen()) {
+		t.Fatalf("not saved, or not on 다음:\n%s", d.screen())
+	}
+	if _, err := os.Stat(paths.Vars); err != nil {
+		t.Fatalf("vars.yml not written: %v", err)
+	}
+	d.keys("enter")
+	d.at("9.설치")
+
+	// Ctrl+S with the files focused, then Ctrl+N
+	e, epaths := newDriver(t)
+	e.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	e.at("8.저장")
+	e.keys("ctrl+s")
+	if !strings.Contains(e.screen(), "저장 완료") {
+		t.Fatalf("Ctrl+S did not save:\n%s", e.screen())
+	}
+	if _, err := os.Stat(epaths.Inventory); err != nil {
+		t.Fatalf("inventory.yml not written: %v", err)
+	}
+	e.keys("ctrl+n")
+	e.at("9.설치")
+}
+
+// Saving twice keeps the .bak of the file that was there before the first save.
+func TestPreviewSaveTwiceKeepsBackup(t *testing.T) {
+	d, paths := newDriver(t)
+	if err := os.MkdirAll(filepath.Dir(paths.Inventory), 0755); err != nil {
+		t.Fatal(err)
+	}
+	const original = "# the inventory before the wizard\n"
+	if err := os.WriteFile(paths.Inventory, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("8.저장")
+	d.keys("s")
+	if !strings.Contains(d.screen(), "저장 완료") {
+		t.Fatalf("not saved:\n%s", d.screen())
+	}
+	d.keys("ctrl+s", "s")
+	bak, err := os.ReadFile(paths.Inventory + ".bak")
+	if err != nil || string(bak) != original {
+		t.Errorf("inventory.yml.bak = %q, %v; want the file from before the save", bak, err)
 	}
 }

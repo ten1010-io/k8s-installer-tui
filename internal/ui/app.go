@@ -77,10 +77,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return a, tea.Quit
-		case "pgup":
+		// control keys, so no text input takes them as text: they work on every screen
+		case "pgup", "ctrl+p":
 			return a.goPrev()
-		case "pgdown":
+		case "pgdown", "ctrl+n":
 			return a.goNext()
+		case "ctrl+s":
+			// only the preview saves; elsewhere the key does nothing
+			if !a.onPreview() {
+				return a, nil
+			}
 		}
 
 	case screens.NavigateNextMsg:
@@ -95,12 +101,44 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
+func (a *App) onPreview() bool {
+	_, ok := a.screenList[a.current].(*screens.S7Preview)
+	return ok
+}
+
+// keyHints is the footer line of every screen, at most width wide: the hints in
+// order of importance (the preview leads with its save key), as many as fit.
+func (a *App) keyHints(width int) string {
+	hints := []string{"Ctrl+N 다음", "Ctrl+P 이전", "↑↓ 이동", "Enter 선택", "Ctrl+C 종료"}
+	if a.onPreview() {
+		hints = append([]string{"Ctrl+S 저장"}, hints...)
+	}
+	for n := len(hints); n > 1; n-- {
+		if line := "  " + strings.Join(hints[:n], " · "); lipgloss.Width(line) <= width {
+			return line
+		}
+	}
+	return "  " + hints[0]
+}
+
 // skipScreen returns true for screens that should be skipped in navigation.
 func (a *App) skipScreen(idx int) bool {
 	return aipubOnlyScreens[idx] && !a.appState.AipubEnabled
 }
 
+// busy holds the wizard on a screen with a sub-edit open, and says why.
+func (a *App) busy() bool {
+	if b, ok := a.screenList[a.current].(screens.Busy); ok && b.Busy() {
+		a.screenErrors = []string{"입력 중인 항목을 저장하거나 취소한 뒤 이동하세요"}
+		return true
+	}
+	return false
+}
+
 func (a *App) goNext() (tea.Model, tea.Cmd) {
+	if a.busy() {
+		return a, nil
+	}
 	errs := a.screenList[a.current].Validate()
 	if len(errs) > 0 {
 		a.screenErrors = errs
@@ -120,6 +158,9 @@ func (a *App) goNext() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) goPrev() (tea.Model, tea.Cmd) {
+	if a.busy() {
+		return a, nil
+	}
 	a.screenErrors = nil
 	if a.current > 0 {
 		a.screenList[a.current].SyncToState(a.appState)
@@ -166,7 +207,9 @@ func (a *App) View() string {
 	ob.WriteString("\n\n")
 	ob.WriteString(innerPanel)
 	ob.WriteString("\n\n")
-	ob.WriteString(styles.StyleMuted.Render("  ↑/↓: 이동   Enter: 선택   PgUp/PgDn: 페이지   Ctrl+C: 종료"))
+	// one line, as dims counts it: the text width of the outer box is its Width less its padding
+	footerW := outerContentW - 2
+	ob.WriteString(styles.StyleMuted.MaxWidth(footerW).Render(a.keyHints(footerW)))
 	ob.WriteString("\n")
 
 	// Outer box (thin rounded border — wraps everything)

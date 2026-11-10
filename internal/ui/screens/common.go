@@ -20,6 +20,12 @@ type Screen interface {
 	SetSize(w, h int)
 }
 
+// Busy is a screen that may have a sub-edit open (a form, an item being typed
+// in): the wizard does not leave it until that is saved or cancelled.
+type Busy interface {
+	Busy() bool
+}
+
 // short is the one-line description the schema gives a variable, for a help
 // string next to the field that edits it.
 func short(key string) string {

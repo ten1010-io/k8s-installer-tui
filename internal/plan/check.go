@@ -21,12 +21,31 @@ type CheckResult struct {
 }
 
 // RunFunc runs a command in dir and returns its combined output. Tests replace it.
+// The command gets the environment of this process plus EnvOf(ctx).
 type RunFunc func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 
 func ExecRun(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	if env := EnvOf(ctx); len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	return cmd.CombinedOutput()
+}
+
+type envKey struct{}
+
+// WithEnv adds variables (NAME=value) for the commands a RunFunc runs with ctx:
+// a value that must stay out of the arguments, which every user of the machine
+// can read, goes to the child only this way.
+func WithEnv(ctx context.Context, env ...string) context.Context {
+	return context.WithValue(ctx, envKey{}, append(append([]string{}, EnvOf(ctx)...), env...))
+}
+
+// EnvOf is what WithEnv added to ctx.
+func EnvOf(ctx context.Context) []string {
+	env, _ := ctx.Value(envKey{}).([]string)
+	return env
 }
 
 // CheckInstalled is P1: setup.sh has installed k8s-installer under the root,
@@ -45,6 +64,15 @@ func CheckInstalled(o Options) CheckResult {
 // sudo without a password, which the playbooks need (k8s-installer checks
 // `sudo -n true` the same way as its first task).
 func CheckSSH(ctx context.Context, o Options, run RunFunc) CheckResult {
+	r, _ := CheckSSHNodes(ctx, o, run)
+	return r
+}
+
+// CheckSSHNodes is CheckSSH, which also looks with ssh itself at the nodes
+// ansible could not reach (ProbeNodes, read only) and says why: the key refused,
+// no connection, a changed host key, or sudo. It returns what it found for those
+// nodes, for the screen to offer sending the key to the ones that refuse it.
+func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []NodeSSH) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	script := fmt.Sprintf("source %s && ansible all -i inventory.yml -o -m command -a 'sudo -n true'",
@@ -52,14 +80,24 @@ func CheckSSH(ctx context.Context, o Options, run RunFunc) CheckResult {
 	out, err := run(ctx, o.AnsibleDir(), "bash", "-c", script)
 
 	results := map[string]string{}
+	var unreachable []string
 	for node, a := range parseAdhoc(out) {
 		switch {
 		case a.ok():
 			results[node] = "ok"
 		case a.Status == "UNREACHABLE":
 			results[node] = "접속 안 됨 (SSH 키, 주소, 포트 확인)"
+			unreachable = append(unreachable, node)
 		default:
 			results[node] = "sudo 비밀번호 필요 또는 실패 (NOPASSWD 확인)"
+		}
+	}
+	var probed []NodeSSH
+	var warnings []string
+	if len(unreachable) > 0 {
+		probed, warnings = probeUnreachable(ctx, o, run, unreachable)
+		for _, p := range probed {
+			results[p.Node.Name] = "접속 안 됨 — " + p.Label() + ": " + p.Note()
 		}
 	}
 	if len(results) == 0 {
@@ -70,7 +108,7 @@ func CheckSSH(ctx context.Context, o Options, run RunFunc) CheckResult {
 		if s := strings.TrimSpace(string(out)); s != "" {
 			msg += " — " + firstLine(s)
 		}
-		return CheckResult{Lines: []string{msg}}
+		return CheckResult{Lines: []string{msg}}, nil
 	}
 
 	nodes := make([]string, 0, len(results))
@@ -91,7 +129,41 @@ func CheckSSH(ctx context.Context, o Options, run RunFunc) CheckResult {
 	if len(good) > 0 {
 		r.Lines = append([]string{"정상: " + strings.Join(good, " ")}, r.Lines...)
 	}
-	return r
+	r.Lines = append(r.Lines, warnings...)
+	return r, probed
+}
+
+// probeUnreachable looks with ssh at the nodes of names, as the inventory of the
+// ansible directory gives them. Nothing when the inventory cannot be listed: P2
+// says what ansible said.
+func probeUnreachable(ctx context.Context, o Options, run RunFunc, names []string) ([]NodeSSH, []string) {
+	all, warnings, err := ListSSHNodes(ctx, o, run, "inventory.yml")
+	if err != nil {
+		return nil, nil
+	}
+	want := map[string]bool{}
+	for _, n := range names {
+		want[n] = true
+	}
+	var nodes []SSHNode
+	var used []string
+	for _, n := range all {
+		if want[n.Name] {
+			nodes = append(nodes, n)
+		}
+	}
+	for _, w := range warnings {
+		for _, n := range nodes {
+			if strings.HasPrefix(w, "노드 "+n.Name+" ") {
+				used = append(used, w)
+			}
+		}
+	}
+	probed, err := ProbeNodes(ctx, run, DefaultSSHKey(), nodes, true)
+	if err != nil {
+		return nil, nil
+	}
+	return probed, used
 }
 
 func firstLine(s string) string {

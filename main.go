@@ -214,6 +214,9 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 				password[i] = 0
 			}
 			if err != nil {
+				if ctx.Err() == nil {
+					fmt.Fprintln(os.Stderr, "키 보내기 실패:", err)
+				}
 				return interrupted(ctx, 2)
 			}
 		} else {

@@ -3,11 +3,13 @@ package plan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // What ansible-inventory --list printed for an inventory of k8s-installer, after a
@@ -74,15 +76,75 @@ Host key verification failed.
 		want KeyState
 	}{
 		{"Warning: Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.\r\nbob@127.0.0.1: Permission denied (publickey,password).\r\n", KeyRefused},
-		{"Received disconnect from 10.0.0.1 port 22:2: Too many authentication failures\n", KeyRefused},
+		{"Received disconnect from 127.0.0.1 port 22:2: Too many authentication failures\nDisconnected from 127.0.0.1 port 22\n", KeyRefused},
+		// sshd with password login off: sending the key cannot work
+		{"carol@127.0.0.1: Permission denied (publickey,gssapi-keyex,gssapi-with-mic).\n", KeyNoPassword},
+		{"carol@127.0.0.1: Permission denied (publickey,keyboard-interactive).\n", KeyRefused},
 		{"ssh: connect to host 127.0.0.1 port 2223: Connection refused\n", KeyUnreachable},
 		{"ssh: connect to host 10.0.0.9 port 22: Connection timed out\n", KeyUnreachable},
 		{"ssh: Could not resolve hostname n-down: Name or service not known\n", KeyUnreachable},
 		{changed, KeyHostChanged},
 	} {
 		got, detail := classifySSH([]byte(c.out))
-		if got != c.want || detail == "" || strings.ContainsAny(detail, "\r\n") {
+		if got != c.want || detail == "" || strings.ContainsAny(detail, "\r\n") || strings.HasPrefix(detail, "Disconnected") {
 			t.Errorf("%q: %v %q, want %v", c.out, got, detail, c.want)
+		}
+	}
+	if Refusing([]NodeSSH{{Key: KeyNoPassword}, {Key: KeyNotProbed}, {Key: KeyHostChanged}}) != nil {
+		t.Error("offered to send to a node that cannot take it by password")
+	}
+}
+
+// Many nodes ansible could not reach: probed eight at a time, each in a time of
+// its own, so the last ones are classified as well as the first.
+func TestProbeNodesInParallel(t *testing.T) {
+	var mu sync.Mutex
+	var running, most int
+	run := func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		running++
+		most = max(most, running)
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		running--
+		mu.Unlock()
+		return []byte(args[len(args)-2] + ": Permission denied (publickey,password).\n"), errors.New("exit status 255")
+	}
+	var nodes []SSHNode
+	for i := 0; i < 30; i++ {
+		nodes = append(nodes, SSHNode{fmt.Sprintf("n%02d", i), fmt.Sprintf("10.0.0.%d", i), "22", "ops"})
+	}
+	rs, err := ProbeNodes(context.Background(), run, SSHKey{Private: filepath.Join(t.TempDir(), "id_rsa")}, nodes, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range rs {
+		if r.Node != nodes[i] || r.Key != KeyRefused {
+			t.Errorf("%d: %+v", i, r)
+		}
+	}
+	if most > probeParallel || most < 2 {
+		t.Errorf("%d probes at once", most)
+	}
+
+	// no time left: the probes that did not run say so
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rs, _ = ProbeNodes(ctx, run, SSHKey{Private: filepath.Join(t.TempDir(), "id_rsa")}, nodes[:3], true)
+	for _, r := range rs {
+		if r.Key != KeyNotProbed || r.Label() != "확인 못 함" || !strings.Contains(r.Note(), "--check-ssh 로 다시") {
+			t.Errorf("%+v", r)
+		}
+	}
+}
+
+// What ssh would read as an option is refused in the inventory.
+func TestParseInventoryRefusesOptions(t *testing.T) {
+	for _, hv := range []string{`{"ansible_host": "-oProxyCommand=x"}`, `{"ansible_host": "10.0.0.1", "ansible_user": "-x"}`} {
+		_, _, err := parseInventory([]byte(`{"_meta": {"hostvars": {"n": `+hv+`}}}`), "me")
+		if err == nil || !strings.Contains(err.Error(), "'-' 로 시작") {
+			t.Errorf("%s: %v", hv, err)
 		}
 	}
 }
@@ -138,6 +200,9 @@ func sshNodes(rec *recorder, inventory, ansible string, nodes map[string]*fakeNo
 				return []byte("Number of key(s) added: 1\n"), nil
 			}
 			return []byte("ssh: connect to host x port 22: Connection refused\n"), errors.New("exit status 1")
+		}
+		if strings.HasSuffix(name, "askpass.sh") {
+			return []byte("\n"), nil // the helper, run once without the password
 		}
 		return nil, errors.New("unexpected " + name)
 	}
@@ -217,7 +282,7 @@ func TestProbeNode(t *testing.T) {
 	}
 	args := strings.Join(rec.calls[0].args, " ")
 	for _, want := range []string{"-n -i /home/ops/.ssh/id_rsa", "BatchMode=yes", "IdentitiesOnly=yes", "IdentityAgent=none",
-		"ConnectTimeout=10", "StrictHostKeyChecking=accept-new", "-p 22 ops@10.0.0.1 true"} {
+		"ConnectTimeout=10", "StrictHostKeyChecking=accept-new", "-p 22 -- ops@10.0.0.1 true"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("ssh %s lacks %q", args, want)
 		}
@@ -279,6 +344,9 @@ func TestProbeNodesReadOnly(t *testing.T) {
 // The directory of the helper is gone afterwards.
 func TestSendKeyWithPasswordKeepsThePasswordOutOfArguments(t *testing.T) {
 	const password = ` p@ss w0rd$1 'x' `
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_RUNTIME_DIR", "")
 	nodes := p2Nodes()
 	rec := &recorder{}
 	inner := sshNodes(rec, "", "", nodes)
@@ -339,10 +407,71 @@ func TestSendKeyWithPasswordKeepsThePasswordOutOfArguments(t *testing.T) {
 	if _, err := os.Stat(filepath.Dir(helper)); helper == "" || !os.IsNotExist(err) {
 		t.Errorf("the helper's directory %q is left: %v", helper, err)
 	}
+	// not under /tmp, which hardened sites mount noexec
+	if !strings.HasPrefix(helper, filepath.Join(home, ".cache", "k8s-installer-tui")+"/") {
+		t.Errorf("helper at %s", helper)
+	}
+}
+
+// The helper goes to $XDG_RUNTIME_DIR when it can run there, else to ~/.cache;
+// when it can run nowhere the send stops with that cause, not as a refused key.
+func TestAskPassHelperPlaces(t *testing.T) {
+	home, xdg := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_RUNTIME_DIR", xdg)
+	ok := func(context.Context, string, string, ...string) ([]byte, error) { return []byte("\n"), nil }
+	dir, _, err := askPassHelper(context.Background(), ok)
+	if err != nil || filepath.Dir(dir) != xdg {
+		t.Errorf("%s %v", dir, err)
+	}
+	os.RemoveAll(dir)
+
+	// noexec where XDG_RUNTIME_DIR is: on to ~/.cache
+	noexecXDG := func(ctx context.Context, d, name string, args ...string) ([]byte, error) {
+		if strings.HasPrefix(name, xdg) {
+			return []byte("bash: " + name + ": Permission denied\n"), errors.New("fork/exec " + name + ": permission denied")
+		}
+		return nil, nil
+	}
+	dir, _, err = askPassHelper(context.Background(), noexecXDG)
+	if err != nil || filepath.Dir(dir) != filepath.Join(home, ".cache", "k8s-installer-tui") {
+		t.Errorf("%s %v", dir, err)
+	}
+	os.RemoveAll(dir)
+	if left, _ := os.ReadDir(xdg); len(left) != 0 {
+		t.Errorf("left in XDG_RUNTIME_DIR: %v", left)
+	}
+
+	noexec := func(ctx context.Context, d, name string, args ...string) ([]byte, error) {
+		if name == "setsid" {
+			t.Error("sent without a helper that runs")
+		}
+		return nil, errors.New("fork/exec " + name + ": permission denied")
+	}
+	err = SendKeyWithPassword(context.Background(), noexec, DefaultSSHKey(), []SSHNode{{"a", "10.0.0.2", "22", "ops"}}, []byte("pw"),
+		func(NodeSSH) { t.Error("a result without a send") })
+	if err == nil || !strings.Contains(err.Error(), "SSH_ASKPASS 도우미를 실행할 수 있는 디렉터리가 없어") || !strings.Contains(err.Error(), "noexec") {
+		t.Errorf("%v", err)
+	}
+
+	// ssh itself could not run it: said so, not "refused"
+	askpassFails := func(ctx context.Context, d, name string, args ...string) ([]byte, error) {
+		if name == "setsid" {
+			return []byte("ssh_askpass: exec(/x/askpass.sh): Permission denied\nops@10.0.0.2: Permission denied (publickey,password).\n"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	err = SendKeyWithPassword(context.Background(), askpassFails, DefaultSSHKey(), []SSHNode{{"a", "10.0.0.2", "22", "ops"}}, []byte("pw"),
+		func(NodeSSH) { t.Error("reported as a node result") })
+	if err == nil || !strings.Contains(err.Error(), "도우미를 실행하지 못했습니다") {
+		t.Errorf("%v", err)
+	}
 }
 
 // Ctrl-C: no node after it, and the helper's directory is removed.
 func TestSendKeyWithPasswordStops(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", "")
 	ctx, cancel := context.WithCancel(context.Background())
 	var helper string
 	var sends int
@@ -374,7 +503,7 @@ func TestAskSendScript(t *testing.T) {
 	k := SSHKey{Private: "/home/o p/.ssh/id_rsa", Public: "/home/o p/.ssh/id_rsa.pub"}
 	s := AskSendScript(k, []SSHNode{{"n-key", "10.0.0.2", "2222", "ops"}}, true)
 	for _, want := range []string{
-		"ssh-copy-id -i '/home/o p/.ssh/id_rsa.pub' -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -p 2222 ops@10.0.0.2 || echo",
+		"ssh-copy-id -i '/home/o p/.ssh/id_rsa.pub' -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -p 2222 -- ops@10.0.0.2 || echo",
 		"read -r -p",
 	} {
 		if !strings.Contains(s, want) {
@@ -399,27 +528,50 @@ func TestSSHTable(t *testing.T) {
 	}
 }
 
-// configure-control-node-ssh.sh of the installer makes the key; its
-// instructions are dropped.
+// The key pair: configure-control-node-ssh.sh of the installer runs only when
+// there is neither file (it would rewrite authorized_keys every time, and make a
+// new pair over an id_rsa without its .pub); with only id_rsa the operator
+// restores the public key.
 func TestPrepareKey(t *testing.T) {
 	home := t.TempDir()
 	k := SSHKey{Private: filepath.Join(home, "id_rsa"), Public: filepath.Join(home, "id_rsa.pub")}
-	var script string
+	var scripts []string
 	run := func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
-		script = args[len(args)-1]
+		scripts = append(scripts, args[len(args)-1])
+		os.WriteFile(k.Private, []byte("PRIVATE"), 0600)
 		os.WriteFile(k.Public, []byte("ssh-rsa AAAA"), 0644)
 		return nil, nil
-	}
-	if err := PrepareKey(context.Background(), testOptions(), run, k); err != nil {
-		t.Fatal(err)
-	}
-	if script != "/opt/k8s-installer/ansible/configure-control-node-ssh.sh --no-color > /dev/null" {
-		t.Errorf("ran %q", script)
 	}
 	failing := func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		return []byte("[ERROR] File[\"~/.ssh/id_rsa.pub\"] is not a regular file\n"), errors.New("exit status 1")
 	}
+
+	// neither: the script makes them
 	if err := PrepareKey(context.Background(), testOptions(), failing, k); err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Errorf("%v", err)
+	}
+	if err := PrepareKey(context.Background(), testOptions(), run, k); err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) != 1 || scripts[0] != "/opt/k8s-installer/ansible/configure-control-node-ssh.sh --no-color > /dev/null" {
+		t.Errorf("ran %q", scripts)
+	}
+
+	// both: nothing runs
+	if err := PrepareKey(context.Background(), testOptions(), run, k); err != nil || len(scripts) != 1 {
+		t.Errorf("%v, ran %q", err, scripts)
+	}
+
+	// only id_rsa: stop, nothing runs, the private key stays
+	os.Remove(k.Public)
+	err := PrepareKey(context.Background(), testOptions(), run, k)
+	if err == nil || !strings.Contains(err.Error(), "ssh-keygen -y -f "+k.Private+" > "+k.Public) || len(scripts) != 1 {
+		t.Errorf("%v, ran %q", err, scripts)
+	}
+	if data, _ := os.ReadFile(k.Private); string(data) != "PRIVATE" {
+		t.Error("the private key changed")
+	}
+	if _, err := os.Stat(k.Public); err == nil {
+		t.Error("a public key was made")
 	}
 }

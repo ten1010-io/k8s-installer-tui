@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -135,6 +137,10 @@ func parseInventory(out []byte, defaultUser string) ([]SSHNode, []string, error)
 				return nil, nil, fmt.Errorf("노드 %s 의 이름·주소·포트·사용자 중 비었거나 공백이 든 값이 있습니다", name)
 			}
 		}
+		// ssh would read them as options
+		if strings.HasPrefix(n.Host, "-") || strings.HasPrefix(n.User, "-") {
+			return nil, nil, fmt.Errorf("노드 %s 의 주소 (%s) 나 사용자 (%s) 가 '-' 로 시작합니다. ssh 가 옵션으로 읽으므로 inventory 를 고치세요", name, n.Host, n.User)
+		}
 		nodes = append(nodes, n)
 	}
 	return nodes, warnings, nil
@@ -170,6 +176,11 @@ const (
 	KeyRefused
 	KeyUnreachable
 	KeyHostChanged
+	// KeyNoPassword: refused, and sshd offers no password login, so sending the
+	// key cannot work; it has to be put on the node by hand
+	KeyNoPassword
+	// KeyNotProbed: the probe did not run (or was cut short) in the time it had
+	KeyNotProbed
 )
 
 // SudoState is whether the user of a node runs sudo without a password.
@@ -203,6 +214,10 @@ func (r NodeSSH) Label() string {
 		return "접속 불가"
 	case r.Key == KeyHostChanged:
 		return "호스트 키 변경"
+	case r.Key == KeyNoPassword:
+		return "비밀번호 로그인 꺼짐"
+	case r.Key == KeyNotProbed:
+		return "확인 못 함"
 	case r.Sudo == SudoNeedsPassword:
 		return "sudo 비밀번호 필요"
 	}
@@ -222,6 +237,10 @@ func (r NodeSSH) Note() string {
 		fix = "접속하지 못함. 주소·포트·방화벽·sshd 를 확인하세요"
 	case r.Key == KeyHostChanged:
 		fix = "known_hosts 의 호스트 키와 다름. 노드를 다시 설치한 것이 맞으면 ssh-keygen -R " + shellQuote(knownHostsName(r.Node)) + " 뒤 다시 확인하세요"
+	case r.Key == KeyNoPassword:
+		fix = "제어 노드의 키를 받지 않고 비밀번호 로그인이 꺼져 있음 — 키를 직접 넣어야 함 (configure-control-node-ssh.sh 가 출력하는 안내)"
+	case r.Key == KeyNotProbed:
+		fix = "시간 안에 확인하지 못했습니다. --check-ssh 로 다시 확인하세요"
 	case r.Sudo == SudoNeedsPassword:
 		fix = "사용자 " + r.Node.User + " 에 비밀번호 없는 sudo (NOPASSWD) 가 필요합니다"
 	default:
@@ -260,19 +279,38 @@ func sshConnOpts(knownHosts string) []string {
 func keyArgs(k SSHKey, n SSHNode, knownHosts, command string) []string {
 	args := []string{"-n", "-i", k.Private, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none"}
 	args = append(args, sshConnOpts(knownHosts)...)
-	return append(args, "-p", n.Port, n.User+"@"+n.Host, command)
+	return append(args, "-p", n.Port, "--", n.User+"@"+n.Host, command)
 }
 
+// probeTimeout bounds one probe: two ssh runs of ConnectTimeout=10 each.
+const probeTimeout = 45 * time.Second
+
 // ProbeNode looks whether n takes the key and, when it does, runs sudo without a
-// password. knownHosts: see sshConnOpts.
+// password. knownHosts: see sshConnOpts. When ctx ends first the node is
+// KeyNotProbed, not classified from what a killed ssh printed.
 func ProbeNode(ctx context.Context, run RunFunc, k SSHKey, n SSHNode, knownHosts string) NodeSSH {
 	r := NodeSSH{Node: n}
+	if ctx.Err() != nil {
+		r.Key = KeyNotProbed
+		return r
+	}
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
 	out, err := run(ctx, "", "ssh", keyArgs(k, n, knownHosts, "true")...)
+	if ctx.Err() != nil {
+		r.Key = KeyNotProbed
+		return r
+	}
 	if err != nil {
 		r.Key, r.Detail = classifySSH(out)
 		return r
 	}
 	out, err = run(ctx, "", "ssh", keyArgs(k, n, knownHosts, "sudo -n true")...)
+	if ctx.Err() != nil {
+		r.Sudo = SudoNotChecked
+		r.Detail = "sudo 를 시간 안에 확인하지 못함"
+		return r
+	}
 	if err != nil {
 		r.Sudo, r.Detail = SudoNeedsPassword, lastLine(out)
 		return r
@@ -281,16 +319,39 @@ func ProbeNode(ctx context.Context, run RunFunc, k SSHKey, n SSHNode, knownHosts
 	return r
 }
 
-// classifySSH reads why ssh failed from what it printed.
+// classifySSH reads why ssh failed from everything it printed: OpenSSH puts the
+// cause before other lines ("Too many authentication failures", then
+// "Disconnected from ..."). The detail is the line that says it.
 func classifySSH(out []byte) (KeyState, string) {
-	last := lastLine(out)
-	switch {
-	case bytes.Contains(out, []byte("REMOTE HOST IDENTIFICATION HAS CHANGED")) || strings.Contains(last, "Host key verification failed"):
-		return KeyHostChanged, last
-	case strings.Contains(last, "Permission denied") || strings.Contains(last, "Too many authentication failures"):
-		return KeyRefused, last
+	text := strings.ReplaceAll(string(out), "\r", "")
+	line := func(subs ...string) string {
+		for _, l := range strings.Split(text, "\n") {
+			for _, s := range subs {
+				if strings.Contains(l, s) {
+					return strings.ReplaceAll(strings.TrimSpace(l), "|", "/")
+				}
+			}
+		}
+		return lastLine(out)
 	}
-	return KeyUnreachable, last
+	switch {
+	case strings.Contains(text, "REMOTE HOST IDENTIFICATION HAS CHANGED") || strings.Contains(text, "Host key verification failed"):
+		return KeyHostChanged, line("Host key verification failed", "IDENTIFICATION HAS CHANGED")
+	case strings.Contains(text, "Too many authentication failures"):
+		return KeyRefused, line("Too many authentication failures")
+	case strings.Contains(text, "Permission denied"):
+		l := line("Permission denied")
+		// the methods sshd offers, as ssh lists them: "Permission denied (publickey,password)."
+		methods := l
+		if i := strings.LastIndex(l, "("); i >= 0 {
+			methods = l[i:]
+		}
+		if !strings.Contains(methods, "password") && !strings.Contains(methods, "keyboard-interactive") {
+			return KeyNoPassword, l
+		}
+		return KeyRefused, l
+	}
+	return KeyUnreachable, lastLine(out)
 }
 
 // lastLine is the last line that says something, without what would break a
@@ -305,8 +366,12 @@ func lastLine(out []byte) string {
 	return ""
 }
 
-// ProbeNodes probes every node. readOnly: the host keys met go to a copy of
-// known_hosts that is thrown away, so a look changes nothing.
+// probeParallel bounds how many nodes are probed at once.
+const probeParallel = 8
+
+// ProbeNodes probes every node, probeParallel at a time, each in a time of its
+// own (ProbeNode). readOnly: the host keys met go to a copy of known_hosts that
+// is thrown away, so a look changes nothing.
 func ProbeNodes(ctx context.Context, run RunFunc, k SSHKey, nodes []SSHNode, readOnly bool) ([]NodeSSH, error) {
 	knownHosts := ""
 	if readOnly {
@@ -324,16 +389,29 @@ func ProbeNodes(ctx context.Context, run RunFunc, k SSHKey, nodes []SSHNode, rea
 			return nil, err
 		}
 	}
-	res := make([]NodeSSH, 0, len(nodes))
-	for _, n := range nodes {
-		res = append(res, ProbeNode(ctx, run, k, n, knownHosts))
+	res := make([]NodeSSH, len(nodes))
+	sem := make(chan struct{}, probeParallel)
+	var wg sync.WaitGroup
+	for i, n := range nodes {
+		wg.Add(1)
+		go func(i int, n SSHNode) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				res[i] = ProbeNode(ctx, run, k, n, knownHosts)
+			case <-ctx.Done():
+				res[i] = NodeSSH{Node: n, Key: KeyNotProbed}
+			}
+		}(i, n)
 	}
+	wg.Wait()
 	return res, nil
 }
 
 // Refusing are the nodes that refuse the key: the ones sending it would help.
-// A node that is down, whose host key changed or that only lacks sudo is not
-// among them; its note says what to do instead.
+// A node that is down, whose host key changed, whose sshd takes no password or
+// that only lacks sudo is not among them; its note says what to do instead.
 func Refusing(rs []NodeSSH) []SSHNode {
 	var nodes []SSHNode
 	for _, r := range rs {
@@ -344,11 +422,21 @@ func Refusing(rs []NodeSSH) []SSHNode {
 	return nodes
 }
 
-// PrepareKey makes the key pair of the control node when there is none, by
-// running configure-control-node-ssh.sh of k8s-installer (which also puts it in
-// the control node's own authorized_keys). What it prints for the operator to
-// do by hand is dropped: sending the key does it.
+// PrepareKey makes sure the key pair of the control node is there before a send.
+// With id_rsa.pub there it does nothing. With only id_rsa it stops: the public
+// key has to be restored from it (ssh-keygen -y), since the script of the
+// installer would make a new pair over the private key. With neither it runs
+// configure-control-node-ssh.sh of k8s-installer, which makes the pair and puts
+// it in the control node's own authorized_keys; what it prints for the operator
+// to do by hand is dropped, sending the key does it.
 func PrepareKey(ctx context.Context, o Options, run RunFunc, k SSHKey) error {
+	if _, err := os.Stat(k.Public); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(k.Private); err == nil {
+		return fmt.Errorf("%s 는 있는데 %s 가 없습니다. 개인 키에서 공개 키를 되살린 뒤 다시 실행하세요: ssh-keygen -y -f %s > %s",
+			k.Private, k.Public, shellQuote(k.Private), shellQuote(k.Public))
+	}
 	script := o.AnsibleDir() + "/configure-control-node-ssh.sh"
 	out, err := run(ctx, o.AnsibleDir(), "bash", "-c", shellQuote(script)+" --no-color > /dev/null")
 	if err != nil {
@@ -367,7 +455,7 @@ func AskSendScript(k SSHKey, nodes []SSHNode, pause bool) string {
 	var b strings.Builder
 	for _, n := range nodes {
 		args := append([]string{"ssh-copy-id", "-i", k.Public}, sshConnOpts("")...)
-		args = append(args, "-p", n.Port, n.User+"@"+n.Host)
+		args = append(args, "-p", n.Port, "--", n.User+"@"+n.Host)
 		for i, a := range args {
 			args[i] = shellQuote(a)
 		}
@@ -384,23 +472,61 @@ func AskSendScript(k SSHKey, nodes []SSHNode, pause bool) string {
 // ssh it runs, which runs the helper.
 const askPassVar = "K8S_INSTALLER_TUI_SSH_PASSWORD"
 
+// askPassHelper writes the helper ssh runs for the password into a new 0700
+// directory where the user can run it: $XDG_RUNTIME_DIR when set, else
+// ~/.cache/k8s-installer-tui (/tmp is noexec on hardened sites). The helper is
+// run once, without the password, to see that it can be; the directory is
+// removed when it cannot.
+func askPassHelper(ctx context.Context, run RunFunc) (dir, helper string, err error) {
+	var bases, why []string
+	if x := os.Getenv("XDG_RUNTIME_DIR"); x != "" {
+		bases = append(bases, x)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		bases = append(bases, filepath.Join(home, ".cache", "k8s-installer-tui"))
+	}
+	for _, base := range bases {
+		if err := os.MkdirAll(base, 0700); err != nil {
+			why = append(why, err.Error())
+			continue
+		}
+		dir, err := os.MkdirTemp(base, "ssh-askpass-")
+		if err != nil {
+			why = append(why, err.Error())
+			continue
+		}
+		helper := filepath.Join(dir, "askpass.sh")
+		err = os.WriteFile(helper, []byte("#!/bin/sh\nprintf '%s\\n' \"$"+askPassVar+"\"\n"), 0700)
+		if err == nil {
+			var out []byte
+			if out, err = run(ctx, "", helper); err != nil {
+				err = fmt.Errorf("%s 를 실행할 수 없음: %v %s", helper, err, lastLine(out))
+			}
+		}
+		if err != nil {
+			os.RemoveAll(dir)
+			why = append(why, err.Error())
+			continue
+		}
+		return dir, helper, nil
+	}
+	return "", "", fmt.Errorf("SSH_ASKPASS 도우미를 실행할 수 있는 디렉터리가 없어 키를 보내지 않았습니다 (noexec 마운트인지 확인): %s",
+		strings.Join(why, "; "))
+}
+
 // SendKeyWithPassword sends the key to each node with one password, then probes
 // the node again and gives what it found to done. ssh takes the password from
 // SSH_ASKPASS when it has no terminal: setsid takes the terminal away, which
 // works on OpenSSH before 8.4 too, where SSH_ASKPASS_REQUIRE is not known. One
 // prompt per node, so a wrong password costs each node one failed login. The
-// helper holds no password, only the name of the variable; it lives in a 0700
-// directory removed at the end. Stops at the next node when ctx is done.
+// helper holds no password, only the name of the variable (askPassHelper); its
+// directory is removed at the end. Stops at the next node when ctx is done.
 func SendKeyWithPassword(ctx context.Context, run RunFunc, k SSHKey, nodes []SSHNode, password []byte, done func(NodeSSH)) error {
-	dir, err := os.MkdirTemp("", "k8s-installer-tui-ssh-")
+	dir, helper, err := askPassHelper(ctx, run)
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
-	helper := filepath.Join(dir, "askpass.sh")
-	if err := os.WriteFile(helper, []byte("#!/bin/sh\nprintf '%s\\n' \"$"+askPassVar+"\"\n"), 0700); err != nil {
-		return err
-	}
 	display := os.Getenv("DISPLAY")
 	if display == "" {
 		display = "none"
@@ -411,10 +537,14 @@ func SendKeyWithPassword(ctx context.Context, run RunFunc, k SSHKey, nodes []SSH
 			return ctx.Err()
 		}
 		args := append([]string{"-w", "ssh-copy-id", "-i", k.Public}, sshConnOpts("")...)
-		args = append(args, "-o", "NumberOfPasswordPrompts=1", "-p", n.Port, n.User+"@"+n.Host)
+		args = append(args, "-o", "NumberOfPasswordPrompts=1", "-p", n.Port, "--", n.User+"@"+n.Host)
 		out, sendErr := run(env, "", "setsid", args...)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if sendErr != nil && bytes.Contains(out, []byte("ssh_askpass")) {
+			// not the password: ssh could not run the helper
+			return fmt.Errorf("ssh 가 SSH_ASKPASS 도우미를 실행하지 못했습니다: %s", lastLine(out))
 		}
 		r := ProbeNode(ctx, run, k, n, "")
 		if sendErr != nil && r.Key != KeyOK {
@@ -435,7 +565,8 @@ func SSHTable(rs []NodeSSH) string {
 		if r.Node.Port != "22" {
 			addr += ":" + r.Node.Port
 		}
-		key := map[KeyState]string{KeyOK: "ok", KeyRefused: "거부", KeyUnreachable: "접속불가", KeyHostChanged: "호스트키변경"}[r.Key]
+		key := map[KeyState]string{KeyOK: "ok", KeyRefused: "거부", KeyUnreachable: "접속불가", KeyHostChanged: "호스트키변경",
+			KeyNoPassword: "비밀번호로그인꺼짐", KeyNotProbed: "미확인"}[r.Key]
 		sudo := map[SudoState]string{SudoNotChecked: "-", SudoOK: "ok", SudoNeedsPassword: "비밀번호필요"}[r.Sudo]
 		note := ""
 		if !r.Ready() {

@@ -27,6 +27,10 @@ type RunFunc func(ctx context.Context, dir, name string, args ...string) ([]byte
 func ExecRun(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	// cancelled: kill what the command started too (ssh under ssh-copy-id holds
+	// the output pipe), and stop waiting for the pipe after a while regardless
+	cmd.Cancel = func() error { return killTree(cmd) }
+	cmd.WaitDelay = 5 * time.Second
 	if env := EnvOf(ctx); len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -73,6 +77,8 @@ func CheckSSH(ctx context.Context, o Options, run RunFunc) CheckResult {
 // no connection, a changed host key, or sudo. It returns what it found for those
 // nodes, for the screen to offer sending the key to the ones that refuse it.
 func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []NodeSSH) {
+	// the probes below get a time of their own (ProbeNodes), not what is left of this
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	script := fmt.Sprintf("source %s && ansible all -i inventory.yml -o -m command -a 'sudo -n true'",
@@ -95,7 +101,7 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 	var probed []NodeSSH
 	var warnings []string
 	if len(unreachable) > 0 {
-		probed, warnings = probeUnreachable(ctx, o, run, unreachable)
+		probed, warnings = probeUnreachable(parent, o, run, unreachable)
 		for _, p := range probed {
 			results[p.Node.Name] = "접속 안 됨 — " + p.Label() + ": " + p.Note()
 		}
@@ -137,7 +143,9 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 // ansible directory gives them. Nothing when the inventory cannot be listed: P2
 // says what ansible said.
 func probeUnreachable(ctx context.Context, o Options, run RunFunc, names []string) ([]NodeSSH, []string) {
-	all, warnings, err := ListSSHNodes(ctx, o, run, "inventory.yml")
+	lctx, lcancel := context.WithTimeout(ctx, time.Minute)
+	defer lcancel()
+	all, warnings, err := ListSSHNodes(lctx, o, run, "inventory.yml")
 	if err != nil {
 		return nil, nil
 	}

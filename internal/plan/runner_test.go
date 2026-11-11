@@ -624,6 +624,152 @@ func TestRunnerExplainsTheBackendInformer(t *testing.T) {
 	if got := f.ranIDs(); strings.Count(got, "A5") != 1 {
 		t.Errorf("setup-aipub retried: %s", got)
 	}
+	// the error alone, with no result line of install.sh, is not known to be
+	// the informer only: the run stops there
+	if a5.Continued || snap.Step("A5.1").Status != StatusPending {
+		t.Errorf("went on without the result lines: %s", statuses(snap))
+	}
+}
+
+// What setup-aipub of aipub-installer prints when backend-informer is the one
+// component that failed, for want of the Workspace CRD (helmfile mode, from a
+// real run: the colour codes, both result lines, the failure of install.sh
+// that ansible ignores and the one task that ends the play).
+const informerEmit = "TASK [[aipub] install.sh db backend-api aipub-nav backend-informer --emit-values] ***\n" +
+	"fatal: [node1]: FAILED! => \n" +
+	"    changed: true\n" +
+	"        \x1b[0;31m[ERROR]\x1b[0m CRD 'workspaces.aipub.ten1010.io' does not exist. The informers cannot sync and the pod would restart in a loop.\n" +
+	"        \x1b[0;31m[ERROR]\x1b[0m install backend-informer failed (exit 1); see the log above.\n" +
+	"        AIPUB_RESULT module=aipub action=install component=backend-informer result=FAIL exit=1\n" +
+	"        AIPUB_JAVA_RESULT module=aipub action=install component=backend-informer result=FAIL exit=1\n" +
+	"...ignoring\n" +
+	"\n" +
+	"TASK [[aipub] Result of db backend-api aipub-nav backend-informer] ***\n" +
+	"ok: [node1] => \n" +
+	"    - AIPUB_RESULT module=aipub action=install component=aipub-nav result=OK\n" +
+	"    - AIPUB_RESULT module=aipub action=install component=backend-informer result=FAIL\n"
+
+const informerStop = informerEmit +
+	"TASK [[aipub] Result of helmfile sync] ***\n" +
+	"ok: [node1]\n" +
+	"TASK [[aipub] Stop: install.sh --emit-values failed] ***************************\n" +
+	"fatal: [node1]: FAILED! => \n" +
+	"    changed: false\n"
+
+// The same stop with the installer (or dag) as the deploy tool: the call that
+// has backend-informer in it is ignored, and its result task ends the play.
+const informerStopInstaller = "TASK [[aipub] install.sh aipub-nav backend-informer] ***\n" +
+	"fatal: [node1]: FAILED! => \n" +
+	"        \x1b[0;31m[ERROR]\x1b[0m CRD 'workspaces.aipub.ten1010.io' does not exist. The informers cannot sync and the pod would restart in a loop.\n" +
+	"        AIPUB_RESULT module=aipub action=install component=backend-informer result=FAIL exit=1\n" +
+	"...ignoring\n" +
+	"TASK [[aipub] Result of aipub-nav backend-informer] ****\n" +
+	"fatal: [node1]: FAILED! => \n" +
+	"    - AIPUB_RESULT module=aipub action=install component=backend-informer result=FAIL\n"
+
+// The run goes on past setup-aipub when only backend-informer failed for want
+// of the Workspace CRD: the JWKS steps after it need the backend and the CA,
+// not the informer. The step stays failed, and a resume runs it alone.
+func TestRunnerGoesOnPastTheInformerStop(t *testing.T) {
+	stages := aipubStages()
+	r, f, inputs := newTestRunner(t, stages)
+	f.classes["nfs-client"] = true
+	f.fail["A5"] = 2
+	f.out["A5"] = informerStop
+	outcome, err := r.Run(context.Background(), false)
+	snap := r.Snapshot()
+	a5 := snap.Step("A5")
+	if err != nil || outcome != OutcomeFailed || a5.Status != StatusFailed || !a5.Continued ||
+		!strings.Contains(a5.Note, "Python 서비스를 설치한 뒤 이어서 실행") || !strings.Contains(a5.Note, "계속합니다") {
+		t.Fatalf("%s %v %+v", outcome, err, a5)
+	}
+	if snap.Step("A5.1").Status != StatusOK || snap.Step("A5.2").Status != StatusOK || !strings.HasSuffix(f.ranIDs(), "A5 A5.1 A5.2") {
+		t.Fatalf("the JWKS steps did not run after it: %s, ran %s", statuses(snap), f.ranIDs())
+	}
+	st, _ := LoadRunState(r.Dir)
+	if st == nil || st.Outcome != OutcomeFailed || !st.WentOn() {
+		t.Fatalf("state.json: %+v", st)
+	}
+
+	// the python services are there: a resume runs setup-aipub, and the JWKS
+	// steps again after it (its k8s-jwks has written the config on the nodes
+	// by hand once more), nothing before it
+	r2 := NewRunner(r.Opts, r.State, stages, inputs)
+	f2 := newFakeSite(stages)
+	f2.classes["nfs-client"] = true
+	r2.Exec, r2.Cmd = f2.exec, f2.cmd
+	if outcome, err := r2.Run(context.Background(), true); outcome != OutcomeOK || err != nil || f2.ranIDs() != "A5 A5.1 A5.2" {
+		t.Fatalf("resume: %s %v, ran %s", outcome, err, f2.ranIDs())
+	}
+	if snap := r2.Snapshot(); snap.Step("A5").Continued || snap.WentOn() {
+		t.Errorf("after it succeeded: %+v", snap.Step("A5"))
+	}
+
+	// with the installer as the deploy tool the same stop looks different
+	r3, f3, _ := newTestRunner(t, stages)
+	f3.classes["nfs-client"] = true
+	f3.fail["A5"] = 2
+	f3.out["A5"] = informerStopInstaller
+	r3.Run(context.Background(), false)
+	if snap := r3.Snapshot(); !snap.Step("A5").Continued || snap.Step("A5.2").Status != StatusOK {
+		t.Errorf("installer mode: %s", statuses(snap))
+	}
+}
+
+func TestFailedTasks(t *testing.T) {
+	got := failedTasks(strings.Split(informerStop, "\n"))
+	if len(got) != 1 || got[0] != "[aipub] Stop: install.sh --emit-values failed" {
+		t.Errorf("%q", got)
+	}
+	if got := failedTasks(strings.Split(informerEmit, "\n")); len(got) != 0 {
+		t.Errorf("an ignored failure counted: %q", got)
+	}
+}
+
+// Anything else failing in setup-aipub stops the run there, as any failure: a
+// second component, a node out of reach, and what an earlier attempt said.
+func TestRunnerStopsWhenMoreThanTheInformerFailed(t *testing.T) {
+	for name, out := range map[string]string{
+		"another component failed too": informerStop + "    - AIPUB_RESULT module=aipub action=install component=backend-api result=FAIL\n",
+		"a node out of reach":          informerStop + "fatal: [node2]: UNREACHABLE! => {\"msg\": \"Failed to connect\"}\n",
+		"the CRD's name, no error":     "  can-i list workspaces.aipub.ten1010.io: yes\n    - AIPUB_RESULT module=aipub action=install component=backend-informer result=FAIL\n",
+		// the informer's error is in the log of every new cluster: what ended
+		// the play is what counts. Here helmfile sync did, before k8s-jwks and
+		// the rest, and printed no line of a component
+		"helmfile sync failed":                    informerEmit + "TASK [[aipub] Result of helmfile sync] ***\nfatal: [node1]: FAILED! => \n    msg: helmfile sync failed\n",
+		"a task failed after the stop was passed": informerStop + "TASK [[aipub] Something later] ***\nfatal: [node1]: FAILED! => \n",
+		"install.sh died without a result line":   informerEmit + "TASK [[aipub] Result of db backend-api aipub-nav --after-helmfile] ***\nfatal: [node1]: FAILED! => \n",
+	} {
+		r, f, _ := newTestRunner(t, aipubStages())
+		f.classes["nfs-client"] = true
+		f.fail["A5"] = 2
+		f.out["A5"] = out
+		outcome, _ := r.Run(context.Background(), false)
+		snap := r.Snapshot()
+		if outcome != OutcomeFailed || snap.Step("A5").Continued || snap.Step("A5.1").Status != StatusPending || snap.WentOn() {
+			t.Errorf("%s: went on: %s", name, statuses(snap))
+		}
+	}
+
+	// an earlier attempt stopped on the informer; this one fails on something else
+	stages := aipubStages()
+	r, f, inputs := newTestRunner(t, stages)
+	f.classes["nfs-client"] = true
+	f.fail["A5"] = 2
+	f.out["A5"] = informerStop
+	r.Run(context.Background(), false)
+	r2 := NewRunner(r.Opts, r.State, stages, inputs)
+	f2 := newFakeSite(stages)
+	f2.classes["nfs-client"] = true
+	f2.fail["A5"] = 2
+	f2.out["A5"] = "fatal: [node1]: FAILED! => {\"msg\": \"helm upgrade failed\"}\n"
+	r2.Exec, r2.Cmd = f2.exec, f2.cmd
+	outcome, _ := r2.Run(context.Background(), true)
+	snap2 := r2.Snapshot()
+	a5 := snap2.Step("A5")
+	if outcome != OutcomeFailed || a5.Continued || strings.Contains(a5.Note, "Workspace CRD") {
+		t.Errorf("the earlier attempt decided this one: %s %+v", outcome, a5)
+	}
 }
 
 func TestRunnerNeverRunsAReset(t *testing.T) {

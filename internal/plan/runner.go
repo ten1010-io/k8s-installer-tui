@@ -78,6 +78,10 @@ type StepState struct {
 	ExitCode *int       `json:"exit_code,omitempty"`
 	Log      string     `json:"log,omitempty"`
 	Note     string     `json:"note,omitempty"`
+	// Continued: the step failed on something that does not hold the steps
+	// after it back (informerOnly), and the run went on. It is still failed: a
+	// resume runs it again
+	Continued bool `json:"continued,omitempty"`
 	// PGID is the process group of the command while it runs (its session
 	// leads it): a program killed outright leaves it behind as running, and
 	// the next run refuses to start while that group is alive
@@ -141,6 +145,19 @@ func (r *RunState) Remaining() []StepState {
 		}
 	}
 	return out
+}
+
+// WentOn reports whether the run got to its end though steps failed: every
+// step that is not ok or skipped is one the run went on past (Continued).
+// Such a run is failed, and nothing but those steps is left of it.
+func (r *RunState) WentOn() bool {
+	left := r.Remaining()
+	for _, s := range left {
+		if s.Status != StatusFailed || !s.Continued {
+			return false
+		}
+	}
+	return len(left) > 0
 }
 
 const stateFile = "state.json"
@@ -492,16 +509,26 @@ func (r *Runner) init(prev *RunState) {
 	now := time.Now()
 	r.st = RunState{InputHash: InputHash(r.Inputs), Existing: r.Opts.Existing, AipubInstalled: r.Opts.AipubInstalled,
 		Monitoring: r.Opts.Monitoring, ArchivePath: r.Opts.ArchivePath, Started: now, Updated: now}
+	// again: a step the last run went on past (Continued) runs again now, and
+	// so do the steps after it, though they were ok. They ran after it for a
+	// reason: setup-aipub's k8s-jwks writes the authentication config on the
+	// nodes by hand, and A5.1 and A5.2 put the installer's own back over it
+	again := false
 	for i, stage := range r.Stages {
 		for _, st := range stage {
 			s := StepState{ID: st.ID, Title: st.Title, Stage: i, Status: StatusPending}
+			p := (*StepState)(nil)
+			if prev != nil {
+				p = prev.Step(st.ID)
+			}
 			if st.Skip {
 				s.Status, s.Note = StatusSkipped, st.SkipWhy
-			} else if prev != nil && !st.AlwaysRun {
-				if p := prev.Step(st.ID); p != nil && p.Status == StatusOK {
-					s = *p
-					s.Stage = i
-				}
+			} else if p != nil && !st.AlwaysRun && !again && p.Status == StatusOK {
+				s = *p
+				s.Stage = i
+			}
+			if p != nil && p.Status == StatusFailed && p.Continued {
+				again = true
 			}
 			r.st.Steps = append(r.st.Steps, s)
 		}
@@ -550,6 +577,7 @@ func (r *Runner) status(id string) StepStatus {
 // for another's failure (it runs to its end, safe to run again), and a Manual
 // step that waits stops waiting.
 func (r *Runner) stages(ctx context.Context) Outcome {
+	left := false // a step failed and the run went on past it
 	for _, stage := range r.Stages {
 		if r.stopping() || ctx.Err() != nil {
 			return OutcomeStopped
@@ -579,7 +607,13 @@ func (r *Runner) stages(ctx context.Context) Outcome {
 		for _, st := range stage {
 			switch r.status(st.ID) {
 			case StatusFailed:
-				fail = true
+				// a failure the later steps do not depend on (Continued) is kept
+				// as the outcome of the run, but does not end it here
+				if r.continued(st.ID) {
+					left = true
+				} else {
+					fail = true
+				}
 			case StatusOK, StatusSkipped:
 			default:
 				stop = true
@@ -592,7 +626,18 @@ func (r *Runner) stages(ctx context.Context) Outcome {
 			return OutcomeStopped
 		}
 	}
+	if left {
+		return OutcomeFailed
+	}
 	return OutcomeOK
+}
+
+// continued reports whether the failed step id let the run go on.
+func (r *Runner) continued(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.st.Step(id)
+	return st != nil && st.Continued
 }
 
 func now() *time.Time {
@@ -645,6 +690,7 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	}
 	r.set(st.ID, func(s *StepState) {
 		s.Status, s.Start, s.End, s.ExitCode, s.Log, s.Note = StatusRunning, now(), nil, nil, logPath, ""
+		s.Continued = false
 	})
 	// its process group is recorded while it runs (leftRunning); no Notify, the
 	// step shows nothing new
@@ -671,8 +717,12 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	}
 	fmt.Fprintf(f, "── %s %s 끝: 종료 코드 %d\n", time.Now().Format(time.RFC3339), st.ID, code)
 	var note string
+	goesOn := false
 	if err != nil && ctx.Err() == nil {
 		note = knownFailure(st, logPath, r.failureContext(st))
+		if goesOn = informerOnly(st, attemptLines(logPath, st)); goesOn {
+			note += ". 실패한 것은 backend-informer 하나이고 뒤 단계는 그것에 기대지 않아, 이 단계는 실패로 남기고 계속합니다"
+		}
 	}
 	r.set(st.ID, func(s *StepState) {
 		s.End, s.ExitCode, s.PGID = now(), &code, 0
@@ -682,10 +732,110 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 		case ctx.Err() != nil:
 			s.Status, s.Note = StatusCancelled, "중단함 (Ctrl+C 두 번)"
 		default:
-			s.Status, s.Note = StatusFailed, note
+			s.Status, s.Note, s.Continued = StatusFailed, note, goesOn
 		}
 	})
-	return err == nil
+	// to the stage, a failure the run goes on past is no failure: the steps
+	// beside it are not told to stop
+	return err == nil || goesOn
+}
+
+// The stop of setup-aipub that the installers' README says to expect.
+const (
+	setupAipubPlaybook = "aipub-playbooks/setup-aipub.yml"
+	workspaceCRDGone   = "CRD 'workspaces.aipub.ten1010.io' does not exist"
+)
+
+// componentFailed is the result line install.sh of aipub-installer prints for
+// a component that failed.
+var componentFailed = regexp.MustCompile(`AIPUB(?:_JAVA)?_RESULT .*\bcomponent=(\S+) result=FAIL`)
+
+// attemptLines are the lines of the last attempt of a step: its log keeps
+// every attempt, each under the header command() writes ("── <time> <ID>
+// <title>"). What an earlier attempt said must not decide this one.
+func attemptLines(logPath string, st Step) []string {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	// the header is "── <time> <ID> <title>": a time has no space in it, so a
+	// line of the command echoed under it ("── ansible-playbook ...") is not one
+	start, header := 0, " "+st.ID+" "+st.Title
+	for i, l := range lines {
+		if rest, ok := strings.CutPrefix(l, "── "); ok && strings.HasSuffix(rest, header) &&
+			!strings.Contains(strings.TrimSuffix(rest, header), " ") {
+			start = i
+		}
+	}
+	return lines[start:]
+}
+
+// failedTasks are the tasks of an ansible log that failed and were not
+// ignored, by name: a "fatal: [host]" line under its "TASK [name]" line, unless
+// "...ignoring" follows before the next task.
+func failedTasks(lines []string) []string {
+	var out []string
+	task, open := "", false // open: the last failure may still be ignored
+	for _, l := range lines {
+		switch t := strings.TrimSpace(l); {
+		case strings.HasPrefix(t, "TASK ["):
+			task, open = strings.TrimRight(strings.TrimPrefix(t, "TASK ["), "* "), false
+			task = strings.TrimSuffix(task, "]")
+		case strings.HasPrefix(t, "fatal: ["):
+			out, open = append(out, task), true
+		case t == "...ignoring" && open:
+			out, open = out[:len(out)-1], false
+		}
+	}
+	return out
+}
+
+// informerOnly reports whether setup-aipub stopped on nothing but
+// backend-informer finding no Workspace CRD, which the python services make
+// and aipub-installer does not install (its README: "backend-informer fails
+// until the python services have made the Workspace CRD"). backend-informer is
+// the last component of the module, so everything else of it is deployed, the
+// backend that issues the tokens among them; the steps after setup-aipub (the
+// JWKS config and its update-cluster) need that backend and the CA, not the
+// informer. So the run goes on, and the step stays failed for the resume that
+// follows the python services. Any other component failing, or a node out of
+// reach, is not this: the run stops there as on any failure.
+//
+// The informer's own error is in the log of every new cluster, so it proves
+// nothing alone. The playbook must also have failed on one task only, and that
+// task the one that reports the component: in helmfile mode the stop after
+// --emit-values (tasks/aipub/install-aipub-2-apiserver.yml), which comes after
+// helmfile sync, k8s-jwks and --after-helmfile have all succeeded; with the
+// installer or dag, the result of the install.sh call that had
+// backend-informer in it (tasks/aipub/run-installer.yml). A helmfile sync that
+// failed, or an install.sh that died without a result line, fails on another
+// task and prints no line of a component: without this the run would go on to
+// the apiserver with a backend that is not deployed.
+func informerOnly(st Step, lines []string) bool {
+	if st.Playbook != setupAipubPlaybook {
+		return false
+	}
+	full := strings.Join(lines, "\n")
+	if !strings.Contains(full, workspaceCRDGone) || strings.Contains(full, "UNREACHABLE") {
+		return false
+	}
+	fails := componentFailed.FindAllStringSubmatch(full, -1)
+	if len(fails) == 0 {
+		return false
+	}
+	for _, m := range fails {
+		if m[1] != "backend-informer" {
+			return false
+		}
+	}
+	failed := failedTasks(lines)
+	if len(failed) != 1 {
+		return false
+	}
+	task := failed[0]
+	return strings.Contains(task, "Stop: install.sh --emit-values failed") ||
+		(strings.Contains(task, "Result of ") && strings.Contains(task, "backend-informer"))
 }
 
 // failureContext is what knownFailure needs of the run besides the log; r.mu
@@ -767,7 +917,10 @@ func knownFailure(st Step, logPath string, fc failureContext) string {
 	full := strings.Join(lines, "\n")
 
 	// 1. Check known specific patterns
-	if st.Playbook == "aipub-playbooks/setup-aipub.yml" && strings.Contains(full, "workspaces.aipub.ten1010.io") {
+	// the whole attempt, not its tail: helmfile mode prints a long result after
+	// the component's error. And the error itself, not the CRD's name, which
+	// the checks of an installed informer print too
+	if st.Playbook == setupAipubPlaybook && strings.Contains(strings.Join(attemptLines(logPath, st), "\n"), workspaceCRDGone) {
 		// deterministic until then, so no retry: aipub-installer README "What to expect on a new cluster"
 		return "알려진 일: backend-informer 는 Python 서비스가 만드는 Workspace CRD 를 기다립니다. 그 앞의 서비스는 설치됐습니다. " +
 			"Python 서비스를 설치한 뒤 이어서 실행하세요 (aipub-installer README)"

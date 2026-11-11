@@ -295,12 +295,15 @@ func printStep(st plan.StepState, step plan.Step) {
 // or what is left.
 func printSummary(w io.Writer, st plan.RunState, outcome plan.Outcome, took time.Duration) {
 	fmt.Fprintln(w, "──")
-	switch outcome {
-	case plan.OutcomeOK:
+	switch {
+	case outcome == plan.OutcomeOK:
 		fmt.Fprintf(w, "✓ 설치를 마쳤습니다 (%s)\n", elapsed(took))
 		return
-	case plan.OutcomeStopped:
+	case outcome == plan.OutcomeStopped:
 		fmt.Fprintln(w, "■ 멈췄습니다. --install --resume 로 이어서 실행합니다")
+	case st.WentOn():
+		// to its end, past a step that stays failed: still exit code 1
+		fmt.Fprintln(w, "■ 끝까지 실행했지만 아래 단계는 실패로 남았습니다. 원인을 푼 뒤 --install --resume 로 그 단계만 다시 실행합니다")
 	default:
 		fmt.Fprintln(w, "✗ 실패했습니다. 고친 뒤 --install --resume 로 실패한 단계부터 이어서 실행합니다")
 	}

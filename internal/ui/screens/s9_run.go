@@ -723,6 +723,9 @@ func (s *S9Install) summary() string {
 		return b.String()
 	case ex.outcome == plan.OutcomeStopped:
 		b.WriteString(styles.StyleWarning.Render("■ 멈췄습니다. 실행을 누르면 끝나지 않은 단계부터 이어서 실행합니다") + "\n")
+	case ex.snap.WentOn():
+		// to its end, past a step that stays failed (plan.informerOnly)
+		b.WriteString(styles.StyleWarning.Render("■ 끝까지 실행했지만 아래 단계는 실패로 남았습니다. 원인을 푼 뒤 실행을 누르면 그 단계만 다시 실행합니다") + "\n")
 	default:
 		b.WriteString(styles.StyleError.Render("✗ 실패했습니다. 고친 뒤 실행을 누르면 실패한 단계부터 이어서 실행합니다") + "\n")
 	}

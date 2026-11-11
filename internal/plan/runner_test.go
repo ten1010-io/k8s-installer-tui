@@ -32,13 +32,22 @@ func TestStages(t *testing.T) {
 	if got, want := StageIDs(Stages(Build(aipubState(), mon), mon, in)), "K1 | K2 | K3 | K4 | A1 | A2+M1 | A3 | (A4) | A5 | A5.1 | A5.2"; got != want {
 		t.Errorf("monitoring off: %s, want %s", got, want)
 	}
-	// an existing site whose AIPub is there: one update-cluster, no JWKS steps
+	// an existing site whose AIPub is there: K1..K3 kept, skipped (nothing set
+	// on the control plane, so no update-cluster either), no JWKS steps
 	s := aipubState()
 	s.ControlPlane.JWKS = false
 	ex := o
 	ex.Existing, ex.AipubInstalled = true, true
-	if got := StageIDs(Stages(Build(s, ex), ex, in)); !strings.HasPrefix(got, "K1 | K2 | K3 | K4 | A1 | A2+M1 |") || strings.Contains(got, "A5.1") {
-		t.Errorf("existing site: %s", got)
+	if got, want := StageIDs(Stages(Build(s, ex), ex, in)), "(K1) | (K2) | (K3) | K4 | A1 | A2+M1 | A3 | A4 | A5"; got != want {
+		t.Errorf("existing site: %s, want %s", got, want)
+	}
+	// an existing cluster on which AIPub is installed now: K3 is the
+	// update-cluster of the cluster stage, the rest as on a new site
+	ex.AipubInstalled = false
+	s = aipubState()
+	s.ControlPlane.Audit = true
+	if got, want := StageIDs(Stages(Build(s, ex), ex, in)), "(K1) | (K2) | K3 | K4 | A1 | A2+M1 | A3 | A4 | A5 | A5.1 | A5.2"; got != want {
+		t.Errorf("existing cluster, AIPub new: %s, want %s", got, want)
 	}
 	// saved elsewhere: the copy goes first
 	stages := Stages(Build(aipubState(), o), o, "/home/ops/site")

@@ -803,6 +803,11 @@ func (s *S9Install) top() string {
 	b.WriteString(styles.StyleTitle.Render("설치 계획") + "\n")
 	b.WriteString(styles.StyleMuted.Render("저장한 설정으로 실행할 순서입니다. 실행을 누르면 사전 확인 뒤 이 순서대로 실행하고, "+
 		"StorageClass 드라이버 설치 (M1) 에서 한 번 멈춥니다.") + "\n\n")
+	// what the plan takes the site to be and why: it decides whether the
+	// cluster is built or updated, and P3
+	if s.opts.SiteWhy != "" {
+		b.WriteString(styles.StyleMuted.Render("사이트: "+s.opts.SiteWhy) + "\n\n")
+	}
 	if prev := s.viewPrev(); prev != "" {
 		b.WriteString(prev + "\n")
 	}

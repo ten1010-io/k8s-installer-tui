@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
 // becomeNodes answers the three ansible runs of P6 by what the script runs:
@@ -100,8 +102,14 @@ func TestCheckBecomeShellRefusedWithDash(t *testing.T) {
 	if n := strings.Count(script, "ansible_shell_executable=/usr/bin/dash"); n != flags {
 		t.Errorf("script has the flag %d times, want %d:\n%s", n, flags, script)
 	}
-	if !strings.Contains(script, "ansible-playbook -i inventory.yml aipub-playbooks/setup-aipub.yml -e ansible_shell_executable=/usr/bin/dash") {
+	// setup-aipub runs before A5.2 applies JWKS: the cluster stage, then the flag
+	cluster := stageArgs(s.AppliedControlPlane(), state.StageCluster)[1]
+	if !strings.Contains(script, "ansible-playbook -i inventory.yml aipub-playbooks/setup-aipub.yml -e '"+cluster+"' -e ansible_shell_executable=/usr/bin/dash") {
 		t.Errorf("setup-aipub line:\n%s", script)
+	}
+	// and A5.2 applies everything: the flag alone
+	if !strings.Contains(script, "ansible-playbook -i inventory.yml playbooks/update-cluster.yml -e ansible_shell_executable=/usr/bin/dash\n") {
+		t.Errorf("A5.2 line:\n%s", script)
 	}
 	// Build leaves the steps of an Options without it alone
 	o.ShellExecutable = ""

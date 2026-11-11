@@ -311,3 +311,53 @@ func TestCheckLegacyAuditPolicyUnread(t *testing.T) {
 		t.Error("the resource secrets taken for a credential")
 	}
 }
+
+// On an existing site planned without --aipub-installed, AIPub's authentication
+// put on the apiserver by hand (k8s-jwks, the webhook) means AIPub is
+// installed: the staged K3 would take it out until A5.2, so P3 is not OK and
+// says to start again with the flag. With the flag, or with neither on the
+// node, P3 is as the control plane screen reads it.
+func TestCheckLegacyAuthByHandNeedsAipubInstalled(t *testing.T) {
+	webhookKC := "apiVersion: v1\nkind: Config\nclusters:\n- name: aipub\n  cluster:\n" +
+		"    server: https://aipub.example.com/api/v1/token-review\n    certificate-authority: /etc/k8s-installer/certs/ca.crt\n" +
+		"users:\n- name: kube-apiserver\n  user: {}\n"
+	authConfig := "apiVersion: apiserver.config.k8s.io/v1\nkind: AuthenticationConfiguration\njwt:\n  - issuer:\n      url: https://aipub.example.com\n"
+	node := func(flags []string) RunFunc {
+		var calls []string
+		return fakeSlurp("node1", map[string]string{
+			APIServerManifest:                            apiserverManifest(flags, nil),
+			"/etc/kubernetes/webhook-token-auth.yaml":    webhookKC,
+			"/etc/kubernetes/authentication-config.yaml": authConfig,
+		}, &calls)
+	}
+	s := aipubState()
+	s.ControlPlane.Webhook, s.ControlPlane.WebhookURL = true, "https://aipub.example.com/api/v1/token-review"
+	existing := testOptions()
+	existing.Existing = true
+	installed := existing
+	installed.AipubInstalled, installed.JWKSCAReady = true, true
+
+	for _, c := range []struct {
+		name  string
+		flags []string
+	}{
+		{"JWKS by hand", allLegacyFlags[6:7]},
+		{"webhook by hand", allLegacyFlags[4:6]},
+	} {
+		r := CheckLegacy(context.Background(), existing, s, node(c.flags))
+		lines := strings.Join(r.Lines, "\n")
+		if r.OK || !strings.Contains(lines, "AIPub 이 설치된 사이트입니다. --aipub-installed 로 다시 시작하세요") ||
+			strings.Contains(lines, "update-cluster 가 손으로 고친 것을") || !strings.Contains(lines, "K3 부터 A2.5·A5.2") {
+			t.Errorf("%s, existing without --aipub-installed: %+v", c.name, r)
+		}
+		r = CheckLegacy(context.Background(), installed, s, node(c.flags))
+		lines = strings.Join(r.Lines, "\n")
+		if !r.OK || strings.Contains(lines, "--aipub-installed") || !strings.Contains(lines, "update-cluster 가 손으로 고친 것을") {
+			t.Errorf("%s, with --aipub-installed: %+v", c.name, r)
+		}
+	}
+	// neither on the node: nothing to guard
+	if r := CheckLegacy(context.Background(), existing, s, node(nil)); !r.OK || strings.Contains(strings.Join(r.Lines, "\n"), "--aipub-installed") {
+		t.Errorf("no auth by hand: %+v", r)
+	}
+}

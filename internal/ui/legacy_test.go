@@ -98,7 +98,10 @@ func TestWizardLegacySite(t *testing.T) {
 		t.Fatalf("presets on before the check: %+v", s.ControlPlane)
 	}
 	var calls []string
-	d := &driver{t: t, app: NewApp(s, paths, plan.DefaultOptions(), "test")}
+	// as main passes it for --existing --aipub-installed (plan.DetectSite)
+	opts := plan.DefaultOptions()
+	opts.Existing, opts.AipubInstalled, opts.SiteWhy = true, true, "기존 사이트: --existing 으로 지정. AIPub: --aipub-installed 로 지정"
+	d := &driver{t: t, app: NewApp(s, paths, opts, "test")}
 	d.app.screenList[4].(*screens.S4bControlPlane).SetRunner(legacyNode(&calls))
 	d.app.screenList[10].(*screens.S9Install).SetRunner(legacyNode(&calls))
 	d.send(tea.WindowSizeMsg{Width: 110, Height: 80})
@@ -192,7 +195,8 @@ func TestWizardLegacySite(t *testing.T) {
 	d.keys("down", "down")                             // off the archive path
 	d.keys("c")
 	t.Logf("S9:\n%s", d.screen())
-	for _, want := range []string{"P3  apiserver 수동 설정 확인", "A2.5 update-cluster (컨트롤 플레인 항목 적용)",
+	for _, want := range []string{"사이트: 기존 사이트: --existing 으로 지정", "P3  apiserver 수동 설정 확인", "A2.5 update-cluster (컨트롤 플레인 항목 적용)",
+		"K3  update-cluster (클러스터 단계",
 		"모두 켜져 있음: update-cluster 가 손으로 고친 것을", "노드의 정책과 같습니다: 그대로 씁니다"} {
 		if !strings.Contains(d.screen(), want) {
 			t.Errorf("9.설치 does not show %q", want)
@@ -213,5 +217,58 @@ func TestWizardNewSiteNoLegacyCheck(t *testing.T) {
 	d.keys("c")
 	if len(calls) != 0 || strings.Contains(d.screen(), "kube-apiserver.yaml 에 손으로") || strings.Contains(d.screen(), "c 로 첫 컨트롤 플레인") {
 		t.Errorf("checked a new site: %q\n%s", calls, d.screen())
+	}
+}
+
+// A site saved once and opened again before it was installed has every file a
+// site has; that does not make it existing (setup.sh lays a template vars.yml
+// too). Without --existing or the record of k8s-installer it is planned new:
+// no apiserver to read, no P3, setup-cluster.
+func TestWizardSavedSiteIsNew(t *testing.T) {
+	d0, paths := newDriver(t)
+	old := d0.app.appState
+	old.AipubEnabled = true
+	old.AipubIngressZone = "lkjh.local"
+	old.AipubHaMode = false
+	old.AipubHarborLocalPVNode = "node1"
+	old.AipubCpNodes = []string{"node1", "node2"}
+	old.K8sIngressVIP = "192.168.0.100"
+	if err := fileio.WriteAll(paths, old); err != nil {
+		t.Fatal(err)
+	}
+	s := state.DefaultState()
+	if err := fileio.LoadAll(paths, s); err != nil {
+		t.Fatal(err)
+	}
+	opts := plan.DefaultOptions()
+	opts.SiteWhy = "새 사이트: /etc/k8s-installer/applied-release 없음 (클러스터가 이미 있으면 --existing 으로 시작)"
+	var calls []string
+	d := &driver{t: t, app: NewApp(s, paths, opts, "test")}
+	d.app.screenList[4].(*screens.S4bControlPlane).SetRunner(legacyNode(&calls))
+	d.send(tea.WindowSizeMsg{Width: 110, Height: 200})
+	if s.Existing {
+		t.Error("a saved site is taken as existing")
+	}
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.at("4b.컨트롤플레인")
+	if strings.Contains(d.screen(), "c 로 첫 컨트롤 플레인") {
+		t.Errorf("the apiserver check is offered on a saved site:\n%s", d.screen())
+	}
+	for i := 0; i < 9 && d.app.current < 9; i++ {
+		d.keys("ctrl+n")
+	}
+	d.at("8.저장")
+	d.keys("s", "ctrl+n")
+	d.at("9.설치")
+	for _, want := range []string{"사이트: 새 사이트: /etc/k8s-installer/applied-release 없음", "K3  setup-cluster"} {
+		if !strings.Contains(d.screen(), want) {
+			t.Errorf("9.설치 does not show %q:\n%s", want, d.screen())
+		}
+	}
+	if strings.Contains(d.screen(), "P3  apiserver") {
+		t.Errorf("P3 planned on a saved site:\n%s", d.screen())
+	}
+	if len(calls) != 0 {
+		t.Errorf("a node was asked: %q", calls)
 	}
 }

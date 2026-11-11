@@ -264,7 +264,13 @@ func (s *S7Preview) notesFirst() bool {
 
 func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.errors = validator.Validate(st)
-	s.warnings = schema.FixedChanges(s.loaded, st)
+	// what can not change after install, only once something is installed: a
+	// site saved and opened again before its cluster was built has the files
+	// to compare against but nothing fixed yet (st.Existing: plan.DetectSite)
+	s.warnings = nil
+	if st.Existing {
+		s.warnings = schema.FixedChanges(s.loaded, st)
+	}
 	// which audit policy is used, for the warnings and the site-values view
 	st.ControlPlane.AuditNote = fileio.PlanAuditPolicy(s.paths.AuditPolicy(), st).Note
 	s.missing = fileio.MissingCpFiles(st, s.paths.FilesDir(), s.installerFiles)

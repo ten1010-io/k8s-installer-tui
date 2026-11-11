@@ -359,7 +359,46 @@ func CheckLegacy(ctx context.Context, o Options, s *state.AppState, run RunFunc)
 	if err != nil {
 		return CheckResult{Lines: []string{err.Error()}}
 	}
-	return LegacyResult(l, s)
+	return planLegacy(LegacyResult(l, s), l, s, o)
+}
+
+// planLegacy is the part of P3 that depends on the plan, which the control
+// plane screen's read (LegacyResult) has no plan for. A staged plan's K3 is
+// update-cluster.yml with the cluster stage only: kubeadm writes the manifest
+// again without the authentication flags put in by hand (k8s-jwks, the
+// webhook), and AIPub's login is gone until A2.5 or A5.2 applies them. On a site
+// planned without AIPub (no --aipub-installed, which nothing on the nodes can
+// stand in for) those flags say AIPub is installed: not OK, start again with
+// the flag. With it, the gap stays only while the JWKS config waits for its
+// CA; that is said rather than "update-cluster keeps the same flags".
+func planLegacy(r CheckResult, l *Legacy, s *state.AppState, o Options) CheckResult {
+	var auth []string
+	for _, id := range []string{state.PresetJWKS, state.PresetWebhook} {
+		if l.Presets[id] {
+			for _, p := range state.Presets {
+				if p.ID == id {
+					auth = append(auth, p.Title)
+				}
+			}
+		}
+	}
+	if len(auth) == 0 || !o.Existing {
+		return r
+	}
+	same := "모두 켜져 있음: update-cluster 가"
+	for i, line := range r.Lines {
+		if staged(s, o) && strings.HasPrefix(line, same) {
+			r.Lines[i] = "모두 켜져 있음: 다만 K3 update-cluster 는 클러스터 단계 항목만 적용해, 손으로 넣은 인증 플래그 (" +
+				strings.Join(auth, ", ") + ") 는 K3 부터 A2.5·A5.2 가 적용할 때까지 apiserver 에서 빠집니다"
+			r.Warn = true
+		}
+	}
+	if !o.AipubInstalled {
+		r.OK = false
+		r.Lines = append(r.Lines, "✗ apiserver 에 AIPub 인증 ("+strings.Join(auth, ", ")+") 이 이미 켜져 있습니다: AIPub 이 설치된 사이트입니다. "+
+			"--aipub-installed 로 다시 시작하세요 (이대로 실행하면 K3 부터 A5.2 까지 AIPub 로그인이 빠짐)")
+	}
+	return r
 }
 
 // LegacyResult says what a check found against the presets of s.

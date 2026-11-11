@@ -50,9 +50,11 @@ func main() {
 	resume := flag.Bool("resume", false, "--install 에서 지난 실행 (state.json) 의 성공한 단계는 건너뛰고 이어서 실행 "+
 		"(계획은 지난 실행의 --existing·--aipub-installed·--archive·--no-monitoring 으로)")
 	fresh := flag.Bool("fresh", false, "--install: 끝나지 않은 지난 실행이 있어도 처음부터 모든 단계를 실행 (없으면 --install 은 시작하지 않음)")
-	existing := flag.Bool("existing", false, "--install: 클러스터가 이미 있는 사이트로 계획 (기본은 새 사이트. --resume 은 지난 실행의 것을 씀)")
-	aipubInstalled := flag.Bool("aipub-installed", false, "--install --existing: AIPub 도 이미 설치된 사이트로 계획 "+
-		"(setup-cert 의 CA 가 노드에 있고 JWKS issuer 가 응답함: 컨트롤 플레인 항목을 update-cluster 한 번에 적용). 기본은 AIPub 없음")
+	existing := flag.Bool("existing", false, "클러스터가 이미 있는 사이트로 계획 (마법사와 --install). 없으면 "+plan.ClusterRecord+
+		" (k8s-installer 가 클러스터를 만든 뒤 남기는 기록) 이 있을 때만 기존 사이트. --resume 은 지난 실행의 것을 씀")
+	aipubInstalled := flag.Bool("aipub-installed", false, "기존 사이트에 AIPub 도 이미 설치된 것으로 계획 (마법사와 --install. "+
+		"setup-cert 의 CA 가 노드에 있고 JWKS issuer 가 응답함: 컨트롤 플레인 항목을 update-cluster 한 번에 적용). "+
+		"aipub-installer 는 설치 기록을 남기지 않아 이 플래그로만 정함. 기본은 AIPub 없음")
 	archive := flag.String("archive", "", "--install: K4 의 사용자 레지스트리 아카이브 경로 (비우면 K4 건너뜀)")
 	noMonitoring := flag.Bool("no-monitoring", false, "--install: 모니터링 (A4) 을 설치하지 않음")
 	showVersion := flag.Bool("version", false, "버전 출력")
@@ -85,28 +87,29 @@ func main() {
 	if *fillAuth {
 		os.Exit(fillAuthConfig(paths, s, filepath.Join(*installerRoot, "ansible", "files")))
 	}
+	// whether the cluster is there: said (--existing) or recorded on this control
+	// node, never taken from the files of the site (DetectSite), for the wizard,
+	// --install and --render alike
+	site := plan.DetectSite(*existing, *aipubInstalled)
 	if *renderDir != "" {
 		// an existing site keeps the audit policy of its nodes: the default is
 		// not rendered for it until the wizard has read them (PlanAuditPolicy)
-		if loaded, _ := fileio.LoadSite(paths); loaded != nil {
-			s.Existing = true
-		}
+		s.Existing = site.Existing
+		fmt.Println("site:", site.Why)
 		os.Exit(render(paths, s, *renderDir))
 	}
+	if *aipubInstalled && !site.Existing {
+		fmt.Fprintln(os.Stderr, "--aipub-installed 는 기존 사이트에만 씁니다 (클러스터 없이 AIPub 이 있을 수 없음): "+site.Why)
+		os.Exit(2)
+	}
 	if *install {
-		switch {
-		case *resume && *fresh:
+		if *resume && *fresh {
 			fmt.Fprintln(os.Stderr, "--resume 과 --fresh 는 함께 쓸 수 없습니다")
-			os.Exit(2)
-		case *aipubInstalled && !*existing:
-			fmt.Fprintln(os.Stderr, "--aipub-installed 는 --existing 과 함께 씁니다 (클러스터 없이 AIPub 이 있을 수 없음)")
 			os.Exit(2)
 		}
 		opts := plan.DefaultOptions()
 		opts.Root, opts.ArchivePath, opts.Monitoring = *installerRoot, *archive, !*noMonitoring
-		// said, not guessed: files/aipub/vars.yml is there on every AIPub site
-		// the wizard saved, installed or not
-		opts.Existing, opts.AipubInstalled = *existing, *aipubInstalled
+		opts.Existing, opts.AipubInstalled, opts.SiteWhy = site.Existing, site.AipubInstalled, site.Why
 		// as the wizard does: P3 of an existing site keeps its nodes' audit policy
 		// under files/aipub where none is, so that C1 copies it to the installer
 		opts.AuditPolicy = paths.AuditPolicy()
@@ -115,6 +118,7 @@ func main() {
 
 	opts := plan.DefaultOptions()
 	opts.Root = *installerRoot
+	opts.Existing, opts.AipubInstalled, opts.SiteWhy = site.Existing, site.AipubInstalled, site.Why
 	app := ui.NewApp(s, paths, opts, version)
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	// SIGTERM and SIGHUP (the ssh session dropped) end the program too, by way

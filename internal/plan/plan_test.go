@@ -318,7 +318,7 @@ func TestExistingSitePlan(t *testing.T) {
 
 	o.Existing, o.AipubInstalled, o.JWKSCAReady = true, true, true
 	steps := Build(s, o)
-	if got, want := ids(steps), "P1 P2 P3 P5 P6 P7 P8 K1 K2 K3 K4 A1 A2 M1 A2.5 A3 A4 A5"; got != want {
+	if got, want := ids(steps), "P1 P2 P3 P5 P6 P7 P8 (K1) (K2) (K3) K4 A1 A2 M1 A2.5 A3 A4 A5"; got != want {
 		t.Errorf("existing site with the CA: %s, want %s", got, want)
 	}
 	for _, st := range steps {
@@ -332,12 +332,12 @@ func TestExistingSitePlan(t *testing.T) {
 
 	// the CA not there: as a new site, the CA filled after setup-aipub
 	o.JWKSCAReady = false
-	if got, want := ids(Build(s, o)), "P1 P2 P3 P5 P6 P7 P8 K1 K2 K3 K4 A1 A2 M1 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P3 P5 P6 P7 P8 (K1) (K2) K3 K4 A1 A2 M1 A2.5 A3 A4 A5 A5.1 A5.2"; got != want {
 		t.Errorf("existing site without the CA: %s, want %s", got, want)
 	}
 	// JWKS off: nothing waits for a CA
 	s.ControlPlane.JWKS = false
-	if got, want := ids(Build(s, o)), "P1 P2 P3 P5 P6 P7 P8 K1 K2 K3 K4 A1 A2 M1 A2.5 A3 A4 A5"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P3 P5 P6 P7 P8 (K1) (K2) (K3) K4 A1 A2 M1 A2.5 A3 A4 A5"; got != want {
 		t.Errorf("existing site without JWKS: %s, want %s", got, want)
 	}
 	// AIPub not installed yet on the existing cluster: as a new site
@@ -348,7 +348,160 @@ func TestExistingSitePlan(t *testing.T) {
 	// without AIPub: the control plane applied by itself
 	s = state.DefaultState()
 	s.ControlPlane.Audit = true
-	if got, want := ids(Build(s, o)), "P1 P2 P3 P6 K1 K2 K3 K4 K5"; got != want {
+	if got, want := ids(Build(s, o)), "P1 P2 P3 P6 (K1) (K2) (K3) K4 K5"; got != want {
 		t.Errorf("existing site without AIPub: %s, want %s", got, want)
+	}
+}
+
+// An existing cluster never gets setup-cluster (init-k8s-cluster.sh refuses a
+// node whose kubelet is enabled): K1 and K2 are kept and skipped, and K3 is the
+// update-cluster.yml of the cluster stage, or skipped when a later step applies
+// everything at once.
+func TestExistingClusterSteps(t *testing.T) {
+	byID := func(steps []Step) map[string]Step {
+		m := map[string]Step{}
+		for _, st := range steps {
+			m[st.ID] = st
+		}
+		return m
+	}
+	o := testOptions()
+	s := aipubState()
+	s.ControlPlane.Audit = true
+
+	// a new site: setup-cluster, with the cluster stage
+	k := byID(Build(s, o))
+	if k["K1"].Skip || k["K2"].Skip || k["K3"].Skip || k["K3"].Playbook != "playbooks/setup-cluster.yml" {
+		t.Errorf("new site: %+v %+v %+v", k["K1"], k["K2"], k["K3"])
+	}
+
+	// an existing cluster on which AIPub is installed now: staged, K3 applies
+	// the audit log before the AIPub steps and leaves JWKS out
+	o.Existing = true
+	k = byID(Build(s, o))
+	for _, id := range []string{"K1", "K2"} {
+		if !k[id].Skip || !strings.Contains(k[id].SkipWhy, "upgrade-k8s-installer.yml") {
+			t.Errorf("%s on an existing cluster: %+v", id, k[id])
+		}
+	}
+	k3 := k["K3"]
+	if k3.Skip || k3.Playbook != "playbooks/update-cluster.yml" || !strings.Contains(k3.Title, "update-cluster") ||
+		len(k3.Args) != 2 || !strings.Contains(k3.Args[1], `"name":"audit-policy-file"`) ||
+		strings.Contains(k3.Args[1], "authentication-config") || !strings.Contains(k3.Note, "JWKS 는 A5.2") {
+		t.Errorf("K3 of an existing cluster, AIPub new: %+v", k3)
+	}
+	script := Script(Build(s, o), o, "/opt/k8s-installer/ansible")
+	if strings.Contains(script, "setup-cluster.yml") || !strings.Contains(script, "# K1 setup-k8s-installer: 건너뜀 (클러스터가 이미 있음") {
+		t.Errorf("script of an existing cluster:\n%s", script)
+	}
+	// nothing at the cluster stage: K3 has nothing to do
+	s.ControlPlane.Audit = false
+	if k3 := byID(Build(s, o))["K3"]; !k3.Skip || !strings.Contains(k3.SkipWhy, "적용할 컨트롤 플레인 항목 없음") {
+		t.Errorf("K3 with only JWKS on: %+v", k3)
+	}
+	s.ControlPlane.Audit = true
+
+	// AIPub there with the CA: A2.5 applies everything, K3 skipped
+	o.AipubInstalled, o.JWKSCAReady = true, true
+	k = byID(Build(s, o))
+	if !k["K3"].Skip || !strings.Contains(k["K3"].SkipWhy, "A2.5") || k["A2.5"].Playbook != "playbooks/update-cluster.yml" {
+		t.Errorf("direct: K3 %+v, A2.5 %+v", k["K3"], k["A2.5"])
+	}
+
+	// without AIPub: K5 applies everything, K3 skipped; nothing set, no K5 and
+	// K3 has nothing to do
+	d := state.DefaultState()
+	d.ControlPlane.Audit = true
+	k = byID(Build(d, o))
+	if !k["K3"].Skip || !strings.Contains(k["K3"].SkipWhy, "K5") || k["K5"].Playbook != "playbooks/update-cluster.yml" {
+		t.Errorf("without AIPub: K3 %+v, K5 %+v", k["K3"], k["K5"])
+	}
+	d.ControlPlane.Audit = false
+	if got, want := ids(Build(d, o)), "P1 P2 P3 P6 (K1) (K2) (K3) (K4)"; got != want {
+		t.Errorf("existing cluster, nothing to apply: %s, want %s", got, want)
+	}
+}
+
+// Every playbook of a staged plan carries the lists applied by then: the
+// cluster stage up to A2.5, the stage A2.5 applied up to A5.2, nothing after.
+// Not staged (AIPub off, nothing waits, the direct site): no -e at all.
+func TestStageArgsFollowThePlan(t *testing.T) {
+	o := testOptions()
+	o.ArchivePath = "/media/usb/a.tgz"
+	s := aipubState()
+	s.ControlPlane.Audit, s.ControlPlane.Webhook = true, true
+	s.ControlPlane.WebhookURL = "https://aipub.example.com/token-review"
+	cluster, cert := stageArgs(s.AppliedControlPlane(), state.StageCluster)[1], stageArgs(s.AppliedControlPlane(), state.StageAfterCert)[1]
+	want := map[string]string{"K1": cluster, "K2": cluster, "K3": cluster, "K4": cluster, "A1": cluster, "A2": cluster,
+		"A2.5": cert, "A3": cert, "A4": cert, "A5": cert, "A5.2": ""}
+	for _, st := range Build(s, o) {
+		w, ok := want[st.ID]
+		if !ok {
+			continue
+		}
+		var got string
+		for i := 0; i+1 < len(st.Args); i++ {
+			if st.Args[i] == "-e" && strings.HasPrefix(st.Args[i+1], "{") {
+				got = st.Args[i+1]
+			}
+		}
+		if got != w {
+			t.Errorf("%s: -e %s, want %s", st.ID, got, w)
+		}
+	}
+	// the script runs what the runner runs (Command), the shell of P6 beside it
+	o.ShellExecutable = "/bin/dash"
+	script := Script(Build(s, o), o, "/opt/k8s-installer/ansible")
+	if want := "playbooks/setup-control-node.yml -e '" + cluster + "' -e ansible_shell_executable=/bin/dash"; !strings.Contains(script, want) {
+		t.Errorf("script lacks %q:\n%s", want, script)
+	}
+	if want := "push-user-registry-artifacts.yml -e archive=/media/usb/a.tgz -e '" + cluster + "'"; !strings.Contains(script, want) {
+		t.Errorf("script lacks %q", want)
+	}
+
+	for name, s := range map[string]*state.AppState{"AIPub off": func() *state.AppState {
+		d := state.DefaultState()
+		d.ControlPlane.Audit, d.ControlPlane.Webhook = true, true
+		return d
+	}(), "nothing waits": func() *state.AppState {
+		a := aipubState()
+		a.ControlPlane.JWKS, a.ControlPlane.Audit = false, true
+		return a
+	}()} {
+		for _, st := range Build(s, testOptions()) {
+			if len(st.Args) != 0 {
+				t.Errorf("%s: %s given %v", name, st.ID, st.Args)
+			}
+		}
+	}
+}
+
+func TestDetectSite(t *testing.T) {
+	dir := t.TempDir()
+	old := ClusterRecord
+	ClusterRecord = dir + "/applied-release"
+	t.Cleanup(func() { ClusterRecord = old })
+
+	if s := DetectSite(false, false); s.Existing || s.AipubInstalled || !strings.HasPrefix(s.Why, "새 사이트: "+ClusterRecord+" 없음") ||
+		!strings.Contains(s.Why, "--existing") {
+		t.Errorf("no record: %+v", s)
+	}
+	if s := DetectSite(true, false); !s.Existing || !strings.HasPrefix(s.Why, "기존 사이트: --existing 으로 지정") ||
+		!strings.Contains(s.Why, "--aipub-installed") {
+		t.Errorf("flag: %+v", s)
+	}
+	if err := os.WriteFile(ClusterRecord, []byte("1.36.0"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if s := DetectSite(false, false); !s.Existing || s.AipubInstalled || !strings.HasPrefix(s.Why, "기존 사이트: "+ClusterRecord+" 있음") {
+		t.Errorf("record: %+v", s)
+	}
+	if s := DetectSite(false, true); !s.Existing || !s.AipubInstalled || !strings.Contains(s.Why, "AIPub: --aipub-installed 로 지정") {
+		t.Errorf("record and --aipub-installed: %+v", s)
+	}
+	// a record that cannot be looked at: not guessed existing
+	ClusterRecord = dir + "/applied-release/under-a-file"
+	if s := DetectSite(false, false); s.Existing || !strings.Contains(s.Why, "확인하지 못함") || !strings.Contains(s.Why, "--existing") {
+		t.Errorf("record not readable: %+v", s)
 	}
 }

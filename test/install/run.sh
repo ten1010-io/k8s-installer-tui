@@ -11,13 +11,19 @@
 # (script, a pty), a failure and --install --resume running only from the
 # failed step (with the copy again, and the options of the run it goes on
 # with), state.json and the logs, the lock, Ctrl-C once and twice, --install
-# refusing an unfinished run without --resume or --fresh, and a step left
-# running by a program killed outright keeping the next start out.
+# refusing an unfinished run without --resume or --fresh, a step left running by
+# a program killed outright keeping the next start out, and an existing cluster
+# (the record k8s-installer leaves under /etc/k8s-installer, made here in the
+# container) planned without setup-cluster. The stub ansible-playbook refuses a
+# run whose k8s_cp_extra_files names a file that is not under files/, as
+# k8s-installer's validate-hostvars.py does.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 W=$(mktemp -d)
-trap 'rm -rf "${W}"' EXIT
+# the record of scenario 8, removed whatever happens if this run made it
+MADE_ETC=
+trap 'rm -rf "${W}"; [ -n "${MADE_ETC}" ] && rm -rf /etc/k8s-installer' EXIT
 TUI="${W}/k8s-installer-tui"
 ROOT="${W}/opt/k8s-installer"
 STATE="${ROOT}/tui-install"
@@ -40,6 +46,13 @@ pb=$(basename "${3:-x}" .yml)
 echo "$(date +%s.%N) start ${pb} $*" >> "${FAKE_DIR}/calls.log"
 echo "PLAY [${pb}] ******"
 echo "TASK [fake task of ${pb}] ******"
+# what validate-hostvars.py (validate_k8s_cp_extra_files) checks in every
+# playbook that imports prepare-vars.yml, setup-k8s-installer aside
+if [ "${pb}" != setup-k8s-installer ] && ! missing=$(python3 "${FAKE_DIR}/cpfiles.py" "$@"); then
+    echo "fatal: [localhost]: FAILED! => {\"msg\": \"${missing}\"}"
+    echo "$(date +%s.%N) end ${pb} 2" >> "${FAKE_DIR}/calls.log"
+    exit 2
+fi
 var="FAKE_SLEEP_${pb//-/_}"
 sleep "${!var:-${FAKE_SLEEP:-0.3}}"
 if [ "${FAKE_FAIL:-}" = "${pb}" ]; then
@@ -51,8 +64,36 @@ echo "ok: [master1]"
 echo "PLAY RECAP: master1 ok=1 failed=0"
 echo "$(date +%s.%N) end ${pb} 0" >> "${FAKE_DIR}/calls.log"
 EOF
-# ansible: the checks (P2, P6 on every node) and the kubectl of the StorageClass
-# stop, there once ${FAKE_DIR}/sc-ready exists
+# k8s_cp_extra_files as the run sees it (the last -e that sets it, else
+# vars.yml) and whether each source is a file under files/ that is not empty
+cat > "${W}/cpfiles.py" <<'EOF'
+import json, os, re, sys
+args, files = sys.argv[1:], None
+for i in range(len(args) - 1):
+    if args[i] == "-e" and args[i + 1].startswith("{"):
+        extra = json.loads(args[i + 1])
+        if "k8s_cp_extra_files" in extra:
+            files = [f["src"] for f in extra["k8s_cp_extra_files"]]
+if files is None:
+    files, inside = [], False
+    for line in open("group_vars/all/vars.yml"):
+        if line.startswith("k8s_cp_extra_files:"):
+            inside = True
+            continue
+        if inside and line.strip() and not line[0].isspace() and not line.startswith("-"):
+            break
+        m = re.match(r'\s*-?\s*src:\s*"?([^"\s]+)"?', line) if inside else None
+        if m:
+            files.append(m.group(1))
+for f in files:
+    path = os.path.join("files", f)
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        print(f"File[{f}] of the control node is not there")
+        sys.exit(1)
+EOF
+# ansible: the checks (P2, P6 on every node), the kubectl of the StorageClass
+# stop, there once ${FAKE_DIR}/sc-ready exists, and the slurp of the apiserver
+# manifest P3 reads on an existing site (no flag put in by hand)
 cat > "${W}/stub/ansible" <<'EOF'
 #!/usr/bin/env bash
 pattern=$1
@@ -67,6 +108,9 @@ case "${args}" in
         echo "${pattern} | FAILED | rc=1 | (stdout)  (stderr) Error from server (NotFound): storageclasses.storage.k8s.io \"${class}\" not found"
         exit 2
     fi ;;
+*"src=/etc/kubernetes/manifests/kube-apiserver.yaml"*)
+    manifest=$(printf 'apiVersion: v1\nkind: Pod\nspec:\n  containers:\n  - name: kube-apiserver\n    command:\n    - kube-apiserver\n' | base64 -w0)
+    echo "${pattern} | SUCCESS => {\"changed\": false, \"content\": \"${manifest}\", \"encoding\": \"base64\"}" ;;
 *)
     for n in master1 gpu1; do echo "${n} | CHANGED | rc=0 | (stdout) "; done ;;
 esac
@@ -234,6 +278,53 @@ ${install_cmd} --resume < /dev/null > "${W}/out7c.txt" 2>&1
 code=$?
 [ "${code}" = 0 ] && grep -q 'start setup-k8s-installer' "${CALLS}" && ok "once it ended: --resume ran from K1, exit 0" ||
     bad "exit ${code}: $(tail -3 "${W}/out7c.txt")"
+
+echo "── 8) an existing cluster (the record of k8s-installer on this node), AIPub installed now, JWKS on: no setup-cluster"
+# the site with every control plane preset on, saved as the wizard would before
+# setup-cert: the default audit policy written, the JWKS config waiting for its CA
+SITE2="${W}/site2"
+cp -r "${REPO}/test/simulate/fixtures/new-site-controlplane" "${SITE2}"
+if [ -e /etc/k8s-installer ] || ! mkdir -p /etc/k8s-installer/certs 2>/dev/null; then
+    bad "/etc/k8s-installer is there already or cannot be made: run this in the container"
+else
+    MADE_ETC=1
+    rmdir /etc/k8s-installer/certs /etc/k8s-installer
+    (cd "${SITE2}" && "${TUI}" --render "${SITE2}" > "${W}/out8r.txt" 2>&1)
+    [ -s "${SITE2}/files/aipub/audit-policy.yaml" ] && [ ! -e "${SITE2}/files/aipub/authentication-config.yaml" ] &&
+        ok "saved before setup-cert: audit policy written, no JWKS config" || bad "render: $(cat "${W}/out8r.txt")"
+    # setup-cluster has run here once; setup-cert will have put the CA by A5.1
+    mkdir -p /etc/k8s-installer/certs
+    echo "1.36.0" > /etc/k8s-installer/applied-release
+    cp "${SITE2}/jwks-ca.crt" /etc/k8s-installer/certs/ca.crt
+    : > "${CALLS}"
+    (cd "${SITE2}" && ${install_cmd} --fresh < /dev/null > "${W}/out8.txt" 2>&1)
+    code=$?
+    sed 's/^/    /' "${W}/out8.txt"
+    [ "${code}" = 0 ] && ok "exit 0: every playbook found the files its k8s_cp_extra_files names" || bad "exit ${code}, want 0"
+    grep -q '── 사이트: 기존 사이트: /etc/k8s-installer/applied-release 있음' "${W}/out8.txt" &&
+        ok "said why it is an existing site" || bad "no site line"
+    order=$(awk '$2=="start"{printf "%s ", $3}' "${CALLS}")
+    [ "${order}" = "update-cluster setup-network setup-cert update-cluster setup-base setup-monitoring setup-aipub update-cluster " ] &&
+        ok "order: ${order}" || bad "order: ${order}"
+    k3=$(awk '$2=="start" && $3=="update-cluster"{print; exit}' "${CALLS}")
+    case "${k3}" in
+    *audit-policy-file*authentication-config*) bad "K3 applies JWKS before its CA: ${k3}" ;;
+    *audit-policy-file*) ok "K3 is update-cluster with the cluster stage (audit log, no JWKS)" ;;
+    *) bad "K3: ${k3}" ;;
+    esac
+    python3 - "${STATE}/state.json" <<'EOF' && ok "state: K1 K2 skipped, K3 ok" || bad "state.json statuses"
+import json, sys
+st = {s["id"]: s["status"] for s in json.load(open(sys.argv[1]))["steps"]}
+print("    statuses:", " ".join(f"{k}={v}" for k, v in st.items()))
+sys.exit(0 if (st.get("K1"), st.get("K2"), st.get("K3"), st.get("A5.2")) == ("skipped", "skipped", "ok", "ok") else 1)
+EOF
+    # the stub does refuse what k8s-installer refuses: vars.yml whole, no JWKS config
+    rm -f "${ROOT}/ansible/files/aipub/authentication-config.yaml"
+    (cd "${ROOT}/ansible" && FAKE_DIR="${W}" "${W}/stub/ansible-playbook" -i inventory.yml playbooks/setup-control-node.yml > "${W}/out8b.txt" 2>&1)
+    code=$?
+    [ "${code}" = 2 ] && grep -q 'File\[aipub/authentication-config.yaml\] of the control node is not there' "${W}/out8b.txt" &&
+        ok "the stub refuses a run that names a missing file" || bad "stub: exit ${code}: $(cat "${W}/out8b.txt")"
+fi
 
 echo
 [ "${fails}" = 0 ] && echo "✓ --install end to end" || echo "✗ ${fails} check(s) failed"

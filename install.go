@@ -65,6 +65,7 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 				". 바꾸려면 --fresh 로 처음부터")
 		}
 		opts.Existing, opts.AipubInstalled = prev.Existing, prev.AipubInstalled
+		opts.SiteWhy = plan.ResumedSite(prev, opts.SiteWhy)
 		opts.Monitoring, opts.ArchivePath = prev.Monitoring, prev.ArchivePath
 		var done []string
 		for _, st := range prev.Steps {
@@ -116,6 +117,7 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 	signalled := func() int { return 128 + int(got.Load()) }
 
 	steps := plan.Build(s, opts)
+	fmt.Println("── 사이트: " + opts.SiteWhy)
 	fmt.Println("── 사전 확인")
 	results, shell := plan.Prechecks(ctx, s, opts, plan.ExecRun, steps)
 	for _, st := range steps {

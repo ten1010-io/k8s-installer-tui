@@ -12,8 +12,9 @@ import "strings"
 // aipub-installer refuses anything but aipub_* in its file, so no variable is
 // written to the other file.
 type AppState struct {
-	// Existing: the site had its files when the wizard started (fileio.LoadSite),
-	// so its cluster is there. Not saved
+	// Existing: the cluster of the site is there (plan.DetectSite: --existing,
+	// or the record k8s-installer leaves on the control node), not merely its
+	// files. Not saved
 	Existing bool
 
 	// S1: Nodes (inventory.yml → all.hosts)

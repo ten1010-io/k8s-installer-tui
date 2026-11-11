@@ -125,7 +125,9 @@ func TestPreviewManyWarningsFits(t *testing.T) {
 			s.AipubHarborLocalPVNode = "node1"
 			s.AipubCpNodes = []string{"node1", "node2"}
 			s.K8sIngressVIP = "192.168.0.100"
-			d := &driver{t: t, app: NewApp(s, paths, plan.DefaultOptions(), "test")}
+			existing := plan.DefaultOptions()
+			existing.Existing = true
+			d := &driver{t: t, app: NewApp(s, paths, existing, "test")}
 			d.send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 			for i := 0; i < 9 && d.app.current < 9; i++ {
 				d.keys("ctrl+n")

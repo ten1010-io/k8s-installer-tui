@@ -60,7 +60,7 @@ func (s *S9Install) running() bool { return s.ex != nil && !s.ex.done }
 // with. A run that did not finish is planned as it started: whether the cluster
 // and AIPub were there then, not what the files it saved say now.
 func (s *S9Install) loadPrev() {
-	s.opts.Existing, s.opts.AipubInstalled = s.base.Existing, s.base.AipubInstalled
+	s.opts.Existing, s.opts.AipubInstalled, s.opts.SiteWhy = s.base.Existing, s.base.AipubInstalled, s.base.SiteWhy
 	s.last = nil
 	prev, err := plan.LoadRunState(plan.StateDir(s.opts))
 	if err != nil {
@@ -70,6 +70,7 @@ func (s *S9Install) loadPrev() {
 	s.last = prev
 	if prev != nil && prev.Outcome != plan.OutcomeOK {
 		s.opts.Existing, s.opts.AipubInstalled = prev.Existing, prev.AipubInstalled
+		s.opts.SiteWhy = plan.ResumedSite(prev, s.base.SiteWhy)
 		// and what the operator chose for it: 이어서 실행 runs that plan
 		s.opts.Monitoring, s.opts.ArchivePath = prev.Monitoring, prev.ArchivePath
 		s.archive.SetValue(prev.ArchivePath)

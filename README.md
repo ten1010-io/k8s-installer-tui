@@ -101,13 +101,24 @@ Docker와 네트워크(패키지, PyPI의 ansible-core)가 필요합니다. 이�
 | `--install` | | 화면 없이 설치 실행: 사전 확인 뒤 9단계의 단계를 차례로 실행. 아래 "설치 실행" 참고 |
 | `--resume` | | `--install`과 함께: 지난 실행에서 성공한 단계는 건너뛰고 이어서 실행. 계획은 지난 실행의 `--existing`·`--aipub-installed`·`--archive`·`--no-monitoring`으로 하고, 이번 플래그와 다르면 알려 줌 |
 | `--fresh` | | `--install`과 함께: 끝나지 않은 지난 실행이 있어도 처음부터 모든 단계를 실행. 없이 `--install`만 쓰면 그런 실행이 있을 때 시작하지 않음(종료 코드 2) |
-| `--existing` | | `--install`과 함께: 클러스터가 이미 있는 사이트로 계획 (기본은 새 사이트) |
-| `--aipub-installed` | | `--install --existing`과 함께: AIPub도 이미 설치된 사이트로 계획(setup-cert의 CA가 노드에 있고 JWKS issuer가 응답: 컨트롤 플레인 항목을 update-cluster 한 번에 적용). 기본은 AIPub 없음. `files/aipub/vars.yml`이 있는지로 짐작하지 않음(위저드가 AIPub 사이트마다 씀) |
+| `--existing` | | 마법사와 `--install`: 클러스터가 이미 있는 사이트로 계획. 없으면 이 제어 노드에 `/etc/k8s-installer/applied-release`가 있을 때만 기존 사이트(아래 "기존 사이트 판정") |
+| `--aipub-installed` | | 마법사와 `--install`, 기존 사이트에서: AIPub도 이미 설치된 사이트로 계획(setup-cert의 CA가 노드에 있고 JWKS issuer가 응답: 컨트롤 플레인 항목을 update-cluster 한 번에 적용). 기본은 AIPub 없음. aipub-installer는 설치를 마쳤다는 기록을 남기지 않으므로 이 플래그로만 정함(`files/aipub/vars.yml`은 위저드가 AIPub 사이트마다 씀). 새 사이트에 주면 시작하지 않음 |
 | `--archive <path>` | (없음) | `--install`과 함께: K4의 사용자 레지스트리 아카이브 (비우면 K4 건너뜀) |
 | `--no-monitoring` | | `--install`과 함께: 모니터링(A4)을 설치하지 않음 |
 | `--version` | | 버전 출력 |
 
 `--render`의 종료 코드: `0` 검증 통과, `2` 검증 오류 있음(파일은 렌더링됨), `1` 로드·렌더링·쓰기 오류. 렌더링 결과는 `<dir>` 아래에 k8s-installer의 `ansible` 디렉터리 배치(`inventory.yml`, `group_vars/all/vars.yml`, `files/aipub/vars.yml`)로 쓰며, AIPub을 설치하지 않으면 `files/aipub/vars.yml`은 만들지 않습니다.
+
+### 기존 사이트 판정
+
+계획(K1~K3을 실행할지, P3, 감사 정책 기본값을 쓸지)은 "클러스터가 이미 있는가"로 갈립니다. 이것은 사이트 파일이 있는지로 정하지 않습니다. `setup.sh`가 `/opt/k8s-installer/ansible`에 템플릿 vars.yml을 두고, 한 번 저장한 뒤 설치 전에 다시 연 사이트도 파일이 모두 있기 때문입니다. 대신:
+
+- `--existing`을 주면 기존 사이트.
+- 아니면 이 제어 노드의 `/etc/k8s-installer/applied-release`가 있을 때만 기존 사이트. k8s-installer는 setup-cluster·update-cluster·add-node·upgrade-cluster가 성공한 마지막에 이 파일을 모든 노드(제어 노드 포함)에 쓰고(`tasks/record-applied-state.yml`), reset-cluster·remove-node가 지웁니다(`tasks/reset-cluster-record.yml`). 같은 때 쓰는 `applied-vars.yml`은 reset-cluster 뒤에도 일부러 남으므로 쓰지 않습니다.
+- 그 파일을 확인할 수 없으면(권한) 기존이라고 짐작하지 않고 새 사이트로 계획하며, 그 이유를 보입니다.
+- AIPub 설치 여부는 `--aipub-installed`로만 정합니다.
+
+9단계 화면과 `--install`은 판정과 이유를 한 줄로 보입니다. 예: `새 사이트: /etc/k8s-installer/applied-release 없음 (클러스터가 이미 있으면 --existing 으로 시작)`, `기존 사이트: /etc/k8s-installer/applied-release 있음 (...)`, `기존 사이트: --existing 으로 지정`. `--render`도 같은 판정으로 감사 정책 기본값을 쓸지 정합니다.
 
 ### 기존 파일이 있는 경우
 
@@ -193,9 +204,9 @@ AIPub을 설치하지 않으면 AIPub 전용 화면(6·7단계)은 건너뜁니�
 |----|------|------|
 | P1 | `setup.sh` 완료 확인 | 확인 |
 | P2 | 모든 노드에 SSH·sudo 접속 | 확인 |
-| K1 | `setup-k8s-installer` | 플레이북 |
-| K2 | `setup-control-node` | 플레이북 |
-| K3 | `setup-cluster` | 플레이북 |
+| K1 | `setup-k8s-installer` (기존 사이트: 건너뜀) | 플레이북 |
+| K2 | `setup-control-node` (기존 사이트: 건너뜀) | 플레이북 |
+| K3 | `setup-cluster` (기존 사이트: `update-cluster`, 또는 건너뜀) | 플레이북 |
 | K4 | `push-user-registry-artifacts` (선택, 아카이브 경로를 넣었을 때) | 플레이북 |
 | A1 | `setup-network` | 플레이북 (AIPub) |
 | A2 | `setup-cert` | 플레이북 (AIPub) |
@@ -205,6 +216,10 @@ AIPub을 설치하지 않으면 AIPub 전용 화면(6·7단계)은 건너뜁니�
 | A5 | `setup-aipub` | 플레이북 (AIPub) |
 
 A1~A5는 AIPub을 설치할 때만 나옵니다. 화면에서 K4의 아카이브 경로와 모니터링 설치 여부를 정합니다.
+
+기존 사이트(위 "기존 사이트 판정")에서는 K1·K2를 계획에 남기되 건너뜁니다: 노드의 설치본과 ki cp 서비스는 이미 있고, 올리는 것은 이 계획이 아니라 `upgrade-k8s-installer.yml`입니다. K3은 setup-cluster가 아닙니다(살아 있는 클러스터에서는 `init-k8s-cluster.sh`가 "Kubelet already enabled"로 거부). 뒤의 한 단계가 컨트롤 플레인 항목을 한 번에 적용하면(AIPub 없는 사이트의 K5, AIPub이 설치된 사이트의 A2.5) K3은 건너뛰고, 그렇지 않으면(기존 클러스터에 AIPub을 지금 설치) K3은 클러스터 단계 항목(감사 로그, runtime-config)을 AIPub 단계 전에 적용하는 `update-cluster.yml`이며, 그 단계에 적용할 항목이 없으면 건너뜁니다. ID는 그대로 K3이라 `state.json`과 로그의 이름이 바뀌지 않습니다.
+
+컨트롤 플레인 항목(`k8s_cp_extra_files` 등) 중 뒤 단계가 만드는 것을 읽는 항목(인증 웹훅: setup-cert의 CA, JWKS: setup-aipub의 issuer와 A5.1이 채우는 `files/aipub/authentication-config.yaml`)이 있으면, 모든 플레이북이 그때까지 적용된 목록을 `-e '{...}'`로 받습니다: K3 전부터 A2.5까지는 클러스터 단계, A2.5가 JWKS를 빼고 적용했으면 그다음부터 그 단계, 모두 적용한 단계(A5.2, A2.5, K5) 뒤로는 `-e` 없이 vars.yml 그대로. k8s-installer가 `prepare-vars.yml`을 읽는 모든 플레이북(setup-control-node, push-user-registry-artifacts, aipub 플레이북)에서 `k8s_cp_extra_files`의 파일이 `ansible/files`에 있는지 확인하기 때문입니다(`validate-hostvars.py`). K1은 그 확인을 하지 않지만 같은 규칙으로 같은 `-e`를 받습니다. 뒤로 미룰 항목이 없으면(AIPub 없음, 이미 AIPub이 설치되어 한 번에 적용) `-e`는 없습니다. `install-plan.sh`와 러너는 같은 인자를 씁니다.
 
 | 키 | 동작 |
 |----|------|
@@ -271,10 +286,10 @@ cd /opt/k8s-installer/ansible
 k8s-installer-tui --install                 # 사전 확인, 그다음 모든 단계. M1에서 Enter를 기다림
 k8s-installer-tui --install --resume        # 실패·중단한 단계부터
 k8s-installer-tui --install --fresh         # 끝나지 않은 실행이 있어도 처음부터
-k8s-installer-tui --install --existing --aipub-installed   # 클러스터와 AIPub이 이미 있는 사이트
+k8s-installer-tui --install --existing --aipub-installed   # 클러스터와 AIPub이 이미 있는 사이트 (기록이 있으면 --existing 은 없어도 됨)
 ```
 
-`--install`은 단계가 바뀔 때마다 한 줄씩(`▶`·`✓`·`✗`·`⏸`) 찍고, 끝에 요약을 찍습니다. 종료 코드: `0` 모두 성공, `1` 실패(또는 M1에서 입력이 끝나 멈춤), `2` 시작하지 못함(사전 확인 ✗, 다른 실행이 잠금을 가짐, 지난 실행의 단계가 아직 실행 중, `--resume`·`--fresh` 없이 끝나지 않은 실행이 있음, `--resume`인데 지난 실행 없음, 사이트 파일이 바뀌어 묻는 말에 아니오, 이 제어 노드의 sudo가 비밀번호를 물음), `130` `Ctrl+C`(SIGTERM `143`, SIGHUP `129`). 시험: `test/install/run.sh`가 가짜 `ansible`·`ansible-playbook`으로 컨테이너 안에서 처음부터 끝까지 돌려 봅니다(서버에 접속하지 않음).
+`--install`은 먼저 `── 사이트: ...`로 기존 사이트 판정과 그 이유를 찍고(이어서 실행이면 지난 실행의 판정), 단계가 바뀔 때마다 한 줄씩(`▶`·`✓`·`✗`·`⏸`) 찍고, 끝에 요약을 찍습니다. 종료 코드: `0` 모두 성공, `1` 실패(또는 M1에서 입력이 끝나 멈춤), `2` 시작하지 못함(사전 확인 ✗, 다른 실행이 잠금을 가짐, 지난 실행의 단계가 아직 실행 중, `--resume`·`--fresh` 없이 끝나지 않은 실행이 있음, `--resume`인데 지난 실행 없음, 사이트 파일이 바뀌어 묻는 말에 아니오, 이 제어 노드의 sudo가 비밀번호를 물음), `130` `Ctrl+C`(SIGTERM `143`, SIGHUP `129`). 시험: `test/install/run.sh`가 가짜 `ansible`·`ansible-playbook`으로 컨테이너 안에서 처음부터 끝까지 돌려 봅니다(서버에 접속하지 않음). 가짜 `ansible-playbook`은 k8s-installer처럼 `k8s_cp_extra_files`가 가리키는 파일이 `files/`에 없으면 거부하고, 마지막 시나리오는 컨테이너의 `/etc/k8s-installer/applied-release`를 만들어 기존 클러스터 계획을 돌려 봅니다.
 
 ```bash
 docker run --rm -v tui-gomod:/go/pkg/mod -v "$PWD:/src" -w /src golang:1.23 bash test/install/run.sh

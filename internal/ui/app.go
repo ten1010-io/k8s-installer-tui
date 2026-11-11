@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
-	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/screens"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
@@ -27,15 +26,13 @@ type App struct {
 }
 
 func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version string) *App {
-	// An existing site (its files were there before anything is saved): the
-	// cluster is there, and maybe AIPub. The control plane screen offers to read
-	// what its apiserver was given by hand, and the plan applies the control
-	// plane in one update-cluster.yml once nothing waits for a later step
-	if loaded, _ := fileio.LoadSite(paths); loaded != nil {
-		opts.Existing = true
-		s.Existing = true // the default audit policy waits for the nodes' to be read
-		_, opts.AipubInstalled = loaded.Values[schema.FileAipub]
-	}
+	// Whether the cluster is there (and AIPub) is what main decided (plan.DetectSite:
+	// --existing, or the record k8s-installer leaves on this control node), not
+	// whether the files of the site are: setup.sh lays a template vars.yml, and a
+	// site saved and opened again before it was installed has them all. On an
+	// existing site the control plane screen offers to read what its apiserver was
+	// given by hand, and the plan does not build the cluster again
+	s.Existing = opts.Existing // the default audit policy waits for the nodes' to be read
 	opts.AuditPolicy = paths.AuditPolicy()
 	s1 := screens.NewS1Nodes()
 	s2 := screens.NewS2Groups()

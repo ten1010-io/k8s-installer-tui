@@ -404,7 +404,7 @@ func TestPreviewNotesTab(t *testing.T) {
 	}
 }
 
-// Opened on an existing site, the preview warns about a value the cluster can
+// Opened on an existing cluster, the preview warns about a value the cluster can
 // not take any more, and still saves.
 func TestPreviewWarnsFixedChange(t *testing.T) {
 	d0, paths := newDriver(t)
@@ -414,7 +414,19 @@ func TestPreviewWarnsFixedChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.InternalNetworkSubnets = []string{"192.168.0.0/23"}
-	d := &driver{t: t, app: NewApp(s, paths, plan.DefaultOptions(), "test")}
+
+	// saved once, not installed yet (no --existing, no record): nothing is fixed
+	saved := &driver{t: t, app: NewApp(s, paths, plan.DefaultOptions(), "test")}
+	saved.send(tea.WindowSizeMsg{Width: 110, Height: 60})
+	saved.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	saved.at("8.저장")
+	if strings.Contains(saved.screen(), "바꿀 수 없습니다") {
+		t.Errorf("a saved site that is not installed warns:\n%s", saved.screen())
+	}
+
+	existing := plan.DefaultOptions()
+	existing.Existing = true
+	d := &driver{t: t, app: NewApp(s, paths, existing, "test")}
 	d.send(tea.WindowSizeMsg{Width: 110, Height: 60})
 	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
 	d.at("8.저장")

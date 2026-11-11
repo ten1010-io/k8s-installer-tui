@@ -54,6 +54,12 @@ type Step struct {
 	AlwaysRun bool
 	// Classes are the StorageClasses a Manual step waits for (StorageNeeds)
 	Classes []string
+
+	// applies: the step applies the control plane (setup-cluster,
+	// update-cluster) up to stage (state.StageCluster..StageAll); the playbooks
+	// from it on run with the entries of that stage (withStages)
+	applies bool
+	stage   int
 }
 
 // Options are what the screen asks besides the settings.
@@ -71,12 +77,15 @@ type Options struct {
 	Self string
 	// SiteDir is the directory the settings were saved in; empty: AnsibleDir
 	SiteDir string
-	// Existing: the site had its files (group_vars/all/vars.yml) when the wizard
-	// started (fileio.LoadSite), so the cluster is there already
+	// Existing: the cluster is there already (DetectSite: --existing, or the
+	// record k8s-installer leaves on this control node)
 	Existing bool
-	// AipubInstalled: and files/aipub/vars.yml too, so AIPub is installed: the
-	// CA of setup-cert is on the nodes and the issuer of JWKS answers
+	// AipubInstalled: and AIPub is installed (--aipub-installed): the CA of
+	// setup-cert is on the nodes and the issuer of JWKS answers
 	AipubInstalled bool
+	// SiteWhy is the line that says why Existing and AipubInstalled are what
+	// they are (Site.Why), shown with the plan
+	SiteWhy string
 	// JWKSCAReady: the authentication config of the JWKS preset was written with
 	// its CA when the settings were saved (fileio.LookupCA)
 	JWKSCAReady bool
@@ -120,7 +129,7 @@ func (o Options) direct(cp *state.ControlPlane) bool {
 
 // Build is the plan for a new installation with these settings.
 func Build(s *state.AppState, o Options) []Step {
-	steps := build(s, o)
+	steps := withStages(build(s, o), s, o)
 	if o.ShellExecutable != "" {
 		// next to the -e of a step (the JWKS lists): ansible takes any number of them
 		for i := range steps {
@@ -175,13 +184,19 @@ func build(s *state.AppState, o Options) []Step {
 			Note: "기존 사이트: 첫 컨트롤 플레인 노드에서 kubectl get storageclass " + s.AipubHaModeStorageClass +
 				" 로 있는지 읽기만 확인 (없으면 경고). 새 사이트는 클러스터를 만든 뒤에 만들어져 건너뜀"})
 	}
-	steps = append(steps,
-		Step{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",
-			Note: "모든 노드에 설치본 배포"},
-		Step{ID: "K2", Title: "setup-control-node", Kind: Playbook, Playbook: "playbooks/setup-control-node.yml",
-			Note: "ki cp 서비스: DNS, NTP, 레지스트리, apiserver LB"},
-		setupCluster(s, o),
-	)
+	k1 := Step{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",
+		Note: "모든 노드에 설치본 배포"}
+	k2 := Step{ID: "K2", Title: "setup-control-node", Kind: Playbook, Playbook: "playbooks/setup-control-node.yml",
+		Note: "ki cp 서비스: DNS, NTP, 레지스트리, apiserver LB"}
+	if o.Existing {
+		// kept in the plan, so that state.json and the screen name every step of
+		// an installation, but not run: the nodes have the installer and the ki cp
+		// services already, and raising them is a release upgrade, not a setup
+		why := "클러스터가 이미 있음: 노드의 설치본·ki cp 서비스는 이 계획이 아니라 upgrade-k8s-installer.yml 로 올림"
+		k1.Skip, k1.SkipWhy = true, why
+		k2.Skip, k2.SkipWhy = true, why
+	}
+	steps = append(steps, k1, k2, clusterStep(s, o))
 	cp := s.AppliedControlPlane()
 
 	push := Step{ID: "K4", Title: "push-user-registry-artifacts", Kind: Playbook,
@@ -237,10 +252,11 @@ func build(s *state.AppState, o Options) []Step {
 		// them (cp_extra_files, then control_plane), one control plane node at a time
 		a25 := Step{ID: "A2.5", Title: "update-cluster (apiserver 인증 웹훅 적용)", Kind: Playbook,
 			Playbook: "playbooks/update-cluster.yml",
-			Note:     "K3 에서 뺀 인증 웹훅 항목을 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"}
+			Note:     "K3 에서 뺀 인증 웹훅 항목을 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다",
+			applies:  true, stage: state.StageAll}
 		if jwks {
 			// the JWKS entries wait for the issuer, after setup-aipub
-			a25.Args = stageArgs(cp, state.StageAfterCert)
+			a25.stage = state.StageAfterCert
 			a25.Note += ". JWKS 항목은 빼고 (-e), A5.2 에서 적용"
 		}
 		steps = append(steps, a25)
@@ -264,7 +280,7 @@ func build(s *state.AppState, o Options) []Step {
 // configuration: the same flags, kept from then on.
 func applyAll(id string) Step {
 	return Step{ID: id, Title: "update-cluster (컨트롤 플레인 항목 적용)", Kind: Playbook,
-		Playbook: "playbooks/update-cluster.yml",
+		Playbook: "playbooks/update-cluster.yml", applies: true, stage: state.StageAll,
 		Note: "기존 사이트: 컨트롤 플레인 항목을 한 번에 적용 (-e 없음). 손으로 고친 kube-apiserver.yaml 은 설치기가 관리하는 같은 " +
 			"플래그로 바뀜 (P3 로 먼저 확인). 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"}
 }
@@ -302,7 +318,7 @@ func jwksSteps(s *state.AppState, o Options) []Step {
 		Note: "A2 setup-cert 가 둔 CA (" + ca + ") 를 읽어 files/" + state.JWKSConfigFile + " 를 issuer·CA 로 다시 만들어 " +
 			"저장한 사이트와 설치 디렉터리 양쪽에 씀 (다시 실행해도 같음). CA 가 없으면 여기서 멈춤"}
 	apply := Step{ID: "A5.2", Title: "update-cluster (apiserver JWKS 인증 적용)", Kind: Playbook,
-		Playbook: "playbooks/update-cluster.yml",
+		Playbook: "playbooks/update-cluster.yml", applies: true, stage: state.StageAll,
 		Note: "K3 에서 뺀 JWKS 항목 (authentication-config) 을 적용. setup-aipub 의 k8s-jwks 가 손으로 넣은 것을 " +
 			"kubeadm 이 보관하게 함. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"}
 	return []Step{fill, apply}
@@ -325,19 +341,95 @@ func stageArgs(cp *state.ControlPlane, stage int) []string {
 	return []string{"-e", string(data)}
 }
 
-// setupCluster is K3. The entries of the control plane that need what a later
-// step makes (the webhook preset needs the CA of setup-cert, the JWKS preset the
-// issuer setup-aipub brings up) are left out of it (stageArgs) and applied by
-// update-cluster.yml after that step (A2.5, A5.2). On a site whose AIPub is
-// there already nothing waits (Options.direct): nothing is left out.
-func setupCluster(s *state.AppState, o Options) Step {
-	st := Step{ID: "K3", Title: "setup-cluster", Kind: Playbook, Playbook: "playbooks/setup-cluster.yml",
-		Note: "kubeadm. 끝나면 CNI가 없어 노드가 NotReady인 것이 정상"}
+// staged reports whether some entries of the control plane wait for a later
+// step of this plan (the webhook preset for the CA of setup-cert, the JWKS
+// preset for the issuer setup-aipub brings up): only then do the playbooks get
+// the lists as they are applied by then (withStages). Without AIPub nothing
+// waits, and on a site whose AIPub is there already (Options.direct) neither.
+func staged(s *state.AppState, o Options) bool {
 	cp := s.AppliedControlPlane()
-	if !s.AipubEnabled || !cp.HasLater() || o.direct(cp) {
+	return s.AipubEnabled && cp.HasLater() && !o.direct(cp)
+}
+
+// withStages gives every playbook the control plane lists as they are applied
+// by the time it runs. k8s-installer checks the files of k8s_cp_extra_files in
+// every playbook that imports tasks/prepare-vars.yml, not only in the ones that
+// apply them (scripts/preflight/validate-hostvars.py), and the authentication
+// config of JWKS is written only once there is a CA (A5.1): a run that saw
+// vars.yml whole before then would stop on it. So the stage starts at what
+// setup-cluster builds, a step that applies the control plane (applies) moves
+// it on for itself and the steps after it, and the lists of the stage go with
+// the run as extra vars (stageArgs) until a step applies everything, after which
+// vars.yml is what is applied and no -e is given. K1 (setup-k8s-installer) does
+// not read them; it gets them too, so that one rule holds for every playbook.
+// The script and the runner both take the arguments from here (Command).
+func withStages(steps []Step, s *state.AppState, o Options) []Step {
+	if !staged(s, o) {
+		return steps
+	}
+	cp := s.AppliedControlPlane()
+	at := state.StageCluster
+	for i := range steps {
+		st := &steps[i]
+		if st.Kind != Playbook {
+			continue
+		}
+		if st.applies && !st.Skip {
+			at = st.stage
+		}
+		if at < state.StageAll {
+			// after the step's own -e: ansible takes any number of them
+			st.Args = append(append([]string{}, st.Args...), stageArgs(cp, at)...)
+		}
+	}
+	return steps
+}
+
+// emptyAt reports whether nothing of the control plane is applied by step stage.
+func emptyAt(cp *state.ControlPlane, stage int) bool {
+	if len(cp.ExtraFiles(stage)) > 0 {
+		return false
+	}
+	for _, comp := range state.CpComponents {
+		if len(cp.ExtraArgs(comp, stage)) > 0 || len(cp.ExtraVolumes(comp, stage)) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// clusterStep is K3. On a new site setup-cluster builds the cluster. The entries
+// of the control plane that need what a later step makes are left out of it
+// (withStages) and applied by update-cluster.yml after that step (A2.5, A5.2).
+//
+// On an existing cluster setup-cluster would fail (init-k8s-cluster.sh refuses a
+// node whose kubelet is enabled), after it had put the extra files on the
+// nodes. There K3 is update-cluster.yml with the entries of the cluster stage
+// (the audit log, runtime-config), so that they are there before the AIPub
+// steps, the same as on a new site; it is skipped when a later step applies
+// everything at once (K5 without AIPub, the A2.5 of Options.direct) or when
+// nothing is applied at that stage. The ID stays K3, so that state.json and the
+// logs keep one name for it.
+func clusterStep(s *state.AppState, o Options) Step {
+	cp := s.AppliedControlPlane()
+	st := Step{ID: "K3", Title: "setup-cluster", Kind: Playbook, Playbook: "playbooks/setup-cluster.yml",
+		Note: "kubeadm. 끝나면 CNI가 없어 노드가 NotReady인 것이 정상", applies: true, stage: state.StageCluster}
+	if o.Existing {
+		st.Title, st.Playbook = "update-cluster (클러스터 단계 컨트롤 플레인 항목)", "playbooks/update-cluster.yml"
+		st.Note = "기존 클러스터: setup-cluster 대신 update-cluster.yml 로 클러스터 단계의 컨트롤 플레인 항목 (감사 로그, runtime-config 등) 을 " +
+			"AIPub 단계 전에 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"
+		switch {
+		case !s.AipubEnabled && !cp.Empty():
+			st.Skip, st.SkipWhy = true, "기존 클러스터: K5 가 컨트롤 플레인 항목을 한 번에 적용"
+		case s.AipubEnabled && o.direct(cp) && !cp.Empty():
+			st.Skip, st.SkipWhy = true, "기존 사이트: A2.5 가 컨트롤 플레인 항목을 한 번에 적용"
+		case emptyAt(cp, state.StageCluster):
+			st.Skip, st.SkipWhy = true, "기존 클러스터: 이 단계에서 적용할 컨트롤 플레인 항목 없음"
+		}
+	}
+	if !staged(s, o) {
 		return st
 	}
-	st.Args = stageArgs(cp, state.StageCluster)
 	var later []string
 	if cp.HasStage(state.StageAfterCert) {
 		later = append(later, "인증 웹훅은 A2.5")
@@ -345,7 +437,7 @@ func setupCluster(s *state.AppState, o Options) Step {
 	if cp.HasStage(state.StageAfterAipub) {
 		later = append(later, "JWKS 는 A5.2")
 	}
-	st.Note += ". AIPub 인증 항목은 빼고 만들고 (-e), " + strings.Join(later, ", ") + " 에서 적용합니다"
+	st.Note += ". AIPub 인증 항목은 빼고 (-e), " + strings.Join(later, ", ") + " 에서 적용합니다"
 	return st
 }
 

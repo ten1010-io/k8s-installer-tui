@@ -339,7 +339,7 @@ func AuthConfig(s *state.AppState, ca string) []byte {
 		caLines.WriteString("        " + strings.TrimRight(l, " \r") + "\n")
 	}
 	t = strings.Replace(t, authConfigCALine, caLines.String(), 1)
-	header := "# Written by k8s-installer-tui (AIPub 인증 (JWKS)) from the template of aipub-installer, filled in\n" +
+	header := "# Written by k8s-installer-tui (AIPub authentication (JWKS)) from the template of aipub-installer, filled in\n" +
 		"# as k8s-jwks fills it. Copied to every control plane node in the clear by k8s_cp_extra_files:\n" +
 		"# the issuer URL and the public CA only, never a credential. The CA is the one setup-cert put at\n" +
 		"# " + state.JWKSCAPath + "; after it is replaced, run k8s-installer-tui --fill-auth-config again.\n"
@@ -376,7 +376,7 @@ func WebhookConfig(s *state.AppState) []byte {
 		)),
 		"current-context", strKey(name),
 	)
-	doc.HeadComment = "Written by k8s-installer-tui (AIPub 인증 웹훅). Copied to every control plane node\n" +
+	doc.HeadComment = "Written by k8s-installer-tui (AIPub authentication webhook). Copied to every control plane node\n" +
 		"in the clear by k8s_cp_extra_files: never put a credential here"
 	out, err := encodeDoc(doc)
 	if err != nil {

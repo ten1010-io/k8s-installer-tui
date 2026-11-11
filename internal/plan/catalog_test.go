@@ -211,11 +211,12 @@ func TestCatalogOptions(t *testing.T) {
 		t.Errorf("empty: %q", got)
 	}
 
-	// no catalog file: skipped, and the reason names the file
+	// no catalog file: skipped, and the reason names the file (the word
+	// "skipped" is the screen's, from Skipped)
 	none := testOptions()
 	none.Root = t.TempDir()
 	r = CheckCatalog(none)
-	if !r.OK || !r.Skipped || !strings.Contains(r.Lines[0], "건너뜀") || !strings.Contains(r.Lines[0], none.CatalogPath()) {
+	if !r.OK || !r.Skipped || !strings.Contains(r.Lines[0], "카탈로그 파일이 없음") || !strings.Contains(r.Lines[0], none.CatalogPath()) {
 		t.Errorf("no file: %+v", r)
 	}
 	if _, _, found := CatalogSummary(none); found {

@@ -86,10 +86,16 @@ Docker와 네트워크(패키지, PyPI의 ansible-core)가 필요합니다. 이�
   --inventory /opt/k8s-installer/ansible/inventory.yml \
   --vars /opt/k8s-installer/ansible/group_vars/all/vars.yml \
   --aipub-vars /opt/k8s-installer/ansible/files/aipub/vars.yml
+
+# 한국어 화면 (기본은 영어)
+./k8s-installer-tui --lang ko
 ```
+
+화면과 메시지는 기본이 영어입니다. 폐쇄망의 리눅스에는 한글 글꼴·로캘이 없는 경우가 많아 한국어가 네모로 보이기 때문입니다. 한국어는 `--lang ko` 또는 환경 변수 `K8S_INSTALLER_TUI_LANG=ko` 로 켭니다(플래그가 우선). 언어는 화면, CLI 도움말과 메시지, 실행 로그, `install-plan.sh`, `site-values.yml` 에 적용됩니다. 노드에 복사되는 파일(감사 정책, 인증·웹훅 설정의 주석)은 언어와 상관없이 영어입니다. A5.1 이 이 프로그램을 `sudo` 로 다시 부를 때는 `--lang` 을 함께 넘깁니다(`sudo` 는 환경 변수를 넘기지 않음).
 
 | 플래그 | 기본값 | 설명 |
 |--------|--------|------|
+| `--lang` | `en` | 화면과 메시지의 언어: `en` 또는 `ko`. `K8S_INSTALLER_TUI_LANG` 로도 정함 |
 | `--inventory` | `inventory.yml` | inventory.yml 경로 |
 | `--vars` | `group_vars/all/vars.yml` | k8s-installer의 vars.yml 경로 |
 | `--aipub-vars` | `files/aipub/vars.yml` | aipub-installer의 사이트 값 경로 |
@@ -313,6 +319,7 @@ k8s-installer-tui/
 ├── Makefile, go.mod, set-env.sh
 ├── internal/
 │   ├── state/               # AppState, NodeConfig
+│   ├── i18n/                # 언어 (--lang): 코드의 영어가 키, 한국어는 패키지마다 ko*.go
 │   ├── fileio/
 │   │   ├── loader.go        # 파일 3개 -> AppState (구버전 파일 이전 포함)
 │   │   ├── writer.go        # AppState -> 파일 3개 (history.go: history.jsonl)

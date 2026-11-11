@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
@@ -31,37 +33,43 @@ func main() {
 	if os.Getenv("COLORTERM") == "" {
 		os.Setenv("COLORTERM", "truecolor")
 	}
-	inventoryPath := flag.String("inventory", "inventory.yml", "inventory.yml 경로")
-	varsPath := flag.String("vars", "group_vars/all/vars.yml", "vars.yml 경로 (k8s-installer)")
-	aipubVarsPath := flag.String("aipub-vars", "files/aipub/vars.yml", "AIPub 사이트 값 경로 (aipub-installer)")
-	renderDir := flag.String("render", "", "화면 없이 세 파일과 한눈에 보는 site-values.yml 을 이 디렉터리에 렌더링하고 검증 결과를 출력 (기존 파일은 그대로)")
-	installerRoot := flag.String("installer-root", plan.DefaultOptions().Root, "k8s-installer가 설치된 디렉터리 (setup.sh)")
-	fillAuth := flag.Bool("fill-auth-config", false, "화면 없이 AIPub 인증 (JWKS) 의 files/aipub/authentication-config.yaml 을 issuer 와 CA 로 다시 만들어 "+
-		"저장한 사이트와 <installer-root>/ansible/files 양쪽에 씀 (다시 실행해도 같음). CA 가 없으면 실패")
-	jwksCA := flag.String("jwks-ca", "", "JWKS CA 파일 (기본 "+state.JWKSCAPath+", aipub-installer setup-cert 가 둠)")
-	checkSSH := flag.Bool("check-ssh", false, "화면 없이 --inventory 의 모든 노드가 이 제어 노드의 키 (~/.ssh/id_rsa) 를 받고 비밀번호 없이 sudo 하는지 "+
-		"표로 출력 (읽기만, known_hosts 도 그대로). 0 모두 준비됨, 1 준비 안 된 노드 있음, 2 실행 못 함")
-	sendSSHKey := flag.Bool("send-ssh-key", false, "화면 없이 키를 받지 않는 노드에 ssh-copy-id 로 키를 보내고 (비밀번호는 노드마다 ssh 가 물음) "+
-		"--check-ssh 의 표를 출력. 키가 없으면 <installer-root>/ansible/configure-control-node-ssh.sh 로 만듦. Ctrl-C 130, SIGTERM 143, SIGHUP 129")
-	askPassOnce := flag.Bool("ask-pass-once", false, "--send-ssh-key 에서 비밀번호를 터미널에서 한 번만 물어 (화면에 보이지 않음) 모든 노드에 씀")
-	install := flag.Bool("install", false, "화면 없이 설치를 실행: 사전 확인 (P1..P8, ✗ 이면 시작 안 함) 뒤 설치 계획의 단계를 차례로 실행하고 "+
-		"StorageClass 단계 (M1) 에서 Enter 를 기다림. 상태·로그는 <installer-root>/tui-install. "+
-		"Ctrl-C 한 번 실행 중인 단계 뒤 멈춤, 두 번 바로 멈춤. 종료 코드 0 완료, 1 실패, 2 시작 못 함, 130 중단")
-	resume := flag.Bool("resume", false, "--install 에서 지난 실행 (state.json) 의 성공한 단계는 건너뛰고 이어서 실행 "+
-		"(계획은 지난 실행의 --existing·--aipub-installed·--no-monitoring 으로. --archive 는 지난 실행의 K4 가 성공했으면 그때 것, "+
-		"아니면 이번 것으로 K4 부터)")
-	fresh := flag.Bool("fresh", false, "--install: 끝나지 않은 지난 실행이 있어도 처음부터 모든 단계를 실행 (없으면 --install 은 시작하지 않음). "+
-		"사이트는 지금 상태로 판단 ("+plan.ClusterRecord+")")
-	existing := flag.Bool("existing", false, "클러스터가 이미 있는 사이트로 계획 (마법사와 --install). 없으면 "+plan.ClusterRecord+
-		" (k8s-installer 가 클러스터를 만든 뒤 남기는 기록) 이 있을 때만 기존 사이트. --resume 은 지난 실행의 것을 씀")
-	aipubInstalled := flag.Bool("aipub-installed", false, "기존 사이트에 AIPub 도 이미 설치된 것으로 계획 (마법사와 --install. "+
-		"setup-cert 의 CA 가 노드에 있고 JWKS issuer 가 응답함: 컨트롤 플레인 항목을 update-cluster 한 번에 적용). "+
-		"aipub-installer 는 설치 기록을 남기지 않아 이 플래그로만 정함. 기본은 AIPub 없음")
-	archive := flag.String("archive", "", "--install: K4 의 사용자 레지스트리 아카이브 ("+plan.ArchiveName+") 경로. "+
-		"AIPub 을 설치하는 새 사이트에는 필요 (없으면 시작하지 않음, --no-archive). 기존 사이트는 비우면 K4 건너뜀")
-	noArchive := flag.Bool("no-archive", false, "--install: AIPub 을 설치하는 새 사이트를 --archive 없이 시작 (K4 건너뜀: 레지스트리가 비어 A1 부터 실패할 수 있음)")
-	noMonitoring := flag.Bool("no-monitoring", false, "--install: 모니터링 (A4) 을 설치하지 않음")
-	showVersion := flag.Bool("version", false, "버전 출력")
+	// the language first: the help of the flags is in it
+	if err := i18n.Init(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	flag.String("lang", string(i18n.Current()), i18n.T("language of the screens and messages: en (default) or ko; %s=ko does the same", i18n.EnvVar))
+	inventoryPath := flag.String("inventory", "inventory.yml", i18n.T("path of inventory.yml"))
+	varsPath := flag.String("vars", "group_vars/all/vars.yml", i18n.T("path of vars.yml (k8s-installer)"))
+	aipubVarsPath := flag.String("aipub-vars", "files/aipub/vars.yml", i18n.T("path of the AIPub site values (aipub-installer)"))
+	renderDir := flag.String("render", "", i18n.T("headless: render the three files and the overview site-values.yml into this directory and print the validation result (existing files are left as they are)"))
+	installerRoot := flag.String("installer-root", plan.DefaultOptions().Root, i18n.T("directory k8s-installer is installed in (setup.sh)"))
+	fillAuth := flag.Bool("fill-auth-config", false, i18n.T("headless: rebuild files/aipub/authentication-config.yaml of the AIPub authentication (JWKS) from the issuer and the CA and write it "+
+		"to both the saved site and <installer-root>/ansible/files (running it again changes nothing). Fails when there is no CA"))
+	jwksCA := flag.String("jwks-ca", "", i18n.T("JWKS CA file (default %s, put there by aipub-installer setup-cert)", state.JWKSCAPath))
+	checkSSH := flag.Bool("check-ssh", false, i18n.T("headless: print a table of whether every node of --inventory accepts the key (~/.ssh/id_rsa) of this control node and runs sudo without a password "+
+		"(read only, known_hosts untouched). 0 all ready, 1 a node is not ready, 2 could not run"))
+	sendSSHKey := flag.Bool("send-ssh-key", false, i18n.T("headless: send the key with ssh-copy-id to the nodes that do not accept it (ssh asks for each node's password) "+
+		"and print the table of --check-ssh. If there is no key, it is made with <installer-root>/ansible/configure-control-node-ssh.sh. Ctrl-C 130, SIGTERM 143, SIGHUP 129"))
+	askPassOnce := flag.Bool("ask-pass-once", false, i18n.T("with --send-ssh-key, ask for the password once on the terminal (not shown) and use it for every node"))
+	install := flag.Bool("install", false, i18n.T("headless: run the install. After the checks (P1..P8, it does not start on a ✗) run the steps of the plan in turn and "+
+		"wait for Enter at the StorageClass step (M1). State and logs go to <installer-root>/tui-install. "+
+		"Ctrl-C once stops after the running step, twice stops at once. Exit code 0 done, 1 failed, 2 could not start, 130 interrupted"))
+	resume := flag.Bool("resume", false, i18n.T("with --install, skip the steps that succeeded in the last run (state.json) and resume "+
+		"(the plan uses --existing, --aipub-installed and --no-monitoring of the last run. --archive is the last run's if its K4 succeeded; "+
+		"otherwise this run's --archive is used, starting again from K4)"))
+	fresh := flag.Bool("fresh", false, i18n.T("--install: run every step from the start even if a last run did not finish (without it, --install does not start). "+
+		"The site is judged by its state now (%s)", plan.ClusterRecord))
+	existing := flag.Bool("existing", false, i18n.T("plan for a site that already has a cluster (wizard and --install). Without it, the site is an existing one only when %s "+
+		"(the record k8s-installer leaves after it creates the cluster) is there. --resume uses the last run's", plan.ClusterRecord))
+	aipubInstalled := flag.Bool("aipub-installed", false, i18n.T("plan for an existing site that has AIPub installed too (wizard and --install. "+
+		"The CA of setup-cert is on the nodes and the JWKS issuer answers: the control plane entries are applied in one update-cluster). "+
+		"aipub-installer leaves no install record, so only this flag decides. Default is no AIPub"))
+	archive := flag.String("archive", "", i18n.T("--install: path of the user registry archive (%s) for K4. "+
+		"Needed for a new site that installs AIPub (it does not start without it, --no-archive). On an existing site, leaving it empty skips K4", plan.ArchiveName))
+	noArchive := flag.Bool("no-archive", false, i18n.T("--install: start a new site that installs AIPub without --archive (skips K4: the registry is empty and the steps from A1 on may fail)"))
+	noMonitoring := flag.Bool("no-monitoring", false, i18n.T("--install: do not install monitoring (A4)"))
+	showVersion := flag.Bool("version", false, i18n.T("print the version"))
 	flag.Parse()
 
 	if *showVersion {
@@ -88,7 +96,7 @@ func main() {
 	// Start from defaults, then overlay existing files
 	s := state.DefaultState()
 	if err := fileio.LoadAll(paths, s); err != nil {
-		fmt.Fprintf(os.Stderr, "로드 오류: %v\n", err)
+		fmt.Fprintln(os.Stderr, i18n.T("load error: %v", err))
 		os.Exit(1)
 	}
 
@@ -107,12 +115,12 @@ func main() {
 		os.Exit(render(paths, s, *renderDir))
 	}
 	if *aipubInstalled && !site.Existing {
-		fmt.Fprintln(os.Stderr, "--aipub-installed 는 기존 사이트에만 씁니다 (클러스터 없이 AIPub 이 있을 수 없음): "+site.Why)
+		fmt.Fprintln(os.Stderr, i18n.T("--aipub-installed is for an existing site only (AIPub cannot be there without a cluster): %s", site.Why))
 		os.Exit(2)
 	}
 	if *install {
 		if *resume && *fresh {
-			fmt.Fprintln(os.Stderr, "--resume 과 --fresh 는 함께 쓸 수 없습니다")
+			fmt.Fprintln(os.Stderr, i18n.T("--resume and --fresh cannot be used together"))
 			os.Exit(2)
 		}
 		opts := plan.DefaultOptions()
@@ -149,7 +157,7 @@ func main() {
 	stopped := ctx.Err() != nil
 	release()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "오류: %v\n", err)
+		fmt.Fprintln(os.Stderr, i18n.T("error: %v", err))
 		os.Exit(1)
 	}
 	if stopped {
@@ -162,7 +170,7 @@ func main() {
 func render(from fileio.Paths, s *state.AppState, dir string) int {
 	r, err := fileio.Render(from, s)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "렌더링 오류: %v\n", err)
+		fmt.Fprintln(os.Stderr, i18n.T("render error: %v", err))
 		return 1
 	}
 	to := fileio.DefaultPaths(dir)
@@ -197,10 +205,10 @@ func render(from fileio.Paths, s *state.AppState, dir string) int {
 	}
 	fmt.Println("written:", view)
 	if r.JWKSPending(s) {
-		fmt.Println("JWKS: CA 대기 (" + r.CA.Path + " 없음) — " + state.JWKSConfigFile + " 는 쓰지 않음, 설치 계획의 --fill-auth-config 가 setup-cert 뒤에 만듦")
+		fmt.Println(i18n.T("JWKS: waiting for the CA (%s is not there) — %s is not written, --fill-auth-config of the install plan makes it after setup-cert", r.CA.Path, state.JWKSConfigFile))
 	}
 	if r.CA.Err != nil && s.AppliedControlPlane().JWKS {
-		fmt.Println("JWKS: CA 파일 오류:", r.CA.Err)
+		fmt.Println(i18n.T("JWKS: CA file error: %v", r.CA.Err))
 	}
 	errs := validator.Validate(s)
 	for _, e := range errs {
@@ -209,7 +217,7 @@ func render(from fileio.Paths, s *state.AppState, dir string) int {
 	if len(errs) > 0 {
 		return 2
 	}
-	fmt.Println("✓ 검증 통과")
+	fmt.Println(i18n.T("✓ validation passed"))
 	return 0
 }
 
@@ -240,19 +248,19 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 
 	if send {
 		if err := plan.PrepareKey(ctx, o, run, key); err != nil {
-			fmt.Fprintln(os.Stderr, "키 준비 실패:", err)
+			fmt.Fprintln(os.Stderr, i18n.T("preparing the key failed: %v", err))
 			return interrupted(ctx, code, 2)
 		}
 	} else if _, err := os.Stat(key.Private); err != nil {
-		fmt.Fprintln(os.Stderr, "!", key.Private, "가 없습니다: 어느 노드도 준비되지 않았습니다. --send-ssh-key 가 만들고 보냅니다")
+		fmt.Fprintln(os.Stderr, i18n.T("! %s is not there: no node is ready. --send-ssh-key makes it and sends it", key.Private))
 	}
 	nodes, warnings, err := plan.ListSSHNodes(ctx, o, run, inventory)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "노드 목록 실패:", err)
+		fmt.Fprintln(os.Stderr, i18n.T("listing the nodes failed: %v", err))
 		return interrupted(ctx, code, 2)
 	}
 	if len(nodes) == 0 {
-		fmt.Fprintln(os.Stderr, inventory, "에 노드가 없습니다")
+		fmt.Fprintln(os.Stderr, i18n.T("no nodes in %s", inventory))
 		return 2
 	}
 	for _, w := range warnings {
@@ -261,7 +269,7 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 
 	results, err := plan.ProbeNodes(ctx, run, key, nodes, !send)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "확인 실패:", err)
+		fmt.Fprintln(os.Stderr, i18n.T("the check failed: %v", err))
 		return interrupted(ctx, code, 2)
 	}
 	if ctx.Err() != nil {
@@ -278,10 +286,10 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 				fmt.Fprintln(os.Stderr, "--ask-pass-once:", err)
 				return interrupted(ctx, code, 2)
 			}
-			fmt.Fprintf(os.Stderr, "── 키 보내는 중 (%d대)\n", len(refusing))
+			fmt.Fprintln(os.Stderr, i18n.T("── sending the key (%d nodes)", len(refusing)))
 			err = plan.SendKeyWithPassword(ctx, run, key, refusing, password, func(r plan.NodeSSH) {
 				results[byName[r.Node.Name]] = r
-				verdict := "키 받음"
+				verdict := i18n.T("key accepted")
 				if r.Key != plan.KeyOK {
 					verdict = r.Label() + ": " + r.Note()
 				}
@@ -292,7 +300,7 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 			}
 			if err != nil {
 				if ctx.Err() == nil {
-					fmt.Fprintln(os.Stderr, "키 보내기 실패:", err)
+					fmt.Fprintln(os.Stderr, i18n.T("sending the key failed: %v", err))
 				}
 				return interrupted(ctx, code, 2)
 			}
@@ -327,18 +335,18 @@ func sshKeys(o plan.Options, inventory string, send, once bool) int {
 	fmt.Print("\n" + plan.SSHTable(results))
 	for _, r := range results {
 		if !r.Ready() {
-			fmt.Println("✗ 준비되지 않은 노드가 있습니다. 비고대로 고친 뒤 다시 실행하세요")
+			fmt.Println(i18n.T("✗ some nodes are not ready. Fix them as the notes say and run again"))
 			return 1
 		}
 	}
-	fmt.Println("✓ 모든 노드가 이 제어 노드의 키를 받고 비밀번호 없이 sudo 합니다")
+	fmt.Println(i18n.T("✓ every node accepts the key of this control node and runs sudo without a password"))
 	return 0
 }
 
 // interrupted is the exit status of the signal that stopped ctx, else def.
 func interrupted(ctx context.Context, code func() int, def int) int {
 	if ctx.Err() != nil {
-		fmt.Fprintf(os.Stderr, "중단했습니다 (종료 코드 %d)\n", code())
+		fmt.Fprintln(os.Stderr, i18n.T("stopped (exit code %d)", code()))
 		return code()
 	}
 	return def
@@ -371,13 +379,13 @@ func stopSignals(sigs ...os.Signal) (ctx context.Context, code func() int, relea
 func readPassword(ctx context.Context) ([]byte, error) {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
-		return nil, fmt.Errorf("비밀번호를 물을 터미널이 필요합니다")
+		return nil, errors.New(i18n.T("a terminal is needed to ask for the password"))
 	}
 	saved, err := term.GetState(fd)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprint(os.Stderr, "노드의 SSH 비밀번호 (화면에 보이지 않음): ")
+	fmt.Fprint(os.Stderr, i18n.T("SSH password of the nodes (not shown): "))
 	type read struct {
 		pw  []byte
 		err error
@@ -391,7 +399,7 @@ func readPassword(ctx context.Context) ([]byte, error) {
 	case r := <-ch:
 		fmt.Fprintln(os.Stderr)
 		if r.err == nil && len(r.pw) == 0 {
-			r.err = fmt.Errorf("비밀번호가 비어 있습니다")
+			r.err = errors.New(i18n.T("the password is empty"))
 		}
 		return r.pw, r.err
 	case <-ctx.Done():
@@ -404,7 +412,7 @@ func readPassword(ctx context.Context) ([]byte, error) {
 func abs(p string) string {
 	a, err := filepath.Abs(p)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "경로 오류: %v\n", err)
+		fmt.Fprintln(os.Stderr, i18n.T("path error: %v", err))
 		os.Exit(1)
 	}
 	return a

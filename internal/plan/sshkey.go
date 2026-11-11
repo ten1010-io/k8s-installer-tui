@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 )
 
 // The SSH key of the control node on the nodes, which P2 and every playbook
@@ -61,12 +62,27 @@ var unusedHostVars = []string{
 // a playbook sees them. A node of ansible_connection local is left out. The
 // warnings name the nodes that set what this path does not use.
 func ListSSHNodes(ctx context.Context, o Options, run RunFunc, inventory string) ([]SSHNode, []string, error) {
+	nodes, warnings, err := listSSHNodes(ctx, o, run, inventory)
+	return nodes, warningList(warnings), err
+}
+
+// listSSHNodes is ListSSHNodes with each warning by the node it is about.
+func listSSHNodes(ctx context.Context, o Options, run RunFunc, inventory string) ([]SSHNode, map[string]string, error) {
 	script := "source " + shellQuote(o.Root+"/venv/bin/activate") + " && ansible-inventory -i " + shellQuote(inventory) + " --list"
 	out, err := run(ctx, o.AnsibleDir(), "bash", "-c", script)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ansible-inventory 실패: %v — %s", err, lastLine(out))
+		return nil, nil, errors.New(i18n.T("ansible-inventory failed: %v — %s", err, lastLine(out)))
 	}
-	return parseInventory(out, currentUser())
+	return inventoryNodes(out, currentUser())
+}
+
+// warningList are the warnings by node in the order of the nodes' names.
+func warningList(byNode map[string]string) []string {
+	var out []string
+	for _, n := range sortedKeys(byNode) {
+		out = append(out, byNode[n])
+	}
+	return out
 }
 
 func currentUser() string {
@@ -79,15 +95,22 @@ func currentUser() string {
 // parseInventory reads the JSON of ansible-inventory --list, after whatever
 // warnings ansible printed before it.
 func parseInventory(out []byte, defaultUser string) ([]SSHNode, []string, error) {
+	nodes, warnings, err := inventoryNodes(out, defaultUser)
+	return nodes, warningList(warnings), err
+}
+
+// inventoryNodes is parseInventory with each warning by the node it is about,
+// for the probe of P2 to pick those of its nodes.
+func inventoryNodes(out []byte, defaultUser string) ([]SSHNode, map[string]string, error) {
 	start := bytes.Index(out, []byte("\n{"))
 	if bytes.HasPrefix(out, []byte("{")) {
 		start = -1
 	} else if start < 0 {
-		return nil, nil, fmt.Errorf("ansible-inventory 출력을 읽지 못했습니다 — %s", lastLine(out))
+		return nil, nil, errors.New(i18n.T("could not read the output of ansible-inventory — %s", lastLine(out)))
 	}
 	var inv map[string]json.RawMessage
 	if err := json.NewDecoder(bytes.NewReader(out[start+1:])).Decode(&inv); err != nil {
-		return nil, nil, fmt.Errorf("ansible-inventory 출력을 읽지 못했습니다: %v", err)
+		return nil, nil, errors.New(i18n.T("could not read the output of ansible-inventory: %v", err))
 	}
 	var meta struct {
 		HostVars map[string]map[string]any `json:"hostvars"`
@@ -96,7 +119,7 @@ func parseInventory(out []byte, defaultUser string) ([]SSHNode, []string, error)
 	for group, raw := range inv {
 		if group == "_meta" {
 			if err := json.Unmarshal(raw, &meta); err != nil {
-				return nil, nil, fmt.Errorf("ansible-inventory 의 _meta 를 읽지 못했습니다: %v", err)
+				return nil, nil, errors.New(i18n.T("could not read _meta of ansible-inventory: %v", err))
 			}
 			continue
 		}
@@ -114,7 +137,7 @@ func parseInventory(out []byte, defaultUser string) ([]SSHNode, []string, error)
 	}
 
 	var nodes []SSHNode
-	var warnings []string
+	warnings := map[string]string{}
 	for _, name := range sortedKeys(names) {
 		v := meta.HostVars[name]
 		if str(v["ansible_connection"]) == "local" {
@@ -127,19 +150,19 @@ func parseInventory(out []byte, defaultUser string) ([]SSHNode, []string, error)
 			}
 		}
 		if len(found) > 0 {
-			warnings = append(warnings, "노드 "+name+" 가 "+strings.Join(found, ", ")+
-				" 를 설정했습니다. 이 확인과 키 보내기는 그 값을 쓰지 않으므로 플레이북이 겪는 것과 다를 수 있습니다")
+			warnings[name] = i18n.T("Node %s sets %s. This check and sending the key do not use them, "+
+				"so what they find may differ from what a playbook sees", name, strings.Join(found, ", "))
 		}
 		n := SSHNode{Name: name, Host: firstOf(v, name, "ansible_host"), Port: firstOf(v, "22", "ansible_port", "ansible_ssh_port"),
 			User: firstOf(v, defaultUser, "ansible_user", "ansible_ssh_user")}
 		for _, f := range []string{n.Name, n.Host, n.Port, n.User} {
 			if f == "" || strings.ContainsAny(f, " \t\r\n") {
-				return nil, nil, fmt.Errorf("노드 %s 의 이름·주소·포트·사용자 중 비었거나 공백이 든 값이 있습니다", name)
+				return nil, nil, errors.New(i18n.T("node %s has a name, address, port or user that is empty or has a space in it", name))
 			}
 		}
 		// ssh would read them as options
 		if strings.HasPrefix(n.Host, "-") || strings.HasPrefix(n.User, "-") {
-			return nil, nil, fmt.Errorf("노드 %s 의 주소 (%s) 나 사용자 (%s) 가 '-' 로 시작합니다. ssh 가 옵션으로 읽으므로 inventory 를 고치세요", name, n.Host, n.User)
+			return nil, nil, errors.New(i18n.T("the address (%s) or the user (%s) of node %s starts with '-', which ssh reads as an option: fix the inventory", n.Host, n.User, name))
 		}
 		nodes = append(nodes, n)
 	}
@@ -212,21 +235,21 @@ func (r NodeSSH) Ready() bool { return r.Key == KeyOK && r.Sudo == SudoOK }
 func (r NodeSSH) Label() string {
 	switch {
 	case r.Key == KeyRefused:
-		return "키 거부"
+		return i18n.T("key refused")
 	case r.Key == KeyUnreachable:
-		return "접속 불가"
+		return i18n.T("cannot connect")
 	case r.Key == KeyHostChanged:
-		return "호스트 키 변경"
+		return i18n.T("host key changed")
 	case r.Key == KeyNoPassword:
-		return "비밀번호 로그인 꺼짐"
+		return i18n.T("password login off")
 	case r.Key == KeyNotProbed:
-		return "확인 못 함"
+		return i18n.T("could not check")
 	case r.Key == KeyUnreadable:
-		return "제어 노드 키 읽기 실패"
+		return i18n.T("control node key unreadable")
 	case r.Sudo == SudoNotChecked:
-		return "sudo 미확인"
+		return i18n.T("sudo not checked")
 	case r.Sudo == SudoNeedsPassword:
-		return "sudo 비밀번호 필요"
+		return i18n.T("sudo needs a password")
 	}
 	return ""
 }
@@ -236,29 +259,29 @@ func (r NodeSSH) Note() string {
 	var fix string
 	switch {
 	case r.Key == KeyRefused:
-		fix = "제어 노드의 키 (~/.ssh/id_rsa) 를 받지 않음. 키를 보내세요 (설치 화면 k·p, 또는 --send-ssh-key)"
+		fix = i18n.T("Does not take the key of the control node (~/.ssh/id_rsa). Send the key (k or p on the install screen, or --send-ssh-key)")
 		if r.Node.User == "root" {
-			fix += ". root 로 비밀번호 로그인을 sshd 가 막으면 키를 노드에 직접 넣어야 함"
+			fix += ". " + i18n.T("When sshd refuses password login for root, the key has to be put on the node by hand")
 		}
 	case r.Key == KeyUnreachable:
-		fix = "접속하지 못함. 주소·포트·방화벽·sshd 를 확인하세요"
+		fix = i18n.T("Could not connect. Check the address, port, firewall and sshd")
 	case r.Key == KeyHostChanged:
-		fix = "known_hosts 의 호스트 키와 다름. 노드를 다시 설치한 것이 맞으면 ssh-keygen -R " + shellQuote(knownHostsName(r.Node)) + " 뒤 다시 확인하세요"
+		fix = i18n.T("The host key differs from known_hosts. If the node really was reinstalled, run ssh-keygen -R %s, then check again", shellQuote(knownHostsName(r.Node)))
 	case r.Key == KeyNoPassword:
-		fix = "제어 노드의 키를 받지 않고 비밀번호 로그인이 꺼져 있음 — 키를 직접 넣어야 함 (configure-control-node-ssh.sh 가 출력하는 안내)"
+		fix = i18n.T("Does not take the key of the control node, and password login is off — the key has to be put there by hand (as configure-control-node-ssh.sh prints)")
 	case r.Key == KeyNotProbed:
-		fix = "시간 안에 확인하지 못했습니다. --check-ssh 로 다시 확인하세요"
+		fix = i18n.T("Not checked in time. Check again with --check-ssh")
 	case r.Key == KeyUnreadable:
-		fix = "이 제어 노드의 키 (~/.ssh/id_rsa) 를 ssh 가 읽지 못함. 파일 권한·소유자를 확인하세요 (이 사용자 소유, chmod 600)"
+		fix = i18n.T("ssh cannot read the key of this control node (~/.ssh/id_rsa). Check the permissions and owner of the file (this user's, chmod 600)")
 	case r.Sudo == SudoNotChecked:
-		fix = "제어 노드 키로 접속은 됨. sudo 는 시간 안에 확인하지 못했습니다. 다시 확인하세요 (설치 화면 c, 또는 --check-ssh)"
+		fix = i18n.T("The key of the control node gets in. sudo was not checked in time. Check again (c on the install screen, or --check-ssh)")
 	case r.Sudo == SudoNeedsPassword:
-		fix = "사용자 " + r.Node.User + " 에 비밀번호 없는 sudo (NOPASSWD) 가 필요합니다"
+		fix = i18n.T("User %s needs sudo without a password (NOPASSWD)", r.Node.User)
 	default:
-		fix = "제어 노드 키로 접속·sudo 가 됨. ansible 만 접속하지 못하면 inventory 의 ansible_ssh_* 설정을 확인하세요"
+		fix = i18n.T("The key of the control node gets in and runs sudo. When only ansible cannot connect, check the ansible_ssh_* settings of the inventory")
 	}
 	if r.SendErr != "" {
-		fix = "키 보내기 실패 (" + r.SendErr + "). " + fix
+		fix = i18n.T("Sending the key failed (%s).", r.SendErr) + " " + fix
 	}
 	if r.Detail != "" {
 		fix += " (" + r.Detail + ")"
@@ -456,16 +479,16 @@ func PrepareKey(ctx context.Context, o Options, run RunFunc, k SSHKey) error {
 		return nil
 	}
 	if _, err := os.Stat(k.Private); err == nil {
-		return fmt.Errorf("%s 는 있는데 %s 가 없습니다. 개인 키에서 공개 키를 되살린 뒤 다시 실행하세요: ssh-keygen -y -f %s > %s",
-			k.Private, k.Public, shellQuote(k.Private), shellQuote(k.Public))
+		return errors.New(i18n.T("%s is there but %s is not. Restore the public key from the private key, then run again: ssh-keygen -y -f %s > %s",
+			k.Private, k.Public, shellQuote(k.Private), shellQuote(k.Public)))
 	}
 	script := o.AnsibleDir() + "/configure-control-node-ssh.sh"
 	out, err := run(ctx, o.AnsibleDir(), "bash", "-c", shellQuote(script)+" --no-color > /dev/null")
 	if err != nil {
-		return fmt.Errorf("%s 실패: %v — %s", script, err, lastLine(out))
+		return errors.New(i18n.T("%s failed: %v — %s", script, err, lastLine(out)))
 	}
 	if _, err := os.Stat(k.Public); err != nil {
-		return fmt.Errorf("%s 뒤에도 %s 가 없습니다", script, k.Public)
+		return errors.New(i18n.T("%s is still not there after %s", k.Public, script))
 	}
 	return nil
 }
@@ -481,11 +504,11 @@ func AskSendScript(k SSHKey, nodes []SSHNode, pause bool) string {
 		for i, a := range args {
 			args[i] = shellQuote(a)
 		}
-		fmt.Fprintf(&b, "echo %s\n", shellQuote(fmt.Sprintf("── %s (%s@%s, 포트 %s): 키를 보냅니다. 비밀번호는 ssh 가 묻습니다", n.Name, n.User, n.Host, n.Port)))
-		fmt.Fprintf(&b, "%s || echo %s\n", strings.Join(args, " "), shellQuote("✗ "+n.Name+": 키를 보내지 못했습니다 (위의 ssh 메시지 참고)"))
+		fmt.Fprintf(&b, "echo %s\n", shellQuote(i18n.T("── %s (%s@%s, port %s): sending the key. ssh asks for the password", n.Name, n.User, n.Host, n.Port)))
+		fmt.Fprintf(&b, "%s || echo %s\n", strings.Join(args, " "), shellQuote(i18n.T("✗ %s: the key was not sent (see what ssh said above)", n.Name)))
 	}
 	if pause {
-		b.WriteString("echo; read -r -p 'Enter 를 누르면 화면으로 돌아갑니다 ' _ || true\n")
+		b.WriteString("echo; read -r -p " + shellQuote(i18n.T("Enter to go back to the screen")+" ") + " _ || true\n")
 	}
 	return b.String()
 }
@@ -544,7 +567,7 @@ func askPassHelper(ctx context.Context, run RunFunc) (dir, helper string, err er
 		if err == nil {
 			var out []byte
 			if out, err = run(ctx, "", helper); err != nil {
-				err = fmt.Errorf("%s 를 실행할 수 없음: %v %s", helper, err, lastLine(out))
+				err = errors.New(i18n.T("%s cannot be run: %v %s", helper, err, lastLine(out)))
 			}
 		}
 		if err != nil {
@@ -554,8 +577,8 @@ func askPassHelper(ctx context.Context, run RunFunc) (dir, helper string, err er
 		}
 		return dir, helper, nil
 	}
-	return "", "", fmt.Errorf("SSH_ASKPASS 도우미를 안전하게 실행할 수 있는 디렉터리가 없어 키를 보내지 않았습니다 (noexec 마운트, 소유자·권한 확인): %s",
-		strings.Join(why, "; "))
+	return "", "", errors.New(i18n.T("no directory where the SSH_ASKPASS helper can run safely, so the key was not sent (check noexec mounts, owners and permissions): %s",
+		strings.Join(why, "; ")))
 }
 
 // ownDir checks that path is a directory of this user that nobody else can write
@@ -572,14 +595,14 @@ func ownDir(path string, create bool) error {
 	case err != nil:
 		return err
 	case fi.Mode()&os.ModeSymlink != 0:
-		return fmt.Errorf("%s 가 심볼릭 링크입니다", path)
+		return errors.New(i18n.T("%s is a symbolic link", path))
 	case !fi.IsDir():
-		return fmt.Errorf("%s 가 디렉터리가 아닙니다", path)
+		return errors.New(i18n.T("%s is not a directory", path))
 	case fi.Mode().Perm()&0o022 != 0:
-		return fmt.Errorf("%s 를 그룹이나 다른 사용자가 쓸 수 있습니다 (%v)", path, fi.Mode().Perm())
+		return errors.New(i18n.T("%s can be written by its group or other users (%v)", path, fi.Mode().Perm()))
 	}
 	if uid, ok := fileOwner(fi); ok && uid != os.Geteuid() {
-		return fmt.Errorf("%s 의 소유자 (uid %d) 가 이 사용자 (uid %d) 가 아닙니다", path, uid, os.Geteuid())
+		return errors.New(i18n.T("the owner of %s (uid %d) is not this user (uid %d)", path, uid, os.Geteuid()))
 	}
 	return nil
 }
@@ -614,7 +637,7 @@ func SendKeyWithPassword(ctx context.Context, run RunFunc, k SSHKey, nodes []SSH
 		}
 		if sendErr != nil && bytes.Contains(out, []byte("ssh_askpass")) {
 			// not the password: ssh could not run the helper
-			return fmt.Errorf("ssh 가 SSH_ASKPASS 도우미를 실행하지 못했습니다: %s", lastLine(out))
+			return errors.New(i18n.T("ssh could not run the SSH_ASKPASS helper: %s", lastLine(out)))
 		}
 		r := ProbeNode(ctx, run, k, n, "")
 		if sendErr != nil && r.Key != KeyOK {
@@ -627,7 +650,7 @@ func SendKeyWithPassword(ctx context.Context, run RunFunc, k SSHKey, nodes []SSH
 
 // SSHTable is the table of the nodes: name, address, key, sudo, note.
 func SSHTable(rs []NodeSSH) string {
-	rows := [][]string{{"노드", "주소", "키", "sudo", "비고"}}
+	rows := [][]string{{i18n.T("NODE"), i18n.T("ADDRESS"), i18n.T("KEY"), "sudo", i18n.T("NOTE")}}
 	sorted := append([]NodeSSH{}, rs...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Node.Name < sorted[j].Node.Name })
 	for _, r := range sorted {
@@ -635,11 +658,13 @@ func SSHTable(rs []NodeSSH) string {
 		if r.Node.Port != "22" {
 			addr += ":" + r.Node.Port
 		}
-		key := map[KeyState]string{KeyOK: "ok", KeyRefused: "거부", KeyUnreachable: "접속불가", KeyHostChanged: "호스트키변경",
-			KeyNoPassword: "비밀번호로그인꺼짐", KeyNotProbed: "미확인", KeyUnreadable: "키읽기실패"}[r.Key]
-		sudo := map[SudoState]string{SudoNotChecked: "-", SudoOK: "ok", SudoNeedsPassword: "비밀번호필요"}[r.Sudo]
+		// one word a cell, the words of the table
+		key := map[KeyState]string{KeyOK: "ok", KeyRefused: i18n.T("refused"), KeyUnreachable: i18n.T("unreachable"),
+			KeyHostChanged: i18n.T("host-key-changed"), KeyNoPassword: i18n.T("no-password-login"), KeyNotProbed: i18n.T("unchecked"),
+			KeyUnreadable: i18n.T("key-unreadable")}[r.Key]
+		sudo := map[SudoState]string{SudoNotChecked: "-", SudoOK: "ok", SudoNeedsPassword: i18n.T("needs-password")}[r.Sudo]
 		if r.Key == KeyOK && r.Sudo == SudoNotChecked {
-			sudo = "미확인"
+			sudo = i18n.T("unchecked")
 		}
 		note := ""
 		if !r.Ready() {

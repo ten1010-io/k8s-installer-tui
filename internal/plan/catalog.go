@@ -1,12 +1,14 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"gopkg.in/yaml.v3"
 )
 
@@ -84,7 +86,7 @@ func (o Options) CatalogPath() string { return o.Root + "/ansible/aipub_vars/cat
 func (o Options) InstallerConfigPath() string { return o.Root + "/aipub-installer.yml" }
 
 // CatalogReport is what was found in a catalog: Found is false when there is no
-// file to read; Problems are one line each, as `module[aipub]: aipub-web 없음`.
+// file to read; Problems are one line each, as `module[aipub]: aipub-web missing`.
 type CatalogReport struct {
 	Found    bool
 	Problems []string
@@ -120,12 +122,12 @@ func CheckCatalogFile(o Options) CatalogReport {
 func CheckCatalog(o Options) CheckResult {
 	rep := CheckCatalogFile(o)
 	if !rep.Found {
-		return CheckResult{OK: true, Skipped: true, Lines: []string{"건너뜀: 카탈로그 파일이 없음 (" + o.CatalogPath() + ")"}}
+		return CheckResult{OK: true, Skipped: true, Lines: []string{i18n.T("no catalog file (%s)", o.CatalogPath())}}
 	}
 	if len(rep.Problems) > 0 {
 		return CheckResult{Lines: rep.Problems}
 	}
-	return CheckResult{OK: true, Lines: []string{"카탈로그 이상 없음: " + rep.Counts}}
+	return CheckResult{OK: true, Lines: []string{i18n.T("Catalog OK: %s", rep.Counts)}}
 }
 
 // CatalogSummary is the one line for the preview, and whether the catalog was
@@ -136,13 +138,12 @@ func CatalogSummary(o Options) (line string, ok, found bool) {
 	case !rep.Found:
 		return "", false, false
 	case len(rep.Problems) == 0:
-		return "카탈로그 이상 없음: " + rep.Counts, true, true
+		return i18n.T("Catalog OK: %s", rep.Counts), true, true
 	}
-	line = fmt.Sprintf("카탈로그 문제 %d건, 설치 계획의 P5 에서 플레이북이 거부합니다: %s", len(rep.Problems), rep.Problems[0])
 	if len(rep.Problems) > 1 {
-		line += " 외"
+		return i18n.T("Catalog problems: %d, which the playbooks refuse (P5 of the install plan): %s and more", len(rep.Problems), rep.Problems[0]), false, true
 	}
-	return line, false, true
+	return i18n.T("Catalog problems: %d, which the playbooks refuse (P5 of the install plan): %s", len(rep.Problems), rep.Problems[0]), false, true
 }
 
 type catalogImages map[string][]string
@@ -158,7 +159,7 @@ func parseCatalog(data []byte) (catalogImages, error) {
 	}
 	// the playbooks refuse the same: aipub-packager fills it when it makes a package
 	if f.Catalog == nil || f.Catalog.Images == nil {
-		return nil, fmt.Errorf("카탈로그가 비어 있습니다 (aipub-packager 가 패키지를 만들 때 채웁니다)")
+		return nil, errors.New(i18n.T("the catalog is empty (aipub-packager fills it when it makes a package)"))
 	}
 	return f.Catalog.Images, nil
 }
@@ -205,7 +206,7 @@ func checkCatalog(images catalogImages, prefixes map[string][]string, monitoring
 	if len(aipub) == 0 {
 		aipub = images["java"]
 	} else if java := images["java"]; len(java) > 0 && !sameList(java, aipub) {
-		problems = append(problems, "module[aipub]: images.aipub 와 images.java 가 다름 (하나만 두세요)")
+		problems = append(problems, i18n.T("module[aipub]: images.aipub and images.java differ (keep one only)"))
 	}
 
 	var summary []string
@@ -247,10 +248,10 @@ func checkModule(module string, refs, prefixes, needed []string) []string {
 		quoted[i] = regexp.QuoteMeta(p)
 	}
 	re := regexp.MustCompile(`^(` + strings.Join(quoted, "|") + `)/[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$`)
-	want := strings.Join(prefixes, "/ 또는 ") + "/<이름>:<태그>"
+	want := i18n.T("%s/<name>:<tag>", strings.Join(prefixes, i18n.T("/ or ")))
 	for _, r := range refs {
 		if !re.MatchString(r) {
-			out = append(out, fmt.Sprintf("module[%s]: %s 는 %s 형식이 아님", module, r, want))
+			out = append(out, i18n.T("module[%s]: %s is not of the form %s", module, r, want))
 		}
 	}
 
@@ -260,9 +261,9 @@ func checkModule(module string, refs, prefixes, needed []string) []string {
 	}
 	for _, n := range needed {
 		if count[n] == 0 {
-			line := fmt.Sprintf("module[%s]: %s 없음", module, n)
+			line := i18n.T("module[%s]: %s missing", module, n)
 			if module == "monitoring" && n == "busybox" {
-				line += " (monitoring 의 busybox, 또는 aipub 모듈의 aipub/busybox)"
+				line += " " + i18n.T("(busybox of monitoring, or aipub/busybox of the aipub module)")
 			}
 			out = append(out, line)
 		}
@@ -275,7 +276,7 @@ func checkModule(module string, refs, prefixes, needed []string) []string {
 	}
 	sort.Strings(dup)
 	for _, n := range dup {
-		out = append(out, fmt.Sprintf("module[%s]: %s 이름이 두 번 이상 나옴", module, n))
+		out = append(out, i18n.T("module[%s]: the name %s appears more than once", module, n))
 	}
 	return out
 }

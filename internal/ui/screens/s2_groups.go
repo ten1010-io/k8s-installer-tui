@@ -5,13 +5,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 // Focus layout:
 //   0..N-1  : table rows  (←/→: ki_cp(0) / Master(1))
-//   N       : nav slot    (←/→: 이전/다음)
+//   N       : nav slot    (←/→: back/next)
 //
 // Worker column is derived (read-only): a node that is not a Master.
 // All nodes are automatically k8s_node — that column is not shown.
@@ -35,14 +36,14 @@ type S2Groups struct {
 	curRow   int
 	curCol   int // 0=ki_cp, 1=master, 2=gpu  (CPU Worker col is read-only)
 	focusNav bool
-	navIdx   int // 0=이전, 1=다음
+	navIdx   int // 0=back, 1=next
 	width    int
 	height   int
 }
 
 func NewS2Groups() *S2Groups { return &S2Groups{} }
 
-func (s *S2Groups) Title() string { return "그룹 할당" }
+func (s *S2Groups) Title() string { return i18n.T("Groups") }
 func (s *S2Groups) SetSize(w, h int) {
 	s.width = w
 	s.height = h
@@ -93,10 +94,10 @@ func (s *S2Groups) Validate() []string {
 		}
 	}
 	if ki == 0 {
-		return []string{"ki_cp_node를 1개 이상 선택해주세요 (제어 노드가 그중 첫 번째입니다)"}
+		return []string{i18n.T("Select at least one ki_cp_node (the first one is the control node)")}
 	}
 	if cp == 0 {
-		return []string{"Master Node를 1개 이상 선택해주세요"}
+		return []string{i18n.T("Select at least one control plane node")}
 	}
 	return nil
 }
@@ -119,7 +120,7 @@ func (s *S2Groups) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					s.curRow++
 				} else {
 					s.focusNav = true
-					s.navIdx = 1 // 다음
+					s.navIdx = 1 // next
 				}
 			}
 		case "left", "h":
@@ -159,15 +160,15 @@ func (s *S2Groups) toggle(row, col int) {
 
 func (s *S2Groups) View() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("그룹 할당") + "\n")
-	b.WriteString(styles.StyleMuted.Render("각 노드의 역할을 선택합니다.  ←/→: 열 이동  Space: 선택") + "\n")
-	b.WriteString(styles.StyleMuted.Render("GPU는 노드에서 자동으로 인식합니다 (k8s-installer CDI). 따로 표시하지 않습니다.") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Groups")) + "\n")
+	b.WriteString(styles.StyleMuted.Render(i18n.T("Choose the role of each node.  ←/→: move column  Space: select")) + "\n")
+	b.WriteString(styles.StyleMuted.Render(i18n.T("GPUs are detected on the nodes (k8s-installer CDI), so there is no GPU column.")) + "\n\n")
 
 	// 3 display columns: ki_cp | Master | Worker(derived)
-	colLabels := []string{"ki_cp_node", "Master Node", "Worker"}
+	colLabels := []string{"ki_cp_node", i18n.T("CP node"), "Worker"}
 	colW := []int{14, 14, 14, 12}
 
-	header := lipgloss.NewStyle().Width(colW[0]).Bold(true).Render("노드")
+	header := lipgloss.NewStyle().Width(colW[0]).Bold(true).Render(i18n.T("Node"))
 	for i, l := range colLabels {
 		header += lipgloss.NewStyle().Width(colW[i+1]).Bold(true).Foreground(styles.ColorPrimary).Render(l)
 	}
@@ -187,7 +188,7 @@ func (s *S2Groups) View() string {
 	fs.mark(false)
 	b.WriteString("\n")
 	fs.mark(s.focusNav)
-	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString(RenderNavButtons(i18n.T("Back"), i18n.T("Next"), prevFocused, nextFocused, s.width))
 
 	return fs.fit(s.width, s.height)
 }

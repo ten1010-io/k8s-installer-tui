@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
@@ -16,8 +17,8 @@ import (
 //   3  : DNSSEC toggle
 //   4  : DNS servers list
 //   5  : NTP servers list
-//   6  : 내부 DNS 서버 활성화 토글
-//   7  : nav slot (←/→: 이전/다음)
+//   6  : internal DNS server toggle
+//   7  : nav slot (←/→: back/next)
 
 const (
 	s3FocusSubnet = iota
@@ -72,7 +73,7 @@ func NewS3Network() *S3Network {
 	return s
 }
 
-func (s *S3Network) Title() string { return "네트워크 설정" }
+func (s *S3Network) Title() string { return i18n.T("Network") }
 func (s *S3Network) SetSize(w, h int) {
 	s.width = w
 	s.height = h
@@ -104,16 +105,16 @@ func (s *S3Network) SyncToState(st *state.AppState) {
 
 func (s *S3Network) Validate() []string {
 	if len(s.subnets) == 0 {
-		return []string{"내부 서브넷을 최소 1개 이상 입력해주세요"}
+		return []string{i18n.T("Enter at least one internal subnet")}
 	}
 	if s.haMode && strings.TrimSpace(s.vip.Value()) == "" {
-		return []string{"HA 모드 활성화 시 VIP를 입력해주세요"}
+		return []string{i18n.T("Enter the VIP when HA mode is enabled")}
 	}
 	if len(s.dnsServers) == 0 {
-		return []string{"DNS upstream 서버를 최소 1개 입력해주세요"}
+		return []string{i18n.T("Enter at least one DNS upstream server")}
 	}
 	if len(s.ntpServers) == 0 {
-		return []string{"NTP upstream 서버를 최소 1개 입력해주세요"}
+		return []string{i18n.T("Enter at least one NTP upstream server")}
 	}
 	return nil
 }
@@ -154,7 +155,7 @@ func (s *S3Network) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if s.focusIdx < s3FocusMax {
 				s.focusIdx++
 				if s.focusIdx == s3FocusNav {
-					s.navIdx = 1 // 다음
+					s.navIdx = 1 // next
 				}
 				s.syncFocusedInputs()
 			}
@@ -269,55 +270,55 @@ func (s *S3Network) renderListSection(b *strings.Builder, label string, items []
 	if s.editMode == mode {
 		b.WriteString("    " + s.listInput.View() + "\n")
 	} else if focused {
-		b.WriteString(styles.StyleMuted.Render("    Enter: 추가  d: 마지막 삭제") + "\n")
+		b.WriteString(styles.StyleMuted.Render("    "+i18n.T("Enter: add  d: delete last")) + "\n")
 	}
 	b.WriteString("\n")
 }
 
 func (s *S3Network) View() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("네트워크 설정") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Network")) + "\n\n")
 
 	// the focused part stays in sight on a low screen
 	fs := focusSpan{b: &b}
 	fs.mark(s.focusIdx == s3FocusSubnet)
-	s.renderListSection(&b, "내부 서브넷 (CIDR)", s.subnets, s.focusIdx == s3FocusSubnet, editSubnet)
+	s.renderListSection(&b, i18n.T("Internal subnets (CIDR)"), s.subnets, s.focusIdx == s3FocusSubnet, editSubnet)
 
-	haStr := styles.RadioOff() + " 비활성"
+	haStr := styles.RadioOff() + " " + i18n.T("Disabled")
 	if s.haMode {
-		haStr = styles.RadioOn() + " 활성"
+		haStr = styles.RadioOn() + " " + i18n.T("Enabled")
 	}
 	fs.mark(s.focusIdx == s3FocusHaMode)
-	b.WriteString(RenderSectionHeader("Control Plane HA 모드", s.focusIdx == s3FocusHaMode) + "  " + haStr + "\n\n")
+	b.WriteString(RenderSectionHeader(i18n.T("ki cp HA mode"), s.focusIdx == s3FocusHaMode) + "  " + haStr + "\n\n")
 
 	fs.mark(s.focusIdx == s3FocusVIP)
 	b.WriteString(RenderSectionHeader("HA VIP", s.focusIdx == s3FocusVIP) + "\n")
 	b.WriteString("    " + s.vip.View() + "\n")
 	if !s.haMode {
-		b.WriteString("    " + styles.StyleMuted.Render("HA 활성 시 필수") + "\n")
+		b.WriteString("    " + styles.StyleMuted.Render(i18n.T("Required when HA is enabled")) + "\n")
 	}
 	b.WriteString("\n")
 
-	dnssecStr := styles.RadioOff() + " 비활성"
+	dnssecStr := styles.RadioOff() + " " + i18n.T("Disabled")
 	if s.dnssec {
-		dnssecStr = styles.RadioOn() + " 활성"
+		dnssecStr = styles.RadioOn() + " " + i18n.T("Enabled")
 	}
 	fs.mark(s.focusIdx == s3FocusDNSSEC)
-	b.WriteString(RenderSectionHeader("DNSSEC 검증", s.focusIdx == s3FocusDNSSEC) + "  " + dnssecStr + "\n\n")
+	b.WriteString(RenderSectionHeader(i18n.T("DNSSEC validation"), s.focusIdx == s3FocusDNSSEC) + "  " + dnssecStr + "\n\n")
 
 	fs.mark(s.focusIdx == s3FocusDNS)
-	s.renderListSection(&b, "DNS upstream 서버", s.dnsServers, s.focusIdx == s3FocusDNS, editDNS)
+	s.renderListSection(&b, i18n.T("DNS upstream servers"), s.dnsServers, s.focusIdx == s3FocusDNS, editDNS)
 	fs.mark(s.focusIdx == s3FocusNTP)
-	s.renderListSection(&b, "NTP upstream 서버", s.ntpServers, s.focusIdx == s3FocusNTP, editNTP)
+	s.renderListSection(&b, i18n.T("NTP upstream servers"), s.ntpServers, s.focusIdx == s3FocusNTP, editNTP)
 
-	internalDNSStr := styles.RadioOff() + " 비활성"
+	internalDNSStr := styles.RadioOff() + " " + i18n.T("Disabled")
 	if s.internalDNS {
-		internalDNSStr = styles.RadioOn() + " 활성"
+		internalDNSStr = styles.RadioOn() + " " + i18n.T("Enabled")
 	}
 	fs.mark(s.focusIdx == s3FocusInternalDNS)
-	b.WriteString(RenderSectionHeader("내부 DNS 서버 활성화 여부", s.focusIdx == s3FocusInternalDNS) + "  " + internalDNSStr + "\n")
+	b.WriteString(RenderSectionHeader(i18n.T("Run internal DNS server"), s.focusIdx == s3FocusInternalDNS) + "  " + internalDNSStr + "\n")
 	if s.internalDNS {
-		b.WriteString(styles.StyleMuted.Render("    활성화 시 인그레스 도메인/VIP(4~5단계에서 입력)가 내부 DNS 존에 자동 반영됩니다") + "\n")
+		b.WriteString(styles.StyleMuted.Render("    "+i18n.T("When enabled, the ingress domain and VIP (entered in steps 4-5) are added to the internal DNS zone automatically")) + "\n")
 	}
 	b.WriteString("\n")
 
@@ -325,7 +326,7 @@ func (s *S3Network) View() string {
 	nextFocused := s.focusIdx == s3FocusNav && s.navIdx == 1
 	b.WriteString("\n")
 	fs.mark(s.focusIdx == s3FocusNav)
-	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString(RenderNavButtons(i18n.T("Back"), i18n.T("Next"), prevFocused, nextFocused, s.width))
 
 	return fs.fit(s.width, s.height)
 }

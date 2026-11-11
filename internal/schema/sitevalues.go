@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -24,7 +25,7 @@ const commentColumn = 38
 // manage, is written commented out with the default, visible but inert.
 func SiteValues(s *state.AppState) []byte {
 	var b strings.Builder
-	b.WriteString(siteValuesHeader)
+	b.WriteString(i18n.T(siteValuesHeader))
 
 	var checks []string
 	for _, f := range Files {
@@ -32,7 +33,7 @@ func SiteValues(s *state.AppState) []byte {
 		fmt.Fprintf(&b, "#  [%s]  →  %s\n", strings.ToUpper(string(f)), f.Path())
 		b.WriteString("# " + strings.Repeat("─", 60) + "\n")
 		if !Written(s, f) {
-			b.WriteString("# AIPub 을 설치하지 않으므로 이 파일은 쓰지 않습니다\n")
+			b.WriteString("# " + i18n.T("AIPub is not installed, so this file is not written") + "\n")
 			continue
 		}
 		vars := ByFile(f)
@@ -43,14 +44,14 @@ func SiteValues(s *state.AppState) []byte {
 					continue
 				}
 				if first {
-					b.WriteString("\n" + groupHeading(g.Title) + "\n")
+					b.WriteString("\n" + groupHeading(i18n.T(g.Title)) + "\n")
 					first = false
 				}
 				line, live := siteValueLine(s, v)
 				b.WriteString(line + "\n")
 				var hints []string
 				if live && v.Preflight != "" {
-					hints = append(hints, v.Preflight)
+					hints = append(hints, i18n.T(v.Preflight))
 				}
 				for _, h := range append(hints, controlPlaneHints(s, v)...) {
 					b.WriteString("# preflight: " + h + "\n")
@@ -61,7 +62,7 @@ func SiteValues(s *state.AppState) []byte {
 	}
 
 	b.WriteString("\n\n# " + strings.Repeat("=", 60) + "\n")
-	b.WriteString("#  실행 전 preflight 체크리스트 (위 \"# preflight:\" 를 모은 것)\n")
+	b.WriteString("#  " + i18n.T("Preflight checklist (the \"# preflight:\" lines above, collected)") + "\n")
 	for _, c := range checks {
 		b.WriteString("#    [ ] " + c + "\n")
 	}
@@ -70,16 +71,16 @@ func SiteValues(s *state.AppState) []byte {
 }
 
 const siteValuesHeader = `# ============================================================
-#  사이트 설정 — 한 파일로 보는 값 (k8s-installer-tui 가 만든 보기)
+#  Site settings — all the values in one file (a view made by k8s-installer-tui)
 #
-#  ✅ = 반드시 채우는 값   ○ = 기본값이 있음. 주석 처리된 줄은 기본값 그대로
-#  이 파일은 보기용이고 설치기는 읽지 않는다. 값이 실제로 저장되는 곳:
+#  ✅ = a value that must be given   ○ = has a default. A commented-out line keeps its default
+#  This file is for reading; the installer does not read it. Where the values are really saved:
 #    [K8S]       → group_vars/all/vars.yml   (k8s-installer)
-#    [AIPUB]     → files/aipub/vars.yml      (aipub_* 만, 업그레이드에도 보존, 비밀 금지)
-#    노드와 그룹은 [INVENTORY] → inventory.yml
-#  constant-vars.yml 은 설치기 상수 — 절대 편집하지 않는다
+#    [AIPUB]     → files/aipub/vars.yml      (aipub_* only, kept across upgrades, no secrets)
+#    nodes and groups are in [INVENTORY] → inventory.yml
+#  constant-vars.yml holds installer constants — never edit it
 #
-#  "# preflight:" 는 실행 전에 확인할 것. 맨 아래에 모아 두었다
+#  "# preflight:" lines say what to check before the run; they are collected at the bottom
 # ============================================================
 `
 
@@ -99,9 +100,9 @@ func siteValueLine(s *state.AppState, v Var) (string, bool) {
 	if required {
 		mark = "✅"
 	}
-	note := v.Short
+	note := i18n.T(v.Short)
 	if key, val, ok := v.Condition(); ok {
-		note = fmt.Sprintf("(%s=%s 일 때 필수) %s", key, val, note)
+		note = i18n.T("(required when %s=%s) %s", key, val, note)
 	}
 
 	val, managed := Value(s, v)
@@ -115,7 +116,7 @@ func siteValueLine(s *state.AppState, v Var) (string, bool) {
 	if !managed {
 		val = defaultNode(v)
 	} else if !required && v.Default != "" {
-		note = "(기본 " + flowYAML(defaultNode(v)) + ") " + note
+		note = i18n.T("(default %s) %s", flowYAML(defaultNode(v)), note)
 	}
 	return withComment(v.Key+": "+flowYAML(val), mark+" "+note), true
 }
@@ -218,18 +219,18 @@ func controlPlaneHints(s *state.AppState, v Var) []string {
 	switch v.Key {
 	case state.ArgsVar("apiserver"):
 		if cp.JWKS {
-			out = append(out, fmt.Sprintf("JWKS issuer %q 가 컨트롤 플레인 노드에서 닿아야 함 (AIPub backend-gateway, A5 setup-aipub 뒤에 뜸; A5.2 update-cluster 에서 적용)",
+			out = append(out, i18n.T("JWKS issuer %q must be reachable from the control plane nodes (AIPub backend-gateway, which comes up after A5 setup-aipub; applied by A5.2 update-cluster)",
 				s.JWKSIssuer()))
-			out = append(out, "CA "+state.JWKSCAPath+" 는 A2 setup-cert 가 노드(컨트롤 노드 포함)에 둠; 있을 때만 authentication-config.yaml 을 씀 (없으면 A5.1 --fill-auth-config 가 만듦)")
-			out = append(out, "CA 없이 update-cluster/노드 추가를 돌리면 설치기가 '소스 파일 없음'으로 거부합니다 (validate-hostvars.py, 노드는 그대로)")
+			out = append(out, i18n.T("CA %s is put on the nodes (the control node included) by A2 setup-cert; authentication-config.yaml is written only when it exists (otherwise A5.1 --fill-auth-config makes it)", state.JWKSCAPath))
+			out = append(out, i18n.T("Running update-cluster or adding a node without the CA makes the installer refuse with 'source file missing' (validate-hostvars.py; the nodes are left as they are)"))
 		}
 		if cp.Webhook {
-			out = append(out, fmt.Sprintf("웹훅 URL %q 이 컨트롤 플레인 노드에서 닿고 %s 로 검증되는지 (A2.5 update-cluster 에서 적용)",
+			out = append(out, i18n.T("Check that the webhook URL %q is reachable from the control plane nodes and verified with %s (applied by A2.5 update-cluster)",
 				cp.WebhookURL, state.WebhookCAPath))
 		}
 	case state.CpExtraFilesVar:
 		for _, f := range cp.ExtraFiles(state.StageAll) {
-			out = append(out, "ansible/files/"+f.Src+" 이 있어야 함"+FileSource(cp, f))
+			out = append(out, i18n.T("ansible/files/%s must exist", f.Src)+FileSource(cp, f))
 		}
 	}
 	return out
@@ -245,18 +246,18 @@ func FileSource(cp *state.ControlPlane, f state.CpExtraFile) string {
 				continue
 			}
 			if p.ID == state.PresetWebhook {
-				return " (위저드가 웹훅 URL 로 만듦)"
+				return " (" + i18n.T("the wizard makes it from the webhook URL") + ")"
 			}
 			if p.ID == state.PresetJWKS {
-				return " (위저드가 issuer URL 과 CA 로 만듦, CA 가 생기기 전이면 A5.1 --fill-auth-config 가)"
+				return " (" + i18n.T("the wizard makes it from the issuer URL and the CA; while there is no CA yet, A5.1 --fill-auth-config makes it") + ")"
 			}
 			if p.ID == state.PresetAudit {
 				if cp.AuditNote != "" {
 					return " (" + cp.AuditNote + ")"
 				}
-				return " (없으면 위저드가 기본 정책을 씀, 있는 파일은 그대로 둠)"
+				return " (" + i18n.T("if missing the wizard writes the default policy; a file that exists is left as it is") + ")"
 			}
 		}
 	}
-	return " (사이트가 둠)"
+	return " (" + i18n.T("the site puts it there") + ")"
 }

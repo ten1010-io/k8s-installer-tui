@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/screens"
@@ -55,8 +56,9 @@ func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version st
 	}
 }
 
-// The steps of the header, in the order of screenList.
-var stepTitles = []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "4b.컨트롤플레인", "5.AIPub", "5b.모니터링", "6.AIPub LB", "7.인증서", "8.저장", "9.설치"}
+// The steps of the header, in the order of screenList; in English here, said
+// through i18n.T where they are drawn.
+var stepTitles = []string{"1.Nodes", "2.Groups", "3.Network", "4.K8s", "4b.Control plane", "5.AIPub", "5b.Monitoring", "6.AIPub LB", "7.Certs", "8.Save", "9.Install"}
 
 // aipubOnlyScreens are skipped when AIPub is not installed: what they ask goes to
 // files/aipub/vars.yml, which is then not written.
@@ -180,12 +182,12 @@ func (a *App) onPreview() bool {
 // keyHints is the footer line of every screen, at most width wide: the hints in
 // order of importance (the preview leads with its save key), as many as fit.
 func (a *App) keyHints(width int) string {
-	hints := []string{"Ctrl+N 다음", "Ctrl+P 이전", "↑↓ 이동", "Enter 선택", "Ctrl+C 종료"}
+	hints := []string{i18n.T("Ctrl+N next"), i18n.T("Ctrl+P back"), i18n.T("↑↓ move"), i18n.T("Enter select"), i18n.T("Ctrl+C quit")}
 	if a.quitting {
-		return "  정리 중… (보내던 키를 멈추는 중, Ctrl+C 로 바로 종료)"
+		return "  " + i18n.T("Cleaning up… (stopping sending the key, Ctrl+C quits now)")
 	}
 	if a.onPreview() {
-		hints = append([]string{"Ctrl+S 저장"}, hints...)
+		hints = append([]string{i18n.T("Ctrl+S save")}, hints...)
 	}
 	// what the screen has going on leads (the install screen sending the key)
 	if h, ok := a.screenList[a.current].(interface{ KeyHints() []string }); ok {
@@ -207,7 +209,7 @@ func (a *App) skipScreen(idx int) bool {
 // busy holds the wizard on a screen with a sub-edit open, and says why.
 func (a *App) busy() bool {
 	if b, ok := a.screenList[a.current].(screens.Busy); ok && b.Busy() {
-		a.screenErrors = []string{"입력 중인 항목을 저장하거나 취소한 뒤 이동하세요"}
+		a.screenErrors = []string{i18n.T("Save or cancel the item being edited before moving on")}
 		a.heldBusy = true
 		if r, ok := b.(interface{ BusyReason() string }); ok {
 			a.screenErrors = []string{r.BusyReason()}
@@ -263,7 +265,7 @@ func (a *App) goPrev() (tea.Model, tea.Cmd) {
 
 func (a *App) View() string {
 	if a.width == 0 {
-		return "로딩 중..."
+		return i18n.T("Loading...")
 	}
 
 	outerBoxW, contentW, _ := a.dims()
@@ -273,13 +275,14 @@ func (a *App) View() string {
 	body := a.screenList[a.current].View() + a.errorLines()
 
 	// Inner panel (thick blue border — the actual screen content box); its
-	// Width takes in its padding
+	// Width takes in its padding. The body is wrapped at its spaces first
+	// (screens.Wrap): the panel's own wrap would break words
 	innerPanel := lipgloss.NewStyle().
 		Border(lipgloss.ThickBorder()).
 		BorderForeground(styles.ColorPrimary).
 		Padding(0, 1).
 		Width(contentW + 2).
-		Render(body)
+		Render(screens.Wrap(body, contentW))
 
 	// Outer box content: top space + header + step bar + inner panel + label
 	var ob strings.Builder
@@ -338,6 +341,7 @@ func (a *App) renderHeader(width int) string {
 
 	parts := make([]string, len(a.screenList))
 	for i, t := range stepTitles {
+		t = i18n.T(t)
 		switch {
 		case a.skipScreen(i):
 			parts[i] = styles.StyleMuted.Render("(" + t + ")")
@@ -388,7 +392,7 @@ func (a *App) dims() (int, int, int) {
 	headerH := lipgloss.Height(lipgloss.NewStyle().Padding(0, 1).Width(outerContentW).Render(a.renderHeader(outerContentW - 2)))
 	errorsH := 0
 	if e := a.errorLines(); e != "" {
-		errorsH = lipgloss.Height(lipgloss.NewStyle().Width(contentW).Render(e))
+		errorsH = lipgloss.Height(screens.Wrap(e, contentW))
 	}
 	// outer border(2) + top space(1) + header + spacing(2) + inner border(2) +
 	// footer(1) + the line under it(1) + margin above the box(1)

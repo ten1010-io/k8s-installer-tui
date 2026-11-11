@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -50,39 +51,39 @@ func unsetBinVars(s *state.AppState) []string {
 // hand, and the paths are then variables of the site.
 func CheckAipubBin(o Options, s *state.AppState) CheckResult {
 	if !HelmfileChosen(s) {
-		return CheckResult{OK: true, Skipped: true, Lines: []string{"배포 도구가 helmfile 이 아님"}}
+		return CheckResult{OK: true, Skipped: true, Lines: []string{i18n.T("No deploy tool is helmfile")}}
 	}
 	data, err := os.ReadFile(o.PackagePath())
 	var why string
 	var bins []string
 	switch {
 	case err != nil:
-		why = o.PackagePath() + " 가 없어 aipub-bin 이 실렸는지 알 수 없습니다"
+		why = i18n.T("%s is not there, so whether aipub-bin was carried is not known", o.PackagePath())
 	default:
 		var pkg struct {
 			AipubBin []any `json:"aipub_bin"`
 		}
 		if err := json.Unmarshal(data, &pkg); err != nil {
-			why = o.PackagePath() + " 를 읽지 못했습니다: " + err.Error()
+			why = i18n.T("%s could not be read: %v", o.PackagePath(), err)
 			break
 		}
 		for _, b := range pkg.AipubBin {
 			bins = append(bins, binName(b))
 		}
 		if len(bins) == 0 {
-			why = o.PackagePath() + " 의 aipub_bin 이 비어 있습니다 (패키지를 --no-aipub-bin 으로 만듦)"
+			why = i18n.T("%s has an empty aipub_bin (the package was made with --no-aipub-bin)", o.PackagePath())
 		}
 	}
 	if why == "" {
-		return CheckResult{OK: true, Lines: []string{"패키지의 aipub-bin: " + strings.Join(bins, ", ")}}
+		return CheckResult{OK: true, Lines: []string{i18n.T("aipub-bin of the package: %s", strings.Join(bins, ", "))}}
 	}
 	missing := unsetBinVars(s)
 	if len(missing) == 0 {
-		return CheckResult{OK: true, Lines: []string{why + ". helmfile 과 kustomize 경로는 사이트 값으로 정해 둠"}}
+		return CheckResult{OK: true, Lines: []string{why + ". " + i18n.T("The paths of helmfile and kustomize are set as site values")}}
 	}
 	return CheckResult{OK: true, Warn: true, Lines: []string{
-		"helmfile 로 배포하는데 패키지에 helmfile·kustomize (aipub-bin) 가 없습니다: " + why,
-		"사이트가 두 바이너리를 노드에 직접 두고 경로를 정해야 합니다: " + strings.Join(missing, ", "),
+		i18n.T("Deployed with helmfile, but the package has no helmfile or kustomize (aipub-bin): %s", why),
+		i18n.T("The site has to put both binaries on the nodes itself and set their paths: %s", strings.Join(missing, ", ")),
 	}}
 }
 

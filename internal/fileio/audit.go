@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -24,8 +25,9 @@ const AuditPolicyMarker = "# k8s-installer-tui: default AIPub audit policy"
 
 // auditPolicyVersion is the version of templates/audit-policy.yaml, named in the
 // marker line. Bumped when the template changes; a file written with an older
-// one is kept (not upgraded).
-const auditPolicyVersion = "v1"
+// one is kept (not upgraded). v2: the comments in English (the rules as in v1),
+// as the file goes to nodes that may have no Korean font.
+const auditPolicyVersion = "v2"
 
 // AuditPolicy is the default audit policy for kube-apiserver
 // (--audit-policy-file), nil when the audit preset is off: the template taken
@@ -69,17 +71,17 @@ func (a AuditPolicyPlan) Warn() bool { return a.Source == AuditHeld || a.Source 
 func (a AuditPolicyPlan) Short() string {
 	switch a.Source {
 	case AuditDefault:
-		return "정책: 위저드가 기본 정책을 씀"
+		return i18n.T("policy: the wizard writes the default policy")
 	case AuditSite:
-		return "정책: 사이트 파일을 그대로 둠"
+		return i18n.T("policy: the site file is kept as it is")
 	case AuditWizard:
-		return "정책: 전에 쓴 기본 정책을 그대로 둠"
+		return i18n.T("policy: the default policy written before is kept as it is")
 	case AuditNode:
-		return "정책: 노드에서 가져온 것을 그대로 씀"
+		return i18n.T("policy: the one taken from the node is used as it is")
 	case AuditHeld:
-		return "⚠ 정책: 노드의 정책을 읽기 전이라 쓰지 않음"
+		return i18n.T("⚠ policy: not written, the policy of the nodes is not read yet")
 	case AuditBroken:
-		return "⚠ 정책 파일을 쓸 수 없음"
+		return i18n.T("⚠ policy: the file cannot be used")
 	}
 	return ""
 }
@@ -94,20 +96,20 @@ func auditFile(path string) (data []byte, problem string, absent bool) {
 	st, err := os.Stat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return nil, "대상이 없는 심볼릭 링크입니다", false
+		return nil, i18n.T("a symlink whose target does not exist"), false
 	case err != nil:
-		return nil, "읽을 수 없습니다 (" + err.Error() + ")", false
+		return nil, i18n.T("unreadable (%v)", err), false
 	case st.IsDir():
-		return nil, "디렉터리입니다", false
+		return nil, i18n.T("a directory"), false
 	case !st.Mode().IsRegular():
-		return nil, "일반 파일이 아닙니다", false
+		return nil, i18n.T("not a regular file"), false
 	}
 	data, err = os.ReadFile(path)
 	if err != nil {
-		return nil, "읽을 수 없습니다 (" + err.Error() + ")", false
+		return nil, i18n.T("unreadable (%v)", err), false
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
-		return nil, "비어 있습니다 (apiserver 가 규칙 0개 정책으로 뜨지 않음)", false
+		return nil, i18n.T("empty (the apiserver does not start with a policy of no rules)"), false
 	}
 	return data, "", false
 }
@@ -144,22 +146,22 @@ func PlanAuditPolicy(path string, s *state.AppState) AuditPolicyPlan {
 	data, problem, absent := auditFile(path)
 	switch {
 	case problem != "":
-		return AuditPolicyPlan{Source: AuditBroken, Note: path + " 이(가) " + problem + ": 위저드가 덮어쓰지 않습니다. 고치거나 지운 뒤 다시 저장하세요"}
+		return AuditPolicyPlan{Source: AuditBroken, Note: i18n.T("%s is not usable: %s. The wizard does not write over it. Fix or remove it, then save again", path, problem)}
 	case absent && s.Existing && !s.ControlPlane.AuditDefaultOK:
-		return AuditPolicyPlan{Source: AuditHeld, Note: "기존 사이트: 노드의 감사 정책을 아직 읽지 않아 기본 정책을 쓰지 않습니다. " +
-			"4b 에서 c 로 노드의 정책을 가져오거나, 파일을 직접 두거나, 4b 감사 로그 줄에서 o 로 기본 정책 쓰기를 확인하세요"}
+		return AuditPolicyPlan{Source: AuditHeld, Note: i18n.T("existing site: the audit policy of the nodes is not read yet, so the default policy is not written. " +
+			"In 4b take the policy of the nodes with c, put a file there yourself, or confirm writing the default policy with o on the 4b audit log row")}
 	case absent:
-		return AuditPolicyPlan{Source: AuditDefault, Data: def, Note: "위저드가 기본 AIPub 감사 정책을 씁니다 (aipub-installer-archive AIP-2611)"}
+		return AuditPolicyPlan{Source: AuditDefault, Data: def, Note: i18n.T("the wizard writes the default AIPub audit policy (aipub-installer-archive AIP-2611)")}
 	case s.ControlPlane.AuditFrom != "":
-		note := "노드 " + s.ControlPlane.AuditFrom + " 의 감사 정책을 가져와 그대로 씁니다"
+		note := i18n.T("the audit policy of node %s is taken and used as it is", s.ControlPlane.AuditFrom)
 		if SamePolicy(data, def) {
-			note += " (위저드 기본 정책과 같음)"
+			note += i18n.T(" (same as the default policy of the wizard)")
 		}
 		return AuditPolicyPlan{Source: AuditNode, Data: data, Note: note}
 	case IsWizardPolicy(data):
-		return AuditPolicyPlan{Source: AuditWizard, Data: data, Note: "위저드가 전에 쓴 기본 정책을 그대로 둡니다"}
+		return AuditPolicyPlan{Source: AuditWizard, Data: data, Note: i18n.T("the default policy the wizard wrote before is kept as it is")}
 	}
-	return AuditPolicyPlan{Source: AuditSite, Data: data, Note: "사이트의 정책 파일을 그대로 둡니다 (위저드가 덮어쓰지 않음)"}
+	return AuditPolicyPlan{Source: AuditSite, Data: data, Note: i18n.T("the policy file of the site is kept as it is (the wizard does not write over it)")}
 }
 
 // AuditAdoption is what became of the policy a node runs with.
@@ -178,7 +180,7 @@ func AdoptAuditPolicy(path string, node []byte) (AuditAdoption, error) {
 	data, problem, absent := auditFile(path)
 	switch {
 	case problem != "":
-		return AuditAdoption{Note: "⚠ " + path + " 이(가) " + problem + ": 노드의 정책을 그 자리에 쓰지 않았습니다"}, nil
+		return AuditAdoption{Note: i18n.T("⚠ %s is not usable: %s. The policy of the node was not written there", path, problem)}, nil
 	case absent && node == nil:
 		return AuditAdoption{}, nil
 	case absent:
@@ -188,22 +190,22 @@ func AdoptAuditPolicy(path string, node []byte) (AuditAdoption, error) {
 		if err := os.WriteFile(path, node, 0644); err != nil {
 			return AuditAdoption{}, err
 		}
-		note := "노드의 감사 정책을 가져와 그대로 씁니다 (" + path + ")"
+		note := i18n.T("the audit policy of the node is taken and used as it is (%s)", path)
 		if SamePolicy(node, auditPolicyTemplate) {
-			note += ", 위저드 기본 정책과 같음"
+			note += i18n.T(", same as the default policy of the wizard")
 		}
 		return AuditAdoption{Note: note, Taken: true, Kept: true}, nil
 	}
 	kept := !IsWizardPolicy(data)
-	what := "사이트의 정책 파일"
+	what := i18n.T("the policy file of the site")
 	if !kept {
-		what = "위저드가 쓴 기본 정책"
+		what = i18n.T("the default policy the wizard wrote")
 	}
 	switch {
 	case node == nil:
-		return AuditAdoption{Note: path + " 에 " + what + "이 있어 그것을 씁니다", Kept: kept}, nil
+		return AuditAdoption{Note: i18n.T("%s has %s, so it is used", path, what), Kept: kept}, nil
 	case SamePolicy(data, node):
-		return AuditAdoption{Note: path + " 의 " + what + "이 노드의 정책과 같습니다: 그대로 씁니다", Kept: kept}, nil
+		return AuditAdoption{Note: i18n.T("%s: %s is the same as the policy of the node, so it is used as it is", path, what), Kept: kept}, nil
 	}
-	return AuditAdoption{Note: "⚠ " + path + " 의 " + what + "이 노드의 정책과 다릅니다: 그대로 두고, update-cluster 가 노드의 정책을 이것으로 바꿉니다", Kept: kept}, nil
+	return AuditAdoption{Note: i18n.T("⚠ %s: %s differs from the policy of the node. It is left as it is, and update-cluster changes the policy of the node to it", path, what), Kept: kept}, nil
 }

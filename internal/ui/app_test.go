@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/screens"
@@ -119,7 +120,7 @@ func (d *driver) keys(names ...string) {
 
 func (d *driver) at(want string) {
 	d.t.Helper()
-	got := stepTitles[d.app.current]
+	got := i18n.T(stepTitles[d.app.current]) // as the header says it
 	if got != want {
 		d.t.Fatalf("on step %s, want %s; errors: %v\n%s", got, want, d.app.screenErrors, d.screen())
 	}

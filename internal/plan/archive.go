@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 )
 
 // The archive of the user registry (K4, push-user-registry-artifacts.yml). On a
@@ -47,14 +49,14 @@ func AbsArchive(p string) string {
 func CheckArchive(path string) error {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return errors.New("아카이브 " + path + " 를 찾을 수 없습니다: " + err.Error())
+		return errors.New(i18n.T("archive %s not found: %v", path, err))
 	}
 	if !fi.Mode().IsRegular() {
-		return errors.New("아카이브 " + path + " 는 일반 파일이 아닙니다")
+		return errors.New(i18n.T("archive %s is not a regular file", path))
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return errors.New("아카이브 " + path + " 를 읽을 수 없습니다: " + err.Error())
+		return errors.New(i18n.T("archive %s cannot be read: %v", path, err))
 	}
 	f.Close()
 	return nil

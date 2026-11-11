@@ -3,6 +3,8 @@ package plan
 import (
 	"regexp"
 	"strings"
+
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 )
 
 // A stage is the steps that run at the same time; the next starts when every
@@ -31,8 +33,8 @@ import (
 func Stages(steps []Step, o Options, savedIn string) [][]Step {
 	var stages [][]Step
 	if copies := CopyCommands(o, savedIn); len(copies) > 0 {
-		stages = append(stages, []Step{noPrompt(Step{ID: copyStepID, Title: "설정 복사", Kind: Shell, Shell: copies, AlwaysRun: true,
-			Note: "저장한 설정 파일을 " + o.AnsibleDir() + " 로 (sudo, 이어서 실행할 때도 다시 복사)"})})
+		stages = append(stages, []Step{noPrompt(Step{ID: copyStepID, Title: i18n.T("Copy the settings"), Kind: Shell, Shell: copies, AlwaysRun: true,
+			Note: i18n.T("Copies the saved settings to %s (sudo; copied again on a resume too)", o.AnsibleDir())})})
 	}
 	for _, st := range steps {
 		if st.Kind == Check {

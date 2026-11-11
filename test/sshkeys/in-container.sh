@@ -87,11 +87,12 @@ failures=0
 # The tool gets a terminal of its own (script(1)), as ssh and the password prompt
 # want one. feed is a function writing what is typed on it, after the prompt is up:
 # ssh throws away what was typed ahead
+# --lang ko: the expect lines below read the Korean messages (the default is English)
 run() {
     local name=$1 expected=$2 feed=$3
     shift 3
     local code=0
-    $feed | su - ops -c "cd $ANSIBLE && LC_ALL=C.UTF-8 ${RUN_ENV:-} script -qec 'k8s-installer-tui $* --inventory inventory.yml' /dev/null" >/tmp/out 2>&1 || code=$?
+    $feed | su - ops -c "cd $ANSIBLE && LC_ALL=C.UTF-8 ${RUN_ENV:-} script -qec 'k8s-installer-tui --lang ko $* --inventory inventory.yml' /dev/null" >/tmp/out 2>&1 || code=$?
     tr -d '\r' </tmp/out >/tmp/out.txt
     echo "=== $name (exit $code)"
     cat /tmp/out.txt

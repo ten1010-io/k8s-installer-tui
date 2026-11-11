@@ -5,6 +5,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
+	"github.com/muesli/reflow/wrap"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
@@ -32,11 +35,28 @@ type Revealer interface {
 	RevealErrors()
 }
 
+// Wrap breaks text at its spaces into lines at most width columns wide, styles
+// kept; a word wider than a line is cut. Long text goes through it, not through
+// a lipgloss Width, whose wrap breaks English inside words and leaves lines too
+// wide for the panel, which then cuts them again ("clu" / "ster"). Korean,
+// broken at any letter, never showed it.
+func Wrap(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	w := wordwrap.NewWriter(width)
+	w.Breakpoints = nil // a hyphen, as in --existing, is no place to break
+	w.KeepNewlines = true
+	_, _ = w.Write([]byte(text))
+	_ = w.Close()
+	return wrap.String(w.String(), width)
+}
+
 // short is the one-line description the schema gives a variable, for a help
-// string next to the field that edits it.
+// string next to the field that edits it, in the language of the run.
 func short(key string) string {
 	v, _ := schema.Get(key)
-	return v.Short
+	return i18n.T(v.Short)
 }
 
 type NavigateNextMsg struct{}
@@ -158,7 +178,7 @@ func FitView(view string, focusLine, end, width, height int) string {
 	for i, l := range logical {
 		first[i] = len(lines)
 		if width > 0 {
-			lines = append(lines, strings.Split(lipgloss.NewStyle().Width(width).Render(l), "\n")...)
+			lines = append(lines, strings.Split(Wrap(l, width), "\n")...)
 		} else {
 			lines = append(lines, l)
 		}
@@ -230,11 +250,11 @@ func FitView(view string, focusLine, end, width, height int) string {
 	}
 	var win []string
 	if top {
-		win = append(win, styles.StyleMuted.Render("  ↑ 위에 더 있음"))
+		win = append(win, styles.StyleMuted.Render("  "+i18n.T("↑ more above")))
 	}
 	win = append(win, lines[start:stop]...)
 	if bottom {
-		win = append(win, styles.StyleMuted.Render("  ↓ 아래에 더 있음"))
+		win = append(win, styles.StyleMuted.Render("  "+i18n.T("↓ more below")))
 	}
 	return strings.Join(append(win, pinned...), "\n")
 }

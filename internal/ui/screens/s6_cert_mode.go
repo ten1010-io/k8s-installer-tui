@@ -4,18 +4,21 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
+// certModes are the modes offered; the descriptions are English here, said
+// through i18n.T where they are drawn.
 var certModes = []struct {
 	value       string
 	label       string
 	description string
 }{
-	{"self_signed", "self_signed", "CA를 자동 생성하고 TLS 인증서를 발급합니다.\n  추가 파일 제공 없이 설치가 가능합니다."},
-	{"ca_provided", "ca_provided", "고객이 ca.crt + ca.key를 제공합니다.\n  TLS 인증서 발급은 설치 도구가 수행합니다."},
-	{"tls_provided", "tls_provided", "고객이 tls.crt + tls.key를 모두 제공합니다.\n  인증서 발급 단계를 건너뜁니다."},
+	{"self_signed", "self_signed", "Creates a CA and issues the TLS certificates.\n  Installs with no extra files."},
+	{"ca_provided", "ca_provided", "The customer provides ca.crt + ca.key.\n  The installer issues the TLS certificates."},
+	{"tls_provided", "tls_provided", "The customer provides both tls.crt and tls.key.\n  The step that issues certificates is skipped."},
 }
 
 // Focus layout:
@@ -32,7 +35,7 @@ type S6CertMode struct {
 
 func NewS6CertMode() *S6CertMode { return &S6CertMode{} }
 
-func (s *S6CertMode) Title() string { return "인증서 모드" }
+func (s *S6CertMode) Title() string { return i18n.T("Certificate settings") }
 func (s *S6CertMode) SetSize(w, h int) {
 	s.width = w
 	s.height = h
@@ -102,7 +105,7 @@ func (s *S6CertMode) activate() (tea.Model, tea.Cmd) {
 
 func (s *S6CertMode) View() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("인증서 모드 선택") + "\n")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Choose the certificate mode")) + "\n")
 	b.WriteString(styles.StyleMuted.Render("aipub_cert_mode: "+short("aipub_cert_mode")) + "\n\n")
 
 	// the focused option stays in sight on a low screen
@@ -118,14 +121,14 @@ func (s *S6CertMode) View() string {
 		}
 		line := radio + " " + labelStyle.Render(m.label)
 		b.WriteString(RenderRow(line, optFocused, s.width) + "\n")
-		b.WriteString(styles.StyleMuted.Render("  "+m.description) + "\n\n")
+		b.WriteString(styles.StyleMuted.Render("  "+i18n.T(m.description)) + "\n\n")
 	}
 
 	prevFocused := s.focusIdx == len(certModes) && s.navIdx == 0
 	nextFocused := s.focusIdx == len(certModes) && s.navIdx == 1
 	b.WriteString("\n")
 	fs.mark(s.focusIdx == len(certModes))
-	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString(RenderNavButtons(i18n.T("Back"), i18n.T("Next"), prevFocused, nextFocused, s.width))
 
 	return fs.fit(s.width, s.height)
 }

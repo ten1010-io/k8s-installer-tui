@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 )
 
 // adhocOut is one node's line of an `ansible -o` run.
@@ -89,7 +91,7 @@ func adhoc(ctx context.Context, o Options, run RunFunc, pattern string, become b
 
 // couldNotRun is the line of a check whose ansible run gave nothing to read.
 func couldNotRun(out []byte, err error) string {
-	msg := "ansible을 실행하지 못했습니다"
+	msg := i18n.T("ansible could not be run")
 	if err != nil {
 		msg += ": " + err.Error()
 	}

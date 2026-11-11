@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -28,15 +29,15 @@ func CheckStorageClass(ctx context.Context, o Options, s *state.AppState, run Ru
 	class := strings.TrimSpace(s.AipubHaModeStorageClass)
 	switch {
 	case !s.AipubEnabled:
-		return skip("AIPub 을 설치하지 않음")
+		return skip(i18n.T("AIPub not installed"))
 	case class == "":
-		return skip("StorageClass (aipub_ha_mode_storage_class) 가 정해지지 않음")
+		return skip(i18n.T("No StorageClass (aipub_ha_mode_storage_class) set"))
 	case !o.Existing:
-		return skip("새 사이트: 클러스터가 아직 없어 확인할 수 없습니다 (StorageClass " + class + " 는 클러스터를 만든 뒤에 있어야 함)")
+		return skip(i18n.T("New site: no cluster to check yet (StorageClass %s has to be there once the cluster is built)", class))
 	case len(s.K8sCpNodes) == 0:
-		return skip("k8s 컨트롤 플레인 노드가 없음")
+		return skip(i18n.T("No k8s control plane node"))
 	case !storageClassName.MatchString(class):
-		return CheckResult{OK: true, Warn: true, Lines: []string{"StorageClass 이름 " + class + " 이(가) 올바르지 않아 확인하지 않았습니다"}}
+		return CheckResult{OK: true, Warn: true, Lines: []string{i18n.T("StorageClass name %s is not valid, so it was not checked", class)}}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -46,16 +47,16 @@ func CheckStorageClass(ctx context.Context, o Options, s *state.AppState, run Ru
 	got, found := res[node]
 	switch {
 	case !found:
-		return CheckResult{OK: true, Warn: true, Lines: []string{"StorageClass " + class + " 를 확인하지 못했습니다: " + couldNotRun(out, err)}}
+		return CheckResult{OK: true, Warn: true, Lines: []string{i18n.T("Could not check StorageClass %s: %s", class, couldNotRun(out, err))}}
 	case got.ok():
-		return CheckResult{OK: true, Lines: []string{node + ": StorageClass " + class + " 있음"}}
+		return CheckResult{OK: true, Lines: []string{i18n.T("%s: StorageClass %s is there", node, class)}}
 	case strings.Contains(got.Raw, "NotFound"):
 		return CheckResult{OK: true, Warn: true, Lines: []string{
-			node + ": StorageClass " + class + " 가 없습니다. 볼륨이 Pending 으로 남기 전에 클래스를 만들거나 " +
-				"aipub_ha_mode_storage_class 를 바꾸세요",
+			i18n.T("%s: StorageClass %s is missing. Make the class, or change aipub_ha_mode_storage_class, "+
+				"before volumes are left Pending", node, class),
 		}}
 	}
 	return CheckResult{OK: true, Warn: true, Lines: []string{
-		node + ": StorageClass " + class + " 를 확인하지 못했습니다 (" + firstLine(strings.TrimSpace(got.Raw)) + ")",
+		i18n.T("%s: could not check StorageClass %s (%s)", node, class, firstLine(strings.TrimSpace(got.Raw))),
 	}}
 }

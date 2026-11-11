@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -30,7 +31,7 @@ func TestUpdateClusterStepsSayHowLongTheyTake(t *testing.T) {
 						continue
 					}
 					seen[st.ID] = true
-					if !strings.Contains(st.Note, updateClusterTime) {
+					if !strings.Contains(st.Note, i18n.T(updateClusterTime)) {
 						t.Errorf("aipub %v existing %v installed %v: %s says nothing of the time: %q", aipub, existing, installed, st.ID, st.Note)
 					}
 				}

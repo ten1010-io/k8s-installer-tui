@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -84,10 +85,10 @@ type manifest struct {
 func APIServerFlags(data []byte) (map[string]string, []string, error) {
 	var m manifest
 	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, nil, fmt.Errorf("%s 를 읽지 못했습니다: %w", APIServerManifest, err)
+		return nil, nil, fmt.Errorf("%s: %w", i18n.T("could not read %s", APIServerManifest), err)
 	}
 	if len(m.Spec.Containers) == 0 {
-		return nil, nil, fmt.Errorf("%s 에 컨테이너가 없습니다", APIServerManifest)
+		return nil, nil, errors.New(i18n.T("%s has no container", APIServerManifest))
 	}
 	c := m.Spec.Containers[0]
 	for _, x := range m.Spec.Containers {
@@ -135,7 +136,7 @@ func DetectLegacy(data []byte) (*Legacy, error) {
 				return ""
 			}
 		}
-		return " (마운트 없음)"
+		return " " + i18n.T("(not mounted)")
 	}
 	for _, p := range state.Presets {
 		name := legacyFlag[p.ID]
@@ -147,14 +148,14 @@ func DetectLegacy(data []byte) (*Legacy, error) {
 			continue
 		}
 		l.Presets[p.ID] = true
-		line := "--" + name + "=" + value + " → " + p.Title
+		line := "--" + name + "=" + value + " → " + i18n.T(p.Title)
 		if strings.HasPrefix(value, "/") {
 			line += mounted(value)
 		}
 		l.Found = append(l.Found, line)
 		for _, a := range p.Args {
 			if v, ok := flags[a.Name]; ok && v != a.Value && !(p.ID == state.PresetRuntimeConfig) {
-				l.Differs = append(l.Differs, fmt.Sprintf("--%s=%s (프리셋은 %s)", a.Name, v, a.Value))
+				l.Differs = append(l.Differs, i18n.T("--%s=%s (the preset has %s)", a.Name, v, a.Value))
 			}
 		}
 	}
@@ -206,7 +207,7 @@ func plainURL(raw string) bool {
 // file holds anything that looks like a credential: then nothing, and why.
 func WebhookURLFrom(data []byte) (string, string) {
 	if looksSecret(data) {
-		return "", "웹훅 kubeconfig 에 자격 증명(토큰·키)으로 보이는 것이 있어 URL 을 가져오지 않았습니다. 직접 입력하세요"
+		return "", i18n.T("The webhook kubeconfig holds what looks like a credential (a token or key), so the URL was not taken. Enter it yourself")
 	}
 	var kc struct {
 		Clusters []struct {
@@ -216,19 +217,19 @@ func WebhookURLFrom(data []byte) (string, string) {
 		} `yaml:"clusters"`
 	}
 	if yaml.Unmarshal(data, &kc) != nil || len(kc.Clusters) == 0 || kc.Clusters[0].Cluster.Server == "" {
-		return "", "웹훅 kubeconfig 에서 server 를 찾지 못했습니다. 직접 입력하세요"
+		return "", i18n.T("No server found in the webhook kubeconfig. Enter it yourself")
 	}
 	if s := kc.Clusters[0].Cluster.Server; plainURL(s) {
 		return s, ""
 	}
-	return "", "웹훅 server 가 https URL (자격 증명·쿼리 없이) 이 아니라 가져오지 않았습니다. 직접 입력하세요"
+	return "", i18n.T("The webhook server is not an https URL (with no credential or query), so it was not taken. Enter it yourself")
 }
 
 // IssuerFrom is the issuer of an authentication config, unless the file holds
 // anything that looks like a credential (the CA in it is public).
 func IssuerFrom(data []byte) (string, string) {
 	if strings.Contains(strings.ToLower(string(data)), "private key") {
-		return "", "authentication-config.yaml 에 키로 보이는 것이 있어 issuer 를 가져오지 않았습니다. 직접 확인하세요"
+		return "", i18n.T("authentication-config.yaml holds what looks like a key, so the issuer was not taken. Check it yourself")
 	}
 	var ac struct {
 		JWT []struct {
@@ -238,12 +239,12 @@ func IssuerFrom(data []byte) (string, string) {
 		} `yaml:"jwt"`
 	}
 	if yaml.Unmarshal(data, &ac) != nil || len(ac.JWT) == 0 || ac.JWT[0].Issuer.URL == "" {
-		return "", "authentication-config.yaml 에서 issuer 를 찾지 못했습니다"
+		return "", i18n.T("No issuer found in authentication-config.yaml")
 	}
 	if u := ac.JWT[0].Issuer.URL; plainURL(u) {
 		return u, ""
 	}
-	return "", "issuer 가 https URL 이 아니라 가져오지 않았습니다"
+	return "", i18n.T("The issuer is not an https URL, so it was not taken")
 }
 
 // slurp reads a file of node, read only (ansible slurp, as root: the manifests
@@ -278,7 +279,7 @@ func slurp(ctx context.Context, o Options, node, path string, run RunFunc) ([]by
 		}
 		return base64.StdEncoding.DecodeString(r.Content)
 	}
-	msg := "ansible을 실행하지 못했습니다"
+	msg := i18n.T("ansible could not be run")
 	if err != nil {
 		msg += ": " + err.Error()
 	}
@@ -294,7 +295,7 @@ func slurp(ctx context.Context, o Options, node, path string, run RunFunc) ([]by
 // written to o.AuditPolicy as it is when nothing is there (never over a file).
 func ReadLegacy(ctx context.Context, o Options, s *state.AppState, run RunFunc) (*Legacy, error) {
 	if len(s.K8sCpNodes) == 0 {
-		return nil, errors.New("k8s 컨트롤 플레인 노드가 없습니다")
+		return nil, errors.New(i18n.T("there is no k8s control plane node"))
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -311,7 +312,7 @@ func ReadLegacy(ctx context.Context, o Options, s *state.AppState, run RunFunc) 
 	flags, _, _ := APIServerFlags(data)
 	if l.Presets[state.PresetWebhook] {
 		if b, err := slurp(ctx, o, node, flags[legacyFlag[state.PresetWebhook]], run); err != nil {
-			l.Refused = append(l.Refused, "웹훅 kubeconfig 를 읽지 못했습니다: "+err.Error())
+			l.Refused = append(l.Refused, i18n.T("Could not read the webhook kubeconfig: %v", err))
 		} else if u, why := WebhookURLFrom(b); why != "" {
 			l.Refused = append(l.Refused, why)
 		} else {
@@ -320,7 +321,7 @@ func ReadLegacy(ctx context.Context, o Options, s *state.AppState, run RunFunc) 
 	}
 	if l.Presets[state.PresetJWKS] {
 		if b, err := slurp(ctx, o, node, flags[legacyFlag[state.PresetJWKS]], run); err != nil {
-			l.Refused = append(l.Refused, "authentication-config.yaml 을 읽지 못했습니다: "+err.Error())
+			l.Refused = append(l.Refused, i18n.T("Could not read authentication-config.yaml: %v", err))
 		} else if u, why := IssuerFrom(b); why != "" {
 			l.Refused = append(l.Refused, why)
 		} else {
@@ -334,16 +335,16 @@ func ReadLegacy(ctx context.Context, o Options, s *state.AppState, run RunFunc) 
 		case err != nil:
 			l.AuditUnread = err.Error()
 		case len(bytes.TrimSpace(b)) == 0:
-			l.AuditUnread = path + " 가 비어 있습니다"
+			l.AuditUnread = i18n.T("%s is an empty file", path)
 		case policyLooksSecret(b):
-			l.AuditUnread = "자격 증명(토큰·키)으로 보이는 것이 있어 가져오지 않았습니다"
+			l.AuditUnread = i18n.T("it holds what looks like a credential (a token or key), so it was not taken")
 		default:
 			l.AuditPolicy = b
 		}
 		if o.AuditPolicy != "" {
 			a, err := fileio.AdoptAuditPolicy(o.AuditPolicy, l.AuditPolicy)
 			if err != nil {
-				a.Note = "⚠ 노드의 감사 정책을 " + o.AuditPolicy + " 에 쓰지 못했습니다: " + err.Error()
+				a.Note = i18n.T("⚠ Could not write the audit policy of the node to %s: %v", o.AuditPolicy, err)
 			}
 			l.Audit = a
 		}
@@ -377,7 +378,7 @@ func planLegacy(r CheckResult, l *Legacy, s *state.AppState, o Options) CheckRes
 		if l.Presets[id] {
 			for _, p := range state.Presets {
 				if p.ID == id {
-					auth = append(auth, p.Title)
+					auth = append(auth, i18n.T(p.Title))
 				}
 			}
 		}
@@ -385,64 +386,70 @@ func planLegacy(r CheckResult, l *Legacy, s *state.AppState, o Options) CheckRes
 	if len(auth) == 0 || !o.Existing {
 		return r
 	}
-	same := "모두 켜져 있음: update-cluster 가"
-	for i, line := range r.Lines {
-		if staged(s, o) && strings.HasPrefix(line, same) {
-			r.Lines[i] = "모두 켜져 있음: 다만 K3 update-cluster 는 클러스터 단계 항목만 적용해, 손으로 넣은 인증 플래그 (" +
-				strings.Join(auth, ", ") + ") 는 K3 부터 A2.5·A5.2 가 적용할 때까지 apiserver 에서 빠집니다"
-			r.Warn = true
-		}
+	// the line that says every preset found is on, after the header and the
+	// flags found (LegacyResult)
+	if i := 1 + len(l.Found); staged(s, o) && len(offPresets(l, s)) == 0 && i < len(r.Lines) {
+		r.Lines[i] = i18n.T("All on: but K3 update-cluster applies the entries of the cluster stage only, so the authentication flags put in by hand (%s) "+
+			"are out of the apiserver from K3 until A2.5 or A5.2 applies them", strings.Join(auth, ", "))
+		r.Warn = true
 	}
 	if !o.AipubInstalled {
 		r.OK = false
-		r.Lines = append(r.Lines, "✗ apiserver 에 AIPub 인증 ("+strings.Join(auth, ", ")+") 이 이미 켜져 있습니다: AIPub 이 설치된 사이트입니다. "+
-			"--aipub-installed 로 다시 시작하세요 (이대로 실행하면 K3 부터 A5.2 까지 AIPub 로그인이 빠짐)")
+		r.Lines = append(r.Lines, i18n.T("✗ AIPub authentication (%s) is on in the apiserver already: AIPub is installed on this site. "+
+			"Start again with --aipub-installed (run as it is, AIPub login is gone from K3 until A5.2)", strings.Join(auth, ", ")))
 	}
 	return r
+}
+
+// offPresets are the presets the node runs with that s has turned off, by
+// title in the language spoken, sorted.
+func offPresets(l *Legacy, s *state.AppState) []string {
+	var off []string
+	for _, p := range state.Presets {
+		if l.Presets[p.ID] && !s.ControlPlane.On(p.ID) {
+			off = append(off, i18n.T(p.Title))
+		}
+	}
+	sort.Strings(off)
+	return off
 }
 
 // LegacyResult says what a check found against the presets of s.
 func LegacyResult(l *Legacy, s *state.AppState) CheckResult {
 	r := CheckResult{OK: true}
 	if !l.Any() {
-		r.Lines = []string{l.Node + ": 손으로 넣은 AIPub apiserver 설정 없음"}
+		r.Lines = []string{i18n.T("%s: no AIPub apiserver settings added by hand", l.Node)}
 		return r
 	}
-	r.Lines = append(r.Lines, l.Node+" 의 "+APIServerManifest+" 에 손으로 넣은 설정:")
+	r.Lines = append(r.Lines, i18n.T("Put in by hand in %s of %s:", APIServerManifest, l.Node))
 	for _, f := range l.Found {
 		r.Lines = append(r.Lines, "  "+f)
 	}
-	var off []string
-	for _, p := range state.Presets {
-		if l.Presets[p.ID] && !s.ControlPlane.On(p.ID) {
-			off = append(off, p.Title)
-		}
-	}
-	sort.Strings(off)
-	for _, t := range off {
+	for _, t := range offPresets(l, s) {
 		r.OK = false
-		r.Lines = append(r.Lines, "✗ "+t+" 이(가) 꺼져 있음: update-cluster 뒤 이 기능이 클러스터에서 사라집니다. 4b 에서 켜고 다시 저장하세요")
+		r.Lines = append(r.Lines, i18n.T("✗ %s is off: after update-cluster this feature is gone from the cluster. Turn it on in 4b and save again", t))
 	}
 	if r.OK {
-		r.Lines = append(r.Lines, "모두 켜져 있음: update-cluster 가 손으로 고친 것을 설치기가 관리하는 같은 플래그로 바꿉니다")
+		r.Lines = append(r.Lines, i18n.T("All on: update-cluster replaces what was edited by hand with the same flags, managed by the installer"))
 	}
 	if !l.Presets[state.PresetAudit] || !s.ControlPlane.Audit {
 		return r
 	}
 	// the policy k8s_cp_extra_files copies over the node's
 	if l.Audit.Note != "" {
-		r.Lines = append(r.Lines, "감사 정책: "+l.Audit.Note)
+		r.Lines = append(r.Lines, i18n.T("Audit policy: %s", l.Audit.Note))
 	}
 	if l.AuditUnread != "" {
 		switch {
 		case l.Audit.Kept:
-			r.Lines = append(r.Lines, "⚠ 노드의 감사 정책을 읽지 못했습니다 ("+l.AuditUnread+"): ansible/files 의 사이트 파일을 씁니다")
+			r.Lines = append(r.Lines, i18n.T("⚠ Could not read the audit policy of the node (%s): the site's file in ansible/files is used", l.AuditUnread))
 		case s.ControlPlane.AuditDefaultOK:
-			r.Lines = append(r.Lines, "⚠ 노드의 감사 정책을 읽지 못했지만 기본 정책으로 바꾸기로 했습니다 (4b 의 o): update-cluster 가 노드의 정책을 바꿉니다")
+			r.Lines = append(r.Lines, i18n.T("⚠ Could not read the audit policy of the node, but the default policy was chosen to replace it (o in 4b): update-cluster replaces the node's policy"))
 		default:
 			r.OK = false
-			r.Lines = append(r.Lines, "✗ 노드의 감사 정책을 읽지 못했습니다 ("+l.AuditUnread+"): 기본 정책이 읽지 못한 정책을 바꾸게 됩니다. "+
-				"정책 파일을 ansible/files/"+state.AuditPolicyFile+" 에 직접 두거나, 4b 감사 로그 줄에서 o 로 기본 정책 쓰기를 확인하고 다시 저장하세요")
+			r.Lines = append(r.Lines, i18n.T("✗ Could not read the audit policy of the node (%s): the default policy would replace a policy not read. "+
+				"Put the policy file in ansible/files/%s yourself, or confirm writing the default policy with o on the audit log row of 4b, and save again",
+				l.AuditUnread, state.AuditPolicyFile))
 		}
 	}
 	return r

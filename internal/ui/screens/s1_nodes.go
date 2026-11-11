@@ -1,25 +1,25 @@
 package screens
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 // List mode focus:
 //   0..N-1  : node rows
-//   N       : < 추가 >
-//   N+1     : nav area  (←/→ switches navIdx: 0=이전, 1=다음)
+//   N       : < Add >
+//   N+1     : nav area  (←/→ switches navIdx: 0=back, 1=next)
 //
 // Form mode focus:
 //   0..3    : fields (name, host, port, user)
-//   4       : < 저장 >
-//   5       : < 취소 >
+//   4       : < Save >
+//   5       : < Cancel >
 
 const (
 	s1FieldName = iota
@@ -36,7 +36,7 @@ const (
 type S1Nodes struct {
 	nodes     []state.NodeConfig
 	focusIdx  int
-	navIdx    int // 0=이전, 1=다음
+	navIdx    int // 0=back, 1=next
 	editing   bool
 	editIdx   int
 	formFocus int
@@ -55,12 +55,10 @@ func NewS1Nodes() *S1Nodes {
 	}
 	s.fields[s1FieldName].Placeholder = "node1"
 	s.fields[s1FieldHost].Placeholder = "x.x.x.x"
-	s.fields[s1FieldPort].Placeholder = "22 (기본값)"
-	s.fields[s1FieldUser].Placeholder = "root (기본값)"
 	return s
 }
 
-func (s *S1Nodes) Title() string { return "노드 정의" }
+func (s *S1Nodes) Title() string { return i18n.T("Nodes") }
 func (s *S1Nodes) SetSize(w, h int) {
 	s.width = w
 	s.height = h
@@ -79,18 +77,18 @@ func (s *S1Nodes) SyncToState(st *state.AppState) {
 
 func (s *S1Nodes) Validate() []string {
 	if len(s.nodes) == 0 {
-		return []string{"노드를 최소 1개 이상 추가해주세요"}
+		return []string{i18n.T("Add at least one node")}
 	}
 	seen := map[string]bool{}
 	for _, n := range s.nodes {
 		if n.Name == "" {
-			return []string{"이름이 비어있는 노드가 있습니다"}
+			return []string{i18n.T("A node has no name")}
 		}
 		if n.AnsibleHost == "" {
-			return []string{fmt.Sprintf("'%s'의 ansible_host가 비어있습니다", n.Name)}
+			return []string{i18n.T("ansible_host of '%s' is empty", n.Name)}
 		}
 		if seen[n.Name] {
-			return []string{fmt.Sprintf("노드 이름 '%s'가 중복됩니다", n.Name)}
+			return []string{i18n.T("Node name '%s' is duplicated", n.Name)}
 		}
 		seen[n.Name] = true
 	}
@@ -134,7 +132,7 @@ func (s *S1Nodes) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if s.focusIdx < s.navFocus() {
 				s.focusIdx++
 				if s.focusIdx == s.navFocus() {
-					s.navIdx = 1 // 다음
+					s.navIdx = 1 // next
 				}
 			}
 		case "left", "h":
@@ -167,7 +165,7 @@ func (s *S1Nodes) activateList() (tea.Model, tea.Cmd) {
 			return s, Prev()
 		}
 		return s, Next()
-	case s.focusIdx == len(s.nodes): // 추가
+	case s.focusIdx == len(s.nodes): // add
 		s.openForm(-1, state.NodeConfig{})
 		return s, textinput.Blink
 	default: // node row
@@ -261,14 +259,14 @@ func (s *S1Nodes) saveForm() string {
 	name := strings.TrimSpace(s.fields[s1FieldName].Value())
 	host := strings.TrimSpace(s.fields[s1FieldHost].Value())
 	if name == "" {
-		return "이름을 입력해주세요"
+		return i18n.T("Enter a name")
 	}
 	if host == "" {
-		return "ansible_host를 입력해주세요"
+		return i18n.T("Enter ansible_host")
 	}
 	for i, n := range s.nodes {
 		if n.Name == name && i != s.editIdx {
-			return fmt.Sprintf("노드 이름 '%s'가 이미 존재합니다", name)
+			return i18n.T("Node name '%s' already exists", name)
 		}
 	}
 	nc := state.NodeConfig{
@@ -295,19 +293,19 @@ func (s *S1Nodes) View() string {
 
 func (s *S1Nodes) viewList() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("노드 정의") + "\n")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Nodes")) + "\n")
 	b.WriteString(styles.StyleMuted.Render("inventory.yml › all.hosts") + "\n\n")
 
 	colW := []int{14, 18, 8, 12}
 	header := ""
-	for i, h := range []string{"이름", "ansible_host", "포트", "SSH 유저"} {
+	for i, h := range []string{i18n.T("Name"), "ansible_host", i18n.T("Port"), i18n.T("SSH user")} {
 		header += lipgloss.NewStyle().Width(colW[i]).Bold(true).Foreground(styles.ColorPrimary).Render(h)
 	}
 	b.WriteString("  " + header + "\n")
 	b.WriteString("  " + strings.Repeat("─", 54) + "\n")
 
 	if len(s.nodes) == 0 {
-		b.WriteString(styles.StyleMuted.Render("  (노드 없음)") + "\n")
+		b.WriteString(styles.StyleMuted.Render("  "+i18n.T("(no nodes)")) + "\n")
 	}
 	// the focused row stays in sight on a low screen
 	fs := focusSpan{b: &b}
@@ -328,27 +326,29 @@ func (s *S1Nodes) viewList() string {
 	b.WriteString("\n")
 	addFocused := s.focusIdx == len(s.nodes)
 	fs.mark(addFocused)
-	b.WriteString("  " + RenderButton("추가", addFocused) +
-		styles.StyleMuted.Render("  (a: 추가  d: 삭제  Enter: 편집)") + "\n")
+	b.WriteString("  " + RenderButton(i18n.T("Add"), addFocused) +
+		styles.StyleMuted.Render("  "+i18n.T("(a: add  d: delete  Enter: edit)")) + "\n")
 
 	prevFocused := s.focusIdx == s.navFocus() && s.navIdx == 0
 	nextFocused := s.focusIdx == s.navFocus() && s.navIdx == 1
 	b.WriteString("\n")
 	fs.mark(s.focusIdx == s.navFocus())
-	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString(RenderNavButtons(i18n.T("Back"), i18n.T("Next"), prevFocused, nextFocused, s.width))
 
 	return fs.fit(s.width, s.height)
 }
 
 func (s *S1Nodes) viewForm() string {
-	title := "새 노드 추가"
+	title := i18n.T("Add node")
 	if s.editIdx >= 0 {
-		title = "노드 편집"
+		title = i18n.T("Edit node")
 	}
 	var b strings.Builder
 	b.WriteString(styles.StyleTitle.Render(title) + "\n\n")
 
-	labels := []string{"이름", "ansible_host", "ansible_port", "ansible_ssh_user"}
+	s.fields[s1FieldPort].Placeholder = i18n.T("22 (default)")
+	s.fields[s1FieldUser].Placeholder = i18n.T("root (default)")
+	labels := []string{i18n.T("Name"), "ansible_host", "ansible_port", "ansible_ssh_user"}
 	for i, label := range labels {
 		focused := s.formFocus == i
 		lStyle := styles.StyleLabel
@@ -365,8 +365,8 @@ func (s *S1Nodes) viewForm() string {
 	b.WriteString("\n")
 	saveFocused := s.formFocus == s1FormSave
 	cancelFocused := s.formFocus == s1FormCancel
-	b.WriteString("  " + RenderButton("저장", saveFocused) + "  " + RenderButton("취소", cancelFocused))
-	b.WriteString(styles.StyleMuted.Render("  (Esc: 취소)"))
+	b.WriteString("  " + RenderButton(i18n.T("Save"), saveFocused) + "  " + RenderButton(i18n.T("Cancel"), cancelFocused))
+	b.WriteString(styles.StyleMuted.Render("  " + i18n.T("(Esc: cancel)")))
 
 	return b.String()
 }

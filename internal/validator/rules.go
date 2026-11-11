@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
@@ -123,15 +124,15 @@ func checkVar(v schema.Var, field string, val any, required bool) []Error {
 }
 
 func requiredMsg(v schema.Var, val any) string {
-	msg := "값을 입력해주세요"
+	msg := i18n.T("Enter a value")
 	if _, isList := val.([]string); isList || v.Type == schema.TypeList {
-		msg = "최소 1개 이상 입력해주세요"
+		msg = i18n.T("Enter at least one")
 	}
 	if key, want, ok := v.Condition(); ok {
-		msg = fmt.Sprintf("%s=%s 이면 %s", key, want, msg)
+		msg = i18n.T("if %s=%s: %s", key, want, msg)
 	}
 	if v.Short != "" {
-		msg += " (" + v.Short + ")"
+		msg += " (" + i18n.T(v.Short) + ")"
 	}
 	return msg
 }
@@ -142,43 +143,43 @@ func formatMsg(t schema.Type, enum []string, val any) string {
 	switch t {
 	case schema.TypeInt:
 		if n, ok := toInt(val); !ok || n < 1 {
-			return "1 이상의 정수여야 합니다"
+			return i18n.T("Must be an integer of 1 or more")
 		}
 	case schema.TypePort:
 		if n, ok := toInt(val); !ok || n < 1 || n > 65535 {
-			return "포트는 1-65535 범위여야 합니다"
+			return i18n.T("The port must be in the range 1-65535")
 		}
 	case schema.TypeCIDR:
 		if _, _, err := net.ParseCIDR(text); err != nil {
-			return fmt.Sprintf("'%s'는 유효한 CIDR 형식이 아닙니다 (예: x.x.x.x/xx)", text)
+			return i18n.T("'%s' is not a valid CIDR (example: x.x.x.x/xx)", text)
 		}
 	case schema.TypeIP:
 		if net.ParseIP(text) == nil {
-			return fmt.Sprintf("'%s'는 유효한 IPv4 주소가 아닙니다", text)
+			return i18n.T("'%s' is not a valid IPv4 address", text)
 		}
 	case schema.TypeFQDN:
 		if !reFQDN.MatchString(text) {
-			return fmt.Sprintf("'%s'는 유효한 도메인 형식이 아닙니다 (예: example.com)", text)
+			return i18n.T("'%s' is not a valid domain (example: example.com)", text)
 		}
 	case schema.TypeSubdomain:
 		if !reSubdomain.MatchString(text) {
-			return fmt.Sprintf("'%s'는 유효한 서브도메인 형식이 아닙니다", text)
+			return i18n.T("'%s' is not a valid subdomain", text)
 		}
 	case schema.TypeMinor:
 		if !reMinor.MatchString(text) {
-			return fmt.Sprintf("'%s'는 형식이 올바르지 않습니다 (예: 1.36)", text)
+			return i18n.T("'%s' is not in the right format (example: 1.36)", text)
 		}
 	case schema.TypeDuration:
 		if !reDuration.MatchString(text) {
-			return fmt.Sprintf("'%s'는 형식이 올바르지 않습니다 (예: 26280h)", text)
+			return i18n.T("'%s' is not in the right format (example: 26280h)", text)
 		}
 	case schema.TypeSize:
 		if !reSize.MatchString(text) {
-			return fmt.Sprintf("'%s'는 올바른 스토리지 크기 형식이 아닙니다 (예: 512Gi)", text)
+			return i18n.T("'%s' is not a valid storage size (example: 512Gi)", text)
 		}
 	case schema.TypeDays:
 		if !reDays.MatchString(text) {
-			return fmt.Sprintf("'%s'는 형식이 올바르지 않습니다 (일 단위, 예: 180d)", text)
+			return i18n.T("'%s' is not in the right format (in days, example: 180d)", text)
 		}
 	case schema.TypeEnum:
 		for _, e := range enum {
@@ -186,7 +187,7 @@ func formatMsg(t schema.Type, enum []string, val any) string {
 				return ""
 			}
 		}
-		return strings.Join(enum, ", ") + " 중 하나를 선택해주세요"
+		return i18n.T("Choose one of %s", strings.Join(enum, ", "))
 	}
 	return ""
 }
@@ -212,15 +213,15 @@ func validateNodes(s *state.AppState) []Error {
 	for i, n := range s.Nodes {
 		prefix := fmt.Sprintf("nodes[%d]", i)
 		if n.Name == "" {
-			errs = append(errs, Error{prefix + ".name", "이름을 입력해주세요"})
+			errs = append(errs, Error{prefix + ".name", i18n.T("Enter a name")})
 		} else if seen[n.Name] {
-			errs = append(errs, Error{prefix + ".name", fmt.Sprintf("노드 이름 '%s'가 중복됩니다", n.Name)})
+			errs = append(errs, Error{prefix + ".name", i18n.T("Node name '%s' is duplicated", n.Name)})
 		} else {
 			seen[n.Name] = true
 		}
 	}
 	if len(s.Nodes) == 0 {
-		errs = append(errs, Error{"nodes", "노드를 최소 1개 이상 추가해주세요"})
+		errs = append(errs, Error{"nodes", i18n.T("Add at least one node")})
 	}
 	return errs
 }
@@ -235,12 +236,12 @@ func validateGroups(s *state.AppState) []Error {
 
 	for _, name := range s.KiCpNodes {
 		if !nodeNames[name] {
-			errs = append(errs, Error{"ki_cp_node", fmt.Sprintf("'%s'는 노드 목록에 없습니다", name)})
+			errs = append(errs, Error{"ki_cp_node", i18n.T("'%s' is not in the node list", name)})
 		}
 	}
 	for _, name := range s.K8sNodes {
 		if !nodeNames[name] {
-			errs = append(errs, Error{"k8s_node", fmt.Sprintf("'%s'는 노드 목록에 없습니다", name)})
+			errs = append(errs, Error{"k8s_node", i18n.T("'%s' is not in the node list", name)})
 		}
 	}
 	return errs
@@ -262,7 +263,7 @@ func validateNetwork(s *state.AppState) []Error {
 		}
 		if !inSubnet {
 			errs = append(errs, Error{"ki_cp_ha_mode_vip",
-				fmt.Sprintf("VIP %s가 내부 서브넷 범위 밖입니다", s.KiCpHaModeVIP)})
+				i18n.T("VIP %s is outside the internal subnets", s.KiCpHaModeVIP)})
 		}
 	}
 	return errs
@@ -281,7 +282,7 @@ func validateKubernetes(s *state.AppState) []Error {
 		}
 	}
 	if p, sv := parsed["k8s_pod_subnet"], parsed["k8s_service_subnet"]; p != nil && sv != nil && overlaps(p, sv) {
-		errs = append(errs, Error{"k8s_service_subnet", "파드 서브넷과 서비스 서브넷이 겹칩니다"})
+		errs = append(errs, Error{"k8s_service_subnet", i18n.T("The pod subnet and the service subnet overlap")})
 	}
 	for _, cidr := range s.InternalNetworkSubnets {
 		_, in, err := net.ParseCIDR(cidr)
@@ -290,7 +291,7 @@ func validateKubernetes(s *state.AppState) []Error {
 		}
 		for name, n := range parsed {
 			if overlaps(in, n) {
-				errs = append(errs, Error{name, fmt.Sprintf("내부 서브넷 %s와 겹칩니다", cidr)})
+				errs = append(errs, Error{name, i18n.T("Overlaps the internal subnet %s", cidr)})
 			}
 		}
 	}
@@ -303,31 +304,31 @@ func validateKubernetes(s *state.AppState) []Error {
 	}
 
 	if s.K8sIngressMode != 1 && s.K8sIngressMode != 2 {
-		errs = append(errs, Error{"k8s_ingress_mode", "인그레스 모드는 1 또는 2여야 합니다"})
+		errs = append(errs, Error{"k8s_ingress_mode", i18n.T("The ingress mode must be 1 or 2")})
 	}
 
 	if s.K8sIngressLBName == "" {
-		errs = append(errs, Error{"k8s_ingress_lb_name", "Ingress LB명을 입력해주세요"})
+		errs = append(errs, Error{"k8s_ingress_lb_name", i18n.T("Enter the ingress LB name")})
 	}
 
 	if s.K8sIngressVIP == "" {
-		errs = append(errs, Error{"k8s_ingress_vip", "Ingress VIP를 입력해주세요"})
+		errs = append(errs, Error{"k8s_ingress_vip", i18n.T("Enter the ingress VIP")})
 	} else if net.ParseIP(s.K8sIngressVIP) == nil {
-		errs = append(errs, Error{"k8s_ingress_vip", "유효한 IPv4 주소를 입력해주세요"})
+		errs = append(errs, Error{"k8s_ingress_vip", i18n.T("Enter a valid IPv4 address")})
 	}
 
 	if s.K8sIngressMode == 1 {
 		if s.K8sGatewayLBName == "" {
-			errs = append(errs, Error{"k8s_gateway_lb_name", "별도 IP 모드에서는 Gateway LB명을 입력해주세요"})
+			errs = append(errs, Error{"k8s_gateway_lb_name", i18n.T("Enter the gateway LB name in separate IP mode")})
 		} else if s.K8sGatewayLBName == s.K8sIngressLBName {
-			errs = append(errs, Error{"k8s_gateway_lb_name", "별도 IP 모드에서는 Ingress LB명과 Gateway LB명이 달라야 합니다"})
+			errs = append(errs, Error{"k8s_gateway_lb_name", i18n.T("In separate IP mode the ingress LB name and the gateway LB name must differ")})
 		}
 		if s.K8sGatewayVIP == "" {
-			errs = append(errs, Error{"k8s_gateway_vip", "별도 IP 모드에서는 Gateway VIP를 입력해주세요"})
+			errs = append(errs, Error{"k8s_gateway_vip", i18n.T("Enter the gateway VIP in separate IP mode")})
 		} else if net.ParseIP(s.K8sGatewayVIP) == nil {
-			errs = append(errs, Error{"k8s_gateway_vip", "유효한 IPv4 주소를 입력해주세요"})
+			errs = append(errs, Error{"k8s_gateway_vip", i18n.T("Enter a valid IPv4 address")})
 		} else if s.K8sGatewayVIP == s.K8sIngressVIP {
-			errs = append(errs, Error{"k8s_gateway_vip", "별도 IP 모드에서는 Ingress VIP와 Gateway VIP가 달라야 합니다"})
+			errs = append(errs, Error{"k8s_gateway_vip", i18n.T("In separate IP mode the ingress VIP and the gateway VIP must differ")})
 		}
 	}
 
@@ -342,12 +343,12 @@ func validateKubernetes(s *state.AppState) []Error {
 	}
 
 	if s.K8sIngressHostNetworkPort <= 0 || s.K8sIngressHostNetworkPort > 65535 {
-		errs = append(errs, Error{"k8s_ingress_host_network_port", "포트는 1-65535 범위여야 합니다"})
+		errs = append(errs, Error{"k8s_ingress_host_network_port", i18n.T("The port must be in the range 1-65535")})
 	}
 
 	// aipub_load_balancers: the k8s control plane nodes answer ARP for the VIPs
 	if len(s.K8sCpNodes) == 0 {
-		errs = append(errs, Error{"aipub_load_balancers", "VIP를 받을 마스터(k8s_cp) 노드가 없습니다"})
+		errs = append(errs, Error{"aipub_load_balancers", i18n.T("No control plane node (k8s_cp) to take the VIP")})
 	}
 
 	return errs
@@ -385,7 +386,7 @@ func Warnings(s *state.AppState) []string {
 			inside = inside || n.Contains(ip)
 		}
 		if !inside {
-			out = append(out, fmt.Sprintf("%s: VIP %s가 내부망 대역 (%s) 밖 — 의도한 구성인지 확인하세요",
+			out = append(out, i18n.T("%s: VIP %s is outside the internal network range (%s) - check that this is intended",
 				v.field, v.vip, strings.Join(s.InternalNetworkSubnets, ", ")))
 		}
 	}
@@ -401,17 +402,17 @@ func checkLBVIP(s *state.AppState, field string, vip net.IP) []Error {
 	var errs []Error
 	if s.KiCpHaMode {
 		if cp := net.ParseIP(s.KiCpHaModeVIP); cp != nil && cp.Equal(vip) {
-			errs = append(errs, Error{field, fmt.Sprintf("VIP %s가 ki cp HA VIP (ki_cp_ha_mode_vip) 와 같습니다. 둘 중 하나를 다른 IP로 바꿔주세요", vip)})
+			errs = append(errs, Error{field, i18n.T("VIP %s is the same as the ki cp HA VIP (ki_cp_ha_mode_vip). Change one of them to another IP", vip)})
 		}
 	}
 	for _, n := range s.Nodes {
 		if ip := net.ParseIP(n.AnsibleHost); ip != nil && ip.Equal(vip) {
-			errs = append(errs, Error{field, fmt.Sprintf("VIP %s가 노드 %s의 ansible_host 와 같습니다. 어느 노드도 쓰지 않는 IP로 바꿔주세요", vip, n.Name)})
+			errs = append(errs, Error{field, i18n.T("VIP %s is the same as ansible_host of node %s. Change it to an IP no node uses", vip, n.Name)})
 		}
 	}
 	for _, sub := range []struct{ name, cidr string }{{"k8s_pod_subnet", s.K8sPodSubnet}, {"k8s_service_subnet", s.K8sServiceSubnet}} {
 		if _, n, err := net.ParseCIDR(sub.cidr); err == nil && n.Contains(vip) {
-			errs = append(errs, Error{field, fmt.Sprintf("VIP %s가 %s (%s) 안입니다. 내부 서브넷의 IP로 바꾸거나 %s 를 바꿔주세요",
+			errs = append(errs, Error{field, i18n.T("VIP %s is inside %s (%s). Change it to an IP of the internal subnet or change %s",
 				vip, sub.name, sub.cidr, sub.name)})
 		}
 	}
@@ -430,13 +431,13 @@ func validateAipub(s *state.AppState) []Error {
 	// aipub label (check-base.yml)
 	if !s.AipubHaMode && s.AipubHarborLocalPVNode != "" && !s.IsAipubCpNode(s.AipubHarborLocalPVNode) {
 		errs = append(errs, Error{"aipub_harbor_local_pv_node",
-			fmt.Sprintf("'%s'는 AIPub 컨트롤 플레인 노드가 아닙니다", s.AipubHarborLocalPVNode)})
+			i18n.T("'%s' is not an AIPub control plane node", s.AipubHarborLocalPVNode)})
 	}
 
 	// The aipub label is a variable of the nodes (k8s_node_labels), chosen on the
 	// AIPub screen as a list of nodes
 	if len(s.AipubCpNodes) == 0 {
-		errs = append(errs, Error{"aipub_cp_nodes", "AIPub 컨트롤 플레인 노드를 1개 이상 선택해야 합니다 (Harbor가 그 노드에서 돕니다)"})
+		errs = append(errs, Error{"aipub_cp_nodes", i18n.T("Select at least one AIPub control plane node (Harbor runs on it)")})
 	}
 
 	// R6: aipub_cp_nodes ⊆ k8s_cp_node
@@ -447,7 +448,7 @@ func validateAipub(s *state.AppState) []Error {
 	for _, n := range s.AipubCpNodes {
 		if !k8sCpNodeSet[n] {
 			errs = append(errs, Error{"aipub_cp_nodes",
-				fmt.Sprintf("'%s'는 마스터 노드 그룹에 속하지 않습니다", n)})
+				i18n.T("'%s' is not in the k8s control plane node group", n)})
 		}
 	}
 
@@ -465,7 +466,7 @@ func monitoringCpNodes(s *state.AppState) []Error {
 	for _, n := range s.MonitoringCpNodes {
 		if !s.IsK8sCpNode(n) {
 			errs = append(errs, Error{"aipub_monitoring_cp_nodes",
-				fmt.Sprintf("'%s'는 마스터 노드 그룹에 속하지 않습니다", n)})
+				i18n.T("'%s' is not in the k8s control plane node group", n)})
 		}
 	}
 	return errs
@@ -476,7 +477,7 @@ func monitoringCpNodes(s *state.AppState) []Error {
 func Monitoring(s *state.AppState) []Error {
 	var errs []Error
 	for _, v := range schema.ByFile(schema.FileAipub) {
-		if v.Screen != "5b.모니터링" {
+		if v.Screen != "5b.monitoring" {
 			continue
 		}
 		if val, ok := schema.Value(s, v); ok {
@@ -523,11 +524,11 @@ func checkExtraArgs(v schema.Var, field string, args []state.ExtraArg) []Error {
 		f := fmt.Sprintf("%s[%d]", field, i)
 		switch {
 		case strings.HasPrefix(a.Name, "-"):
-			errs = append(errs, Error{f, fmt.Sprintf("'%s': 인자 이름은 앞의 대시(--) 없이 씁니다", a.Name)})
+			errs = append(errs, Error{f, i18n.T("'%s': write the argument name without the leading dashes (--)", a.Name)})
 		case !reArgName.MatchString(a.Name):
-			errs = append(errs, Error{f, fmt.Sprintf("'%s': 인자 이름은 소문자·숫자·대시만 씁니다", a.Name)})
+			errs = append(errs, Error{f, i18n.T("'%s': the argument name has lowercase letters, digits and dashes only", a.Name)})
 		case contains(v.Decided, a.Name):
-			errs = append(errs, Error{f, fmt.Sprintf("'%s' 는 설치기가 직접 정하는 인자라 넣을 수 없습니다", a.Name)})
+			errs = append(errs, Error{f, i18n.T("'%s' is an argument the installer sets itself, so it cannot be added", a.Name)})
 		}
 	}
 	return errs
@@ -540,20 +541,20 @@ func checkExtraVolumes(field string, vols []state.ExtraVolume) []Error {
 		f := fmt.Sprintf("%s[%d]", field, i)
 		switch {
 		case !reDNSLabel.MatchString(vol.Name):
-			errs = append(errs, Error{f, fmt.Sprintf("'%s': 볼륨 이름은 DNS-1123 레이블입니다 (소문자·숫자·대시, 63자 이하)", vol.Name)})
+			errs = append(errs, Error{f, i18n.T("'%s': a volume name is a DNS-1123 label (lowercase letters, digits, dashes, at most 63 characters)", vol.Name)})
 		case contains(kubeadmVolumeNames, vol.Name):
-			errs = append(errs, Error{f, fmt.Sprintf("'%s' 는 kubeadm 이 쓰는 볼륨 이름이라 쓸 수 없습니다", vol.Name)})
+			errs = append(errs, Error{f, i18n.T("'%s' is a volume name kubeadm uses and cannot be used", vol.Name)})
 		case seen[vol.Name]:
-			errs = append(errs, Error{f, fmt.Sprintf("볼륨 이름 '%s' 가 중복됩니다", vol.Name)})
+			errs = append(errs, Error{f, i18n.T("Volume name '%s' is duplicated", vol.Name)})
 		}
 		seen[vol.Name] = true
 		for _, p := range []struct{ name, path string }{{"hostPath", vol.HostPath}, {"mountPath", vol.MountPath}} {
 			if !path.IsAbs(p.path) {
-				errs = append(errs, Error{f + "." + p.name, fmt.Sprintf("'%s': 절대 경로여야 합니다", p.path)})
+				errs = append(errs, Error{f + "." + p.name, i18n.T("'%s': must be an absolute path", p.path)})
 			}
 		}
 		if vol.PathType != "" && !contains(volumePathTypes, vol.PathType) {
-			errs = append(errs, Error{f + ".pathType", strings.Join(volumePathTypes, ", ") + " 중 하나여야 합니다"})
+			errs = append(errs, Error{f + ".pathType", i18n.T("Must be one of %s", strings.Join(volumePathTypes, ", "))})
 		}
 	}
 	return errs
@@ -566,25 +567,25 @@ func checkCpExtraFiles(field string, files []state.CpExtraFile) []Error {
 		f := fmt.Sprintf("%s[%d]", field, i)
 		switch {
 		case file.Src == "" || path.IsAbs(file.Src):
-			errs = append(errs, Error{f + ".src", "ansible/files 아래의 상대 경로여야 합니다"})
+			errs = append(errs, Error{f + ".src", i18n.T("Must be a relative path under ansible/files")})
 		case contains(strings.Split(file.Src, "/"), ".."):
-			errs = append(errs, Error{f + ".src", "ansible/files 밖을 가리킬 수 없습니다 (..)"})
+			errs = append(errs, Error{f + ".src", i18n.T("Cannot point outside ansible/files (..)")})
 		}
 		switch {
 		case !path.IsAbs(file.Dest):
-			errs = append(errs, Error{f + ".dest", fmt.Sprintf("'%s': 절대 경로여야 합니다", file.Dest)})
+			errs = append(errs, Error{f + ".dest", i18n.T("'%s': must be an absolute path", file.Dest)})
 		case seen[file.Dest]:
-			errs = append(errs, Error{f + ".dest", fmt.Sprintf("'%s' 에 두 파일을 둘 수 없습니다", file.Dest)})
+			errs = append(errs, Error{f + ".dest", i18n.T("Two files cannot go to '%s'", file.Dest)})
 		default:
 			for _, owned := range cpOwnedPaths {
 				if within(file.Dest, owned) {
-					errs = append(errs, Error{f + ".dest", fmt.Sprintf("'%s' 는 kubeadm 이나 설치기가 관리하는 %s 안입니다", file.Dest, owned)})
+					errs = append(errs, Error{f + ".dest", i18n.T("'%s' is inside %s, which kubeadm or the installer manages", file.Dest, owned)})
 				}
 			}
 		}
 		seen[file.Dest] = true
 		if !reFileMode.MatchString(file.Mode) {
-			errs = append(errs, Error{f + ".mode", fmt.Sprintf("'%s': 0644 같은 네 자리 8진수여야 합니다", file.Mode)})
+			errs = append(errs, Error{f + ".mode", i18n.T("'%s': must be a four-digit octal number like 0644", file.Mode)})
 		}
 	}
 	return errs
@@ -613,7 +614,7 @@ func validateControlPlane(s *state.AppState) []Error {
 	var errs []Error
 	if s.ControlPlane.Webhook && !s.AipubEnabled {
 		errs = append(errs, Error{"control_plane.webhook",
-			"AIPub 인증 웹훅은 AIPub 을 설치할 때만 켤 수 있습니다 (CA 를 setup-cert 가 만듭니다)"})
+			i18n.T("The AIPub authentication webhook can be turned on only when AIPub is installed (setup-cert makes the CA)")})
 	}
 	errs = append(errs, checkWebhookURL(&s.ControlPlane)...)
 	if s.AppliedControlPlane().JWKS {
@@ -655,11 +656,11 @@ func checkIssuerURL(raw string, required bool) []Error {
 		if !required {
 			return nil
 		}
-		return []Error{{field, "AIPub 인증 (JWKS) 을 켰으면 issuer URL 을 입력하거나 aipub_ingress_zone 을 정해주세요"}}
+		return []Error{{field, i18n.T("With AIPub authentication (JWKS) on, enter the issuer URL or set aipub_ingress_zone")}}
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return []Error{{field, fmt.Sprintf("'%s': JWKS issuer 는 https://호스트[:포트][/경로] 형식이어야 합니다 (자격 증명·쿼리 없이)", raw)}}
+		return []Error{{field, i18n.T("'%s': the JWKS issuer must be https://host[:port][/path] (no credentials or query)", raw)}}
 	}
 	return nil
 }
@@ -672,11 +673,11 @@ func checkWebhookURL(cp *state.ControlPlane) []Error {
 	const field = "control_plane.webhook_url"
 	raw := strings.TrimSpace(cp.WebhookURL)
 	if raw == "" {
-		return append(errs, Error{field, "AIPub 인증 웹훅을 켰으면 토큰 검증 서버 URL 을 입력해주세요"})
+		return append(errs, Error{field, i18n.T("With the AIPub authentication webhook on, enter the token review server URL")})
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-		errs = append(errs, Error{field, fmt.Sprintf("'%s': https://호스트[:포트]/경로 형식이어야 합니다 (자격 증명 없이)", raw)})
+		errs = append(errs, Error{field, i18n.T("'%s': must be https://host[:port]/path (no credentials)", raw)})
 	}
 	return errs
 }

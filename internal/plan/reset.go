@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 )
 
 // The words of the node probe of PrepareReset.
@@ -61,13 +63,13 @@ func PrepareReset(ctx context.Context, o Options, shown *RunState, run RunFunc) 
 	}
 	if now == nil || shown == nil || !now.Started.Equal(shown.Started) || now.Outcome != OutcomeFailed ||
 		failedStep(now) != failedStep(shown) || !ResetHelps(now.Existing, failedStep(now)) {
-		return fail("실행 기록이 화면에 보인 것과 다릅니다 (그 사이 다른 실행이 있었습니다). 계획 화면으로 나갔다가 다시 확인하세요")
+		return fail(i18n.T("The record of the run is not what the screen showed (another run happened since). Go back to the plan screen and look again"))
 	}
 	if o.Detect == nil {
-		return fail("이 제어 노드에 클러스터 기록이 있는지 확인할 수 없습니다")
+		return fail(i18n.T("Cannot tell whether this control node has a cluster record"))
 	}
 	if site := o.Detect(); site.Existing || site.Unknown {
-		return fail("새 사이트가 아닙니다 — " + site.Why)
+		return fail(i18n.T("Not a new site — %s", site.Why))
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -86,7 +88,7 @@ func PrepareReset(ctx context.Context, o Options, shown *RunState, run RunFunc) 
 	if len(res) == 0 || err != nil {
 		// ansible ends non-zero when any node failed or could not be reached:
 		// then some node is not in what it printed, or is not clean
-		return fail("노드를 확인하지 못했습니다: " + couldNotRun(out, err))
+		return fail(i18n.T("Could not check the nodes: %s", couldNotRun(out, err)))
 	}
 	var built, unknown []string
 	for node, a := range res {
@@ -101,11 +103,11 @@ func PrepareReset(ctx context.Context, o Options, shown *RunState, run RunFunc) 
 	sort.Strings(unknown)
 	switch {
 	case len(built) > 0:
-		return fail("k8s-installer 가 만든 클러스터의 노드입니다 (" + ClusterRecord + " 있음): " + strings.Join(built, " ") +
-			". 다른 제어 노드에서 만든 클러스터로 보입니다. 초기화하지 않습니다")
+		return fail(i18n.T("Nodes of a cluster k8s-installer built (%s is there): %s. "+
+			"It looks like a cluster built from another control node. Not resetting", ClusterRecord, strings.Join(built, " ")))
 	case len(unknown) > 0:
-		return fail("확인하지 못한 노드가 있습니다: " + strings.Join(unknown, " ") +
-			". 모든 노드에 클러스터 기록이 없는 것을 확인해야 초기화합니다 (접속을 고치거나, 죽은 노드는 inventory 의 broken_node 로)")
+		return fail(i18n.T("Nodes not checked: %s. The reset needs every node shown to have no cluster record "+
+			"(fix the connection, or put dead nodes in broken_node of the inventory)", strings.Join(unknown, " ")))
 	}
 	return func() { lock.Close() }, nil
 }

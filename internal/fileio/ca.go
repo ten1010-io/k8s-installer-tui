@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -77,24 +78,24 @@ func ParseCA(data []byte) (string, error) {
 			break
 		}
 		if b.Type != "CERTIFICATE" {
-			return "", fmt.Errorf("PEM 블록 %q 가 있습니다 (CA 인증서만 넣습니다)", b.Type)
+			return "", errors.New(i18n.T("the file has a PEM block %q (only CA certificates go in)", b.Type))
 		}
 		if _, err := x509.ParseCertificate(b.Bytes); err != nil {
-			return "", fmt.Errorf("인증서를 읽지 못했습니다: %w", err)
+			return "", fmt.Errorf("%s: %w", i18n.T("could not read the certificate"), err)
 		}
 		blocks = append(blocks, b)
 	}
 	if len(blocks) == 0 {
-		return "", errors.New("PEM 인증서가 없습니다")
+		return "", errors.New(i18n.T("there is no PEM certificate"))
 	}
 	if strings.Contains(string(rest), "-----BEGIN") {
-		return "", errors.New("PEM 블록을 끝까지 읽지 못했습니다")
+		return "", errors.New(i18n.T("a PEM block could not be read to its end"))
 	}
 	// pem.Decode passes over a block it cannot read (an END line of another
 	// type, a broken line) and goes on to the next: such a block is still in the
 	// text, and it may be a key. Refused, as anything not a certificate is
 	if n := strings.Count(text, "-----BEGIN "); n != len(blocks) {
-		return "", fmt.Errorf("PEM 블록 %d 개 중 %d 개만 인증서로 읽었습니다 (깨진 블록이 있습니다)", n, len(blocks))
+		return "", errors.New(i18n.T("only %[2]d of %[1]d PEM blocks were read as certificates (a block is broken)", n, len(blocks)))
 	}
 	trimmed := strings.TrimSpace(text)
 	var again strings.Builder

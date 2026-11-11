@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 )
 
 // CheckResult is what a check found: OK, and one line per thing it looked at.
@@ -58,10 +60,10 @@ func CheckInstalled(o Options) CheckResult {
 	data, err := os.ReadFile(o.Root + "/release")
 	if err != nil {
 		return CheckResult{Lines: []string{
-			o.Root + "/release 가 없습니다. 패키지 디렉터리에서 sudo ./setup.sh 를 먼저 실행하세요",
+			i18n.T("%s/release is not there. Run sudo ./setup.sh in the package directory first", o.Root),
 		}}
 	}
-	return CheckResult{OK: true, Lines: []string{"설치된 릴리스 " + strings.TrimSpace(string(data))}}
+	return CheckResult{OK: true, Lines: []string{i18n.T("Installed release %s", strings.TrimSpace(string(data)))}}
 }
 
 // CheckSSH is P2: every node of the inventory is reached as ansible_user and runs
@@ -92,10 +94,10 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 		case a.ok():
 			results[node] = "ok"
 		case a.Status == "UNREACHABLE":
-			results[node] = "접속 안 됨 (SSH 키, 주소, 포트 확인)"
+			results[node] = i18n.T("Unreachable (check the SSH key, address, port)")
 			unreachable = append(unreachable, node)
 		default:
-			results[node] = "sudo 비밀번호 필요 또는 실패 (NOPASSWD 확인)"
+			results[node] = i18n.T("sudo needs a password or failed (check NOPASSWD)")
 		}
 	}
 	var probed []NodeSSH
@@ -105,13 +107,13 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 		for _, p := range probed {
 			label := p.Label()
 			if label == "" {
-				label = "ssh 로는 준비됨" // ansible alone fails: its note says where to look
+				label = i18n.T("ready over ssh") // ansible alone fails: its note says where to look
 			}
-			results[p.Node.Name] = "접속 안 됨 — " + label + ": " + p.Note()
+			results[p.Node.Name] = i18n.T("Unreachable — %s: %s", label, p.Note())
 		}
 	}
 	if len(results) == 0 {
-		msg := "ansible을 실행하지 못했습니다"
+		msg := i18n.T("ansible could not be run")
 		if err != nil {
 			msg += ": " + err.Error()
 		}
@@ -137,7 +139,7 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 		r.Lines = append(r.Lines, n+": "+results[n])
 	}
 	if len(good) > 0 {
-		r.Lines = append([]string{"정상: " + strings.Join(good, " ")}, r.Lines...)
+		r.Lines = append([]string{i18n.T("OK: %s", strings.Join(good, " "))}, r.Lines...)
 		// Probe firewall on reachable nodes: k8s needs ports like 6443, 2379, 10250 open
 		fwScript := fmt.Sprintf("source %s && ansible all -i inventory.yml -o -m raw -a 'systemctl is-active firewalld 2>/dev/null || systemctl is-active ufw 2>/dev/null || echo inactive'",
 			shellQuote(o.Root+"/venv/bin/activate"))
@@ -156,7 +158,7 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 		if len(fwActive) > 0 {
 			sort.Strings(fwActive)
 			r.Warn = true
-			r.Lines = append(r.Lines, "방화벽(firewalld/ufw) 활성 노드: "+strings.Join(fwActive, " ")+" (포트 차단 방지를 위해 비활성화 권장)")
+			r.Lines = append(r.Lines, i18n.T("Nodes with a firewall active (firewalld/ufw): %s (turning it off is advised, so that no port is blocked)", strings.Join(fwActive, " ")))
 		}
 	}
 	r.Lines = append(r.Lines, warnings...)
@@ -169,7 +171,7 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 func probeUnreachable(ctx context.Context, o Options, run RunFunc, names []string) ([]NodeSSH, []string) {
 	lctx, lcancel := context.WithTimeout(ctx, time.Minute)
 	defer lcancel()
-	all, warnings, err := ListSSHNodes(lctx, o, run, "inventory.yml")
+	all, warnings, err := listSSHNodes(lctx, o, run, "inventory.yml")
 	if err != nil {
 		return nil, nil
 	}
@@ -182,11 +184,7 @@ func probeUnreachable(ctx context.Context, o Options, run RunFunc, names []strin
 	for _, n := range all {
 		if want[n.Name] {
 			nodes = append(nodes, n)
-		}
-	}
-	for _, w := range warnings {
-		for _, n := range nodes {
-			if strings.HasPrefix(w, "노드 "+n.Name+" ") {
+			if w, ok := warnings[n.Name]; ok {
 				used = append(used, w)
 			}
 		}

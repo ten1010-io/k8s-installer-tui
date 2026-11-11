@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
@@ -15,11 +16,11 @@ import (
 // balancers that were here belong to AIPub now (S6AipubLB).
 //
 // Focus layout:
-//   0  : k8s 마이너 버전
-//   1  : 파드 서브넷
-//   2  : 서비스 서브넷
-//   3  : 인증서 유효기간
-//   4  : nav slot (←/→: 이전/다음)
+//   0  : k8s minor version
+//   1  : pod subnet
+//   2  : service subnet
+//   3  : certificate validity
+//   4  : nav slot (←/→: back/next)
 
 const (
 	s4FocusMinor = iota
@@ -59,7 +60,7 @@ func NewS4Kubernetes() *S4Kubernetes {
 	}
 }
 
-func (s *S4Kubernetes) Title() string { return "Kubernetes 설정" }
+func (s *S4Kubernetes) Title() string { return i18n.T("Kubernetes settings") }
 func (s *S4Kubernetes) SetSize(w, h int) {
 	s.width = w
 	s.height = h
@@ -88,18 +89,18 @@ func (s *S4Kubernetes) SyncToState(st *state.AppState) {
 
 func (s *S4Kubernetes) Validate() []string {
 	if !reMinorVersion.MatchString(strings.TrimSpace(s.minorVersion.Value())) {
-		return []string{"쿠버네티스 마이너 버전 형식이 올바르지 않습니다 (예: 1.36)"}
+		return []string{i18n.T("Kubernetes minor version is not valid (e.g. 1.36)")}
 	}
 	for _, f := range []struct{ name, val string }{
-		{"파드 서브넷", s.podSubnet.Value()},
-		{"서비스 서브넷", s.serviceSubnet.Value()},
+		{"Pod subnet", s.podSubnet.Value()},
+		{"Service subnet", s.serviceSubnet.Value()},
 	} {
 		if _, _, err := net.ParseCIDR(strings.TrimSpace(f.val)); err != nil {
-			return []string{f.name + "이 CIDR 형식이 아닙니다 (예: 10.244.0.0/16)"}
+			return []string{i18n.T("%s is not in CIDR form (e.g. 10.244.0.0/16)", i18n.T(f.name))}
 		}
 	}
 	if strings.TrimSpace(s.certValidity.Value()) == "" {
-		return []string{"인증서 유효기간을 입력해주세요 (예: 26280h)"}
+		return []string{i18n.T("Enter the certificate validity (e.g. 26280h)")}
 	}
 	return nil
 }
@@ -129,7 +130,7 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if s.focusIdx < s4FocusMax {
 				s.focusIdx++
 				if s.focusIdx == s4FocusNav {
-					s.navIdx = 1 // 다음
+					s.navIdx = 1 // next
 				}
 				s.syncFocus()
 			}
@@ -165,31 +166,31 @@ func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S4Kubernetes) View() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("Kubernetes 설정") + "\n")
-	b.WriteString(styles.StyleMuted.Render("k8s-installer가 클러스터를 만들 때 쓰는 값입니다 (group_vars/all/vars.yml).") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Kubernetes settings")) + "\n")
+	b.WriteString(styles.StyleMuted.Render(i18n.T("Values k8s-installer uses to build the cluster (group_vars/all/vars.yml).")) + "\n\n")
 
 	f := s.focusIdx
 	// the focused part stays in sight on a low screen
 	fs := focusSpan{b: &b}
 	fs.mark(f == s4FocusMinor)
-	b.WriteString(RenderSectionHeader("마이너 버전", f == s4FocusMinor) + "  " + s.minorVersion.View() +
+	b.WriteString(RenderSectionHeader(i18n.T("Minor version"), f == s4FocusMinor) + "  " + s.minorVersion.View() +
 		styles.StyleMuted.Render("  "+short("k8s_minor_version")) + "\n\n")
 	fs.mark(f == s4FocusPodSubnet)
-	b.WriteString(RenderSectionHeader("파드 서브넷", f == s4FocusPodSubnet) + "  " + s.podSubnet.View() + "\n")
+	b.WriteString(RenderSectionHeader(i18n.T("Pod subnet"), f == s4FocusPodSubnet) + "  " + s.podSubnet.View() + "\n")
 	fs.mark(f == s4FocusServiceSubnet)
-	b.WriteString(RenderSectionHeader("서비스 서브넷", f == s4FocusServiceSubnet) + "  " + s.serviceSubnet.View() + "\n")
-	b.WriteString(styles.StyleMuted.Render("    노드·서비스가 쓰는 망과 겹치면 안 됩니다. 클러스터를 만든 뒤에는 바꿀 수 없습니다") + "\n\n")
+	b.WriteString(RenderSectionHeader(i18n.T("Service subnet"), f == s4FocusServiceSubnet) + "  " + s.serviceSubnet.View() + "\n")
+	b.WriteString(styles.StyleMuted.Render("    "+i18n.T("Must not overlap the networks used by nodes and services. Cannot be changed once the cluster is created")) + "\n\n")
 	fs.mark(f == s4FocusCert)
-	b.WriteString(RenderSectionHeader("인증서 유효기간", f == s4FocusCert) + "  " + s.certValidity.View() +
-		styles.StyleMuted.Render("  (예: 26280h = 3년)") + "\n\n")
+	b.WriteString(RenderSectionHeader(i18n.T("Certificate validity"), f == s4FocusCert) + "  " + s.certValidity.View() +
+		styles.StyleMuted.Render("  "+i18n.T("(e.g. 26280h = 3 years)")) + "\n\n")
 
 	fs.mark(false)
-	b.WriteString(styles.StyleMuted.Render(short("k8s_kube_proxy_enabled")+". 5단계에서 정해집니다") + "\n")
+	b.WriteString(styles.StyleMuted.Render(i18n.T("%s. Set in step 5", short("k8s_kube_proxy_enabled"))) + "\n")
 
 	prevFocused := f == s4FocusNav && s.navIdx == 0
 	nextFocused := f == s4FocusNav && s.navIdx == 1
 	b.WriteString("\n")
 	fs.mark(f == s4FocusNav)
-	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString(RenderNavButtons(i18n.T("Back"), i18n.T("Next"), prevFocused, nextFocused, s.width))
 	return fs.fit(s.width, s.height)
 }

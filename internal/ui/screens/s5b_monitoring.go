@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 	"github.com/ten1010-io/k8s-installer-tui/internal/validator"
@@ -19,13 +20,13 @@ import (
 // changed.
 //
 // Focus layout:
-//   0 : OpenSearch 볼륨 크기
-//   1 : 로그 보존 기간
-//   2 : VictoriaMetrics 볼륨 크기
-//   3 : 메트릭 보존 기간
-//   4 : 라이트사이징 (toggle)
-//   5 : monitoring-api 레플리카 수
-//   6 : 노드 (checkboxes; none checked: every k8s control plane node)
+//   0 : OpenSearch volume size
+//   1 : log retention
+//   2 : VictoriaMetrics volume size
+//   3 : metrics retention
+//   4 : rightsizing (toggle)
+//   5 : monitoring-api replicas
+//   6 : nodes (checkboxes; none checked: every k8s control plane node)
 //   7 : nav slot
 
 const (
@@ -74,7 +75,7 @@ func NewS5bMonitoring() *S5bMonitoring {
 	}
 }
 
-func (s *S5bMonitoring) Title() string { return "모니터링 설정" }
+func (s *S5bMonitoring) Title() string { return i18n.T("Monitoring settings") }
 func (s *S5bMonitoring) SetSize(w, h int) {
 	s.width = w
 	s.height = h
@@ -194,7 +195,7 @@ func (s *S5bMonitoring) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if s.focusIdx < s5bFocusMax {
 				s.focusIdx++
 				if s.focusIdx == s5bFocusNav {
-					s.navIdx = 1 // 다음
+					s.navIdx = 1 // next
 				}
 				s.nodeCursor = 0
 				s.syncFocus()
@@ -233,8 +234,8 @@ func (s *S5bMonitoring) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S5bMonitoring) View() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("모니터링 설정") + "\n")
-	b.WriteString(styles.StyleMuted.Render("기본값은 aipub-installer 의 것이고, 바꾼 값만 files/aipub/vars.yml 에 씁니다") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Monitoring settings")) + "\n")
+	b.WriteString(styles.StyleMuted.Render(i18n.T("Defaults are those of aipub-installer; only changed values are written to files/aipub/vars.yml")) + "\n\n")
 
 	f := s.focusIdx
 	// the focused part stays in sight on a low screen
@@ -244,28 +245,28 @@ func (s *S5bMonitoring) View() string {
 		b.WriteString(RenderSectionHeader(label, f == idx) + "  " + in.View() +
 			styles.StyleMuted.Render("  "+short(key)) + "\n")
 	}
-	b.WriteString(styles.StylePrimary.Render("OpenSearch (로그)") + "\n")
-	row("볼륨 크기", s5bFocusOpensearchSize, s.opensearchSize, "aipub_monitoring_opensearch_storage_size")
-	row("로그 보존 기간", s5bFocusLogRetention, s.logRetention, "aipub_monitoring_opensearch_log_retention")
+	b.WriteString(styles.StylePrimary.Render(i18n.T("OpenSearch (logs)")) + "\n")
+	row(i18n.T("Volume size"), s5bFocusOpensearchSize, s.opensearchSize, "aipub_monitoring_opensearch_storage_size")
+	row(i18n.T("Log retention"), s5bFocusLogRetention, s.logRetention, "aipub_monitoring_opensearch_log_retention")
 	fs.mark(false)
-	b.WriteString("\n" + styles.StylePrimary.Render("VictoriaMetrics (메트릭)") + "\n")
-	row("볼륨 크기", s5bFocusMetricsSize, s.metricsSize, "aipub_monitoring_metrics_storage_size")
-	row("메트릭 보존 기간", s5bFocusMetricsRetention, s.metricsRetention, "aipub_monitoring_metrics_retention_period")
+	b.WriteString("\n" + styles.StylePrimary.Render(i18n.T("VictoriaMetrics (metrics)")) + "\n")
+	row(i18n.T("Volume size"), s5bFocusMetricsSize, s.metricsSize, "aipub_monitoring_metrics_storage_size")
+	row(i18n.T("Metrics retention"), s5bFocusMetricsRetention, s.metricsRetention, "aipub_monitoring_metrics_retention_period")
 
 	fs.mark(false)
-	b.WriteString("\n" + styles.StylePrimary.Render("그 밖에") + "\n")
-	rs := styles.RadioOff() + " 끔"
+	b.WriteString("\n" + styles.StylePrimary.Render(i18n.T("Other")) + "\n")
+	rs := styles.RadioOff() + " " + i18n.T("Off")
 	if s.rightsizing {
-		rs = styles.RadioOn() + " 켬"
+		rs = styles.RadioOn() + " " + i18n.T("On")
 	}
 	fs.mark(f == s5bFocusRightsizing)
-	b.WriteString(RenderSectionHeader("라이트사이징", f == s5bFocusRightsizing) + "  " + rs +
+	b.WriteString(RenderSectionHeader(i18n.T("Rightsizing"), f == s5bFocusRightsizing) + "  " + rs +
 		styles.StyleMuted.Render("  "+short("aipub_monitoring_rightsizing_enabled")) + "\n")
-	row("API 레플리카 수", s5bFocusApiReplicas, s.apiReplicas, "aipub_monitoring_api_replicas")
+	row(i18n.T("API replicas"), s5bFocusApiReplicas, s.apiReplicas, "aipub_monitoring_api_replicas")
 
 	fs.mark(f == s5bFocusNodes)
-	b.WriteString(RenderSectionHeader("OpenSearch 노드", f == s5bFocusNodes) +
-		styles.StyleMuted.Render("  아무것도 고르지 않으면 k8s 컨트롤 플레인 노드 전부") + "\n")
+	b.WriteString(RenderSectionHeader(i18n.T("OpenSearch nodes"), f == s5bFocusNodes) +
+		styles.StyleMuted.Render("  "+i18n.T("none chosen means all k8s control plane nodes")) + "\n")
 	for i, n := range s.nodeNames {
 		mark := styles.CheckOff()
 		if s.nodeChecks[i] {
@@ -274,13 +275,13 @@ func (s *S5bMonitoring) View() string {
 		b.WriteString(RenderRow(fmt.Sprintf("    %s %s", mark, n), f == s5bFocusNodes && s.nodeCursor == i, s.width) + "\n")
 	}
 	if len(s.nodeNames) == 0 {
-		b.WriteString(styles.StyleMuted.Render("    (2단계에서 마스터 노드 지정 후 표시)") + "\n")
+		b.WriteString(styles.StyleMuted.Render("    "+i18n.T("(shown after the CP nodes are set in step 2)")) + "\n")
 	}
 
 	prevFocused := f == s5bFocusNav && s.navIdx == 0
 	nextFocused := f == s5bFocusNav && s.navIdx == 1
 	b.WriteString("\n")
 	fs.mark(f == s5bFocusNav)
-	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString(RenderNavButtons(i18n.T("Back"), i18n.T("Next"), prevFocused, nextFocused, s.width))
 	return fs.fit(s.width, s.height)
 }

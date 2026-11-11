@@ -1,9 +1,9 @@
 package schema
 
 import (
-	"fmt"
 	"reflect"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -29,11 +29,11 @@ func (c Change) Message() string {
 	if c.Host != "" {
 		key += " (" + c.Host + ")"
 	}
-	what := " 는 설치 뒤 바꿀 수 없습니다"
+	format := "%s cannot be changed after the install (current file: %s → new value: %s)"
 	if c.Var.VarClass == ClassNodeRebuild {
-		what = " 는 바꾸면 노드를 다시 만듭니다"
+		format = "%s rebuilds the node when changed (current file: %s → new value: %s)"
 	}
-	return fmt.Sprintf("%s%s (현재 파일: %s → 새 값: %s)", key, what, c.Old, c.New)
+	return i18n.T(format, key, c.Old, c.New)
 }
 
 // FixedChanges lists the variables that can not be changed on an existing

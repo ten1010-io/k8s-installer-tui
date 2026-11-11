@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -162,56 +163,56 @@ func Build(s *state.AppState, o Options) []Step {
 
 func build(s *state.AppState, o Options) []Step {
 	steps := []Step{
-		{ID: "P1", Title: "setup.sh 완료", Kind: Check, Sees: "setup.sh 가 설치 디렉터리에 남긴 release 파일이 있는지",
-			Note: "번들을 풀고 " + o.Root + " 에 설치하는 단계. sudo가 필요해 직접 실행합니다"},
-		{ID: "P2", Title: "SSH·sudo 접속", Kind: Check, Sees: "모든 노드에 ansible_user 로 접속해 sudo -n true 가 통과하는지",
-			Note: "configure-control-node-ssh.sh 가 만든 키를 모든 노드에 등록한 뒤 (설치 화면 k·p, 또는 --send-ssh-key), 모든 노드에 비밀번호 없이 접속·sudo. " +
-				"키 상태만 보려면 --check-ssh"},
+		{ID: "P1", Title: i18n.T("setup.sh done"), Kind: Check, Sees: i18n.T("whether the release file setup.sh leaves in the install directory is there"),
+			Note: i18n.T("Unpacks the bundle and installs it in %s. It needs sudo, so you run it yourself", o.Root)},
+		{ID: "P2", Title: i18n.T("SSH and sudo access"), Kind: Check, Sees: i18n.T("whether every node lets ansible_user in and passes sudo -n true"),
+			Note: i18n.T("Once the key configure-control-node-ssh.sh made is on every node (k or p on the install screen, or --send-ssh-key), " +
+				"every node lets you in and runs sudo without a password. For the state of the key alone, --check-ssh")},
 	}
 	if o.Existing {
 		// read only, and only offered: a new site has no apiserver to look at
-		steps = append(steps, Step{ID: "P3", Title: "apiserver 수동 설정 확인", Kind: Check,
-			Sees: "첫 컨트롤 플레인 노드의 kube-apiserver.yaml 에 손으로 넣은 설정이 켜진 프리셋과 맞는지 (읽기만)",
-			Note: "첫 k8s 컨트롤 플레인 노드의 " + APIServerManifest + " 를 읽기만 함 (slurp). 손으로 넣은 감사 로그·runtime-config·" +
-				"인증 플래그가 켜진 프리셋과 맞는지. 감지된 것을 끄고 update-cluster 하면 그 기능이 사라짐"})
+		steps = append(steps, Step{ID: "P3", Title: i18n.T("apiserver settings made by hand"), Kind: Check,
+			Sees: i18n.T("whether what was put by hand in kube-apiserver.yaml of the first control plane node matches the presets turned on (read only)"),
+			Note: i18n.T("Reads %s of the first k8s control plane node, read only (slurp): whether the audit log, runtime-config and "+
+				"authentication flags put in by hand match the presets turned on. A feature found and turned off is gone after update-cluster", APIServerManifest)})
 	}
 	if HelmfileChosen(s) {
 		// only offered when it matters, like P3
 		steps = append(steps, Step{ID: "P4", Title: "aipub-bin", Kind: Check,
-			Sees: "패키지가 helmfile·kustomize 를 실었는지 (aipub-package.json 의 aipub_bin)",
-			Note: "배포 도구가 helmfile: 패키지가 helmfile·kustomize 를 실었는지 (" + PackageFile + " 의 aipub_bin). " +
-				"없으면 사이트가 노드에 직접 두고 경로를 변수로 지정해야 함"})
+			Sees: i18n.T("whether the package carries helmfile and kustomize (aipub_bin of aipub-package.json)"),
+			Note: i18n.T("Deploy tool helmfile: whether the package carries helmfile and kustomize (aipub_bin of %s). "+
+				"Without them, the site has to put them on the nodes itself and set their paths as variables", PackageFile)})
 	}
 	if s.AipubEnabled {
-		steps = append(steps, Step{ID: "P5", Title: "카탈로그", Kind: Check,
-			Sees: "카탈로그에 aipub 모듈이 쓰는 이미지가 이름으로 모두 있는지",
-			Note: "aipub 플레이북은 모듈이 쓰는 이미지가 카탈로그 (ansible/aipub_vars/catalog.yml) 에 이름으로 없으면 실행 전에 거부합니다. " +
-				"같은 규칙으로 미리 확인 (카탈로그 파일이 없으면 건너뜀)"})
+		steps = append(steps, Step{ID: "P5", Title: i18n.T("Catalog"), Kind: Check,
+			Sees: i18n.T("whether the catalog has every image the aipub modules use, by name"),
+			Note: i18n.T("The aipub playbooks refuse to run when an image their module uses is not in the catalog (ansible/aipub_vars/catalog.yml) by name. " +
+				"Checked first by the same rules (skipped when there is no catalog file)")})
 	}
-	steps = append(steps, Step{ID: "P6", Title: "become 셸", Kind: Check, Var: "ansible_user",
-		Sees: "모든 노드에서 sudo -n /bin/sh -c true 가 통과하는지 (막히면 dash 로 우회할 수 있는지)",
-		Note: "sudoers 가 /bin/sh 를 막으면 Ansible become 이 'Shared connection closed' 로 실패합니다. 모든 노드에서 " +
-			"sudo -n /bin/sh -c true 를 확인 (읽기만). 막혔고 dash 가 있으면 계획의 ansible-playbook 에 " +
-			"-e ansible_shell_executable=<dash> 를 붙입니다"})
+	steps = append(steps, Step{ID: "P6", Title: i18n.T("become shell"), Kind: Check, Var: "ansible_user",
+		Sees: i18n.T("whether sudo -n /bin/sh -c true passes on every node (and when refused, whether dash gets around it)"),
+		Note: i18n.T("When sudoers refuses /bin/sh, Ansible become fails with 'Shared connection closed'. Checks " +
+			"sudo -n /bin/sh -c true on every node (read only). When it is refused and dash is there, the ansible-playbook lines of the plan get " +
+			"-e ansible_shell_executable=<dash>")})
 	if s.AipubEnabled {
 		steps = append(steps, Step{ID: "P7", Title: "DNS", Kind: Check, Var: "aipub_ingress_zone",
-			Sees: "AIPub·Harbor 호스트가 인그레스 VIP 로 풀리는지 (getent hosts)",
-			Note: "AIPub·Harbor 호스트 (<접두사>.<aipub_ingress_zone>) 가 인그레스 VIP " + s.K8sIngressVIP + " 로 풀리는지 " +
-				"control node 에서 getent hosts 로 확인. DNS 는 설치 뒤에 등록하는 경우가 많아 경고만"})
+			Sees: i18n.T("whether the AIPub and Harbor hosts resolve to the ingress VIP (getent hosts)"),
+			Note: i18n.T("Whether the AIPub and Harbor hosts (<prefix>.<aipub_ingress_zone>) resolve to the ingress VIP %s, "+
+				"by getent hosts on the control node. DNS is often registered after the install, so only a warning", s.K8sIngressVIP)})
 		steps = append(steps, Step{ID: "P8", Title: "StorageClass", Kind: Check, Var: "aipub_ha_mode_storage_class",
-			Sees: "기존 클러스터에 StorageClass " + s.AipubHaModeStorageClass + " 가 있는지 (kubectl, 읽기만)",
-			Note: "기존 사이트: 첫 컨트롤 플레인 노드에서 kubectl get storageclass " + s.AipubHaModeStorageClass +
-				" 로 있는지 읽기만 확인 (없으면 경고). 새 사이트는 클러스터를 만든 뒤에 만들어져 건너뜀"})
+			Sees: i18n.T("whether StorageClass %s is in the existing cluster (kubectl, read only)", s.AipubHaModeStorageClass),
+			Note: i18n.T("Existing site: kubectl get storageclass %s on the first control plane node, read only "+
+				"(a warning when it is missing). Skipped on a new site, where the class is made after the cluster", s.AipubHaModeStorageClass)})
 	}
 	k1 := Step{ID: "K1", Title: "setup-k8s-installer", Kind: Playbook, Playbook: "playbooks/setup-k8s-installer.yml",
-		Note: "모든 노드에 설치본 배포"}
+		Note: i18n.T("Deploys the installer to every node")}
 	k2 := Step{ID: "K2", Title: "setup-control-node", Kind: Playbook, Playbook: "playbooks/setup-control-node.yml",
-		Note: "ki cp 서비스: DNS, NTP, 레지스트리, apiserver LB"}
+		Note: i18n.T("ki cp services: DNS, NTP, registry, apiserver LB")}
 	if o.Existing {
 		// kept in the plan, so that state.json and the screen name every step of
 		// an installation, but not run: the nodes have the installer and the ki cp
 		// services already, and raising them is a release upgrade, not a setup
-		why := "클러스터가 이미 있음: 노드의 설치본·ki cp 서비스는 이 계획이 아니라 upgrade-k8s-installer.yml 로 올림"
+		why := i18n.T("The cluster is there already: the installer and the ki cp services of the nodes are upgraded with upgrade-k8s-installer.yml, not by this plan")
 		k1.Skip, k1.SkipWhy = true, why
 		k2.Skip, k2.SkipWhy = true, why
 	}
@@ -220,13 +221,13 @@ func build(s *state.AppState, o Options) []Step {
 
 	push := Step{ID: pushStepID, Title: "push-user-registry-artifacts", Kind: Playbook,
 		Playbook: "playbooks/push-user-registry-artifacts.yml", Optional: true,
-		Note: "이미지·차트 아카이브 (" + ArchiveName + ") 를 사용자 레지스트리에"}
+		Note: i18n.T("Pushes the image and chart archive (%s) to the user registry", ArchiveName)}
 	switch {
 	case o.ArchivePath == "" && NeedsArchive(s.AipubEnabled, o):
 		// the registry K2 makes is empty: nothing "was pushed already"
-		push.Skip, push.SkipWhy = true, "아카이브 경로 없음: 새 사이트의 사용자 레지스트리는 비어 있어 A1 부터 이미지를 받지 못합니다"
+		push.Skip, push.SkipWhy = true, i18n.T("No archive path: the user registry of a new site is empty, so the steps from A1 on cannot pull their images")
 	case o.ArchivePath == "":
-		push.Skip, push.SkipWhy = true, "아카이브 경로 없음 (이미 넣었으면 건너뜀)"
+		push.Skip, push.SkipWhy = true, i18n.T("No archive path (fine when it was pushed already)")
 	default:
 		push.Args = []string{"-e", "archive=" + o.ArchivePath}
 	}
@@ -240,20 +241,20 @@ func build(s *state.AppState, o Options) []Step {
 	}
 
 	cert := Step{ID: "A2", Title: "setup-cert", Kind: Playbook, Playbook: "aipub-playbooks/setup-cert.yml",
-		Note: "인증서, 모든 노드에 CA 설치 (" + s.AipubCertMode + ")"}
+		Note: i18n.T("Certificates, and the CA installed on every node (%s)", s.AipubCertMode)}
 	if s.AipubCertMode == "ca_provided" || s.AipubCertMode == "tls_provided" {
-		cert.Note += ". 실행 전에 러너 노드의 /etc/k8s-installer/certs에 인증서 파일을 두세요"
+		cert.Note += ". " + i18n.T("Put the certificate files in /etc/k8s-installer/certs of the runner node before the run")
 	}
 	monitoring := Step{ID: "A4", Title: "setup-monitoring", Kind: Playbook,
 		Playbook: "aipub-playbooks/setup-monitoring.yml", Optional: true,
-		Note: "OpenSearch, VictoriaMetrics. aipub보다 먼저 두어 aipub 재실행이 필요 없게 함"}
+		Note: i18n.T("OpenSearch, VictoriaMetrics. Before aipub, so that aipub need not run again")}
 	if !o.Monitoring {
-		monitoring.Skip, monitoring.SkipWhy = true, "모니터링 설치 안 함"
+		monitoring.Skip, monitoring.SkipWhy = true, i18n.T("Monitoring not installed")
 	}
 
 	steps = append(steps,
 		Step{ID: "A1", Title: "setup-network", Kind: Playbook, Playbook: "aipub-playbooks/setup-network.yml",
-			Note: "Cilium, L2 VIP " + s.K8sIngressVIP + ". 끝나면 노드가 Ready"},
+			Note: i18n.T("Cilium, L2 VIP %s. The nodes are Ready when it ends", s.K8sIngressVIP)},
 		cert,
 		// beside setup-cert, which touches no storage: the driver needs the nodes
 		// Ready (A1), and base, monitoring and aipub its classes (manual.go)
@@ -273,14 +274,14 @@ func build(s *state.AppState, o Options) []Step {
 		// The webhook preset reads the CA setup-cert has just put on the nodes;
 		// update-cluster.yml finds the entries setup-cluster left out and applies
 		// them (cp_extra_files, then control_plane), one control plane node at a time
-		a25 := Step{ID: "A2.5", Title: "update-cluster (apiserver 인증 웹훅 적용)", Kind: Playbook,
+		a25 := Step{ID: "A2.5", Title: i18n.T("update-cluster (apply the apiserver authentication webhook)"), Kind: Playbook,
 			Playbook: "playbooks/update-cluster.yml",
-			Note:     "K3 에서 뺀 인증 웹훅 항목을 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다. " + updateClusterTime,
+			Note:     i18n.T("Applies the authentication webhook entries left out of K3.") + " " + updateNote(),
 			applies:  true, stage: state.StageAll}
 		if jwks {
 			// the JWKS entries wait for the issuer, after setup-aipub
 			a25.stage = state.StageAfterCert
-			a25.Note += ". JWKS 항목은 빼고 (-e), A5.2 에서 적용"
+			a25.Note += ". " + i18n.T("JWKS entries left out (-e), applied in A5.2")
 		}
 		steps = append(steps, a25)
 	}
@@ -289,7 +290,7 @@ func build(s *state.AppState, o Options) []Step {
 			Note: "Harbor (" + haNote(s) + ")"},
 		monitoring,
 		Step{ID: "A5", Title: "setup-aipub", Kind: Playbook, Playbook: "aipub-playbooks/setup-aipub.yml",
-			Note: "AIPub 서비스. Python 쪽 컴포넌트는 아직 aipub-installer 밖이라 포함되지 않음"},
+			Note: i18n.T("AIPub services. The Python components are not in aipub-installer yet, so they are not included")},
 	)
 	if jwks {
 		steps = append(steps, jwksSteps(s, o)...)
@@ -310,21 +311,28 @@ func build(s *state.AppState, o Options) []Step {
 // minutes by default), then 300 seconds each for the apiserver and for the LB
 // (wait-ready) - and a failure has the rescue put the node back in the LB and
 // stop. A kill (Ctrl+C twice) runs no rescue: the node is left drained in the LB
-// until `lb-admin.sh ready <node>` on every ki cp node.
-const updateClusterTime = "컨트롤 플레인 노드 한 대에 3~6분 (세 대면 15분 안팎): kubeadm 이 노드마다 etcd 를 백업·검사하고, " +
-	"플래그와 파일이 함께 바뀌면 apiserver 를 두 번 재시작합니다 (하나만 바뀌면 한 번). 한 태스크가 5분 가까이 걸리기도 합니다. " +
-	"기다림마다 시한이 있어 넘기면 그 노드를 LB 에 되돌리고 멈춥니다. 멈추려면 Ctrl+C 한 번 (이 단계가 끝난 뒤 멈춤): " +
-	"두 번 (바로 멈춤) 이면 노드가 LB 에서 빠진 채 남아, ki cp 노드마다 lb-admin.sh ready <노드> 로 되돌려야 합니다"
+// until `lb-admin.sh ready <node>` on every ki cp node. English, the key of its
+// translation: shown through i18n.T (updateNote).
+const updateClusterTime = "3 to 6 minutes per control plane node (about 15 for three): kubeadm backs up and checks etcd on every node, " +
+	"and restarts the apiserver twice when a flag and a file change together (once when only one does). A single task may take close to 5 minutes. " +
+	"Every wait has a limit, past which the node is put back in the LB and the run stops. To stop, Ctrl+C once (stops after this step); " +
+	"twice (stops at once) leaves the node out of the LB, to be put back with lb-admin.sh ready <node> on every ki cp node"
+
+// updateNote ends the note of every step that runs update-cluster.yml: what it
+// does to the control plane nodes, and how long it takes.
+func updateNote() string {
+	return i18n.T("Takes the control plane nodes out of the LB one at a time and restarts the apiserver.") + " " + i18n.T(updateClusterTime)
+}
 
 // applyAll is the update-cluster.yml of an existing site: every entry of the
 // control plane as vars.yml holds it, no -e. Where the apiserver was edited by
 // hand (P3 says so), kubeadm writes the manifest again from the cluster
 // configuration: the same flags, kept from then on.
 func applyAll(id string) Step {
-	return Step{ID: id, Title: "update-cluster (컨트롤 플레인 항목 적용)", Kind: Playbook,
+	return Step{ID: id, Title: i18n.T("update-cluster (apply the control plane entries)"), Kind: Playbook,
 		Playbook: "playbooks/update-cluster.yml", applies: true, stage: state.StageAll,
-		Note: "기존 사이트: 컨트롤 플레인 항목을 한 번에 적용 (-e 없음). 손으로 고친 kube-apiserver.yaml 은 설치기가 관리하는 같은 " +
-			"플래그로 바뀜 (P3 로 먼저 확인). 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다. " + updateClusterTime}
+		Note: i18n.T("Existing site: applies every control plane entry at once (no -e). A kube-apiserver.yaml edited by hand gets the same "+
+			"flags, managed by the installer (P3 checks first).") + " " + updateNote()}
 }
 
 // jwksSteps apply the JWKS preset where aipub-installer applies JWKS: its k8s-jwks
@@ -349,6 +357,9 @@ func jwksSteps(s *state.AppState, o Options) []Step {
 	if f := strings.TrimSpace(s.ControlPlane.JWKSCAFile); f != "" {
 		cmd = append(cmd, "--jwks-ca", f)
 	}
+	// in the language of this run, said always: sudo may or may not pass
+	// K8S_INSTALLER_TUI_LANG on, and the flag wins over it
+	cmd = append(cmd, "--lang", string(i18n.Current()))
 	for i, c := range cmd {
 		cmd[i] = shellQuote(c)
 	}
@@ -356,13 +367,13 @@ func jwksSteps(s *state.AppState, o Options) []Step {
 	if f := strings.TrimSpace(s.ControlPlane.JWKSCAFile); f != "" {
 		ca = f
 	}
-	fill := Step{ID: "A5.1", Title: "JWKS CA 채우기", Kind: Shell, Shell: []string{strings.Join(cmd, " ")},
-		Note: "A2 setup-cert 가 둔 CA (" + ca + ") 를 읽어 files/" + state.JWKSConfigFile + " 를 issuer·CA 로 다시 만들어 " +
-			"저장한 사이트와 설치 디렉터리 양쪽에 씀 (다시 실행해도 같음). CA 가 없으면 여기서 멈춤"}
-	apply := Step{ID: "A5.2", Title: "update-cluster (apiserver JWKS 인증 적용)", Kind: Playbook,
+	fill := Step{ID: "A5.1", Title: i18n.T("Fill in the JWKS CA"), Kind: Shell, Shell: []string{strings.Join(cmd, " ")},
+		Note: i18n.T("Reads the CA A2 setup-cert put there (%s), makes files/%s again with the issuer and the CA, "+
+			"and writes it to both the saved site and the install directory (the same when run again). Stops here when there is no CA", ca, state.JWKSConfigFile)}
+	apply := Step{ID: "A5.2", Title: i18n.T("update-cluster (apply the apiserver JWKS authentication)"), Kind: Playbook,
 		Playbook: "playbooks/update-cluster.yml", applies: true, stage: state.StageAll,
-		Note: "K3 에서 뺀 JWKS 항목 (authentication-config) 을 적용. setup-aipub 의 k8s-jwks 가 손으로 넣은 것을 " +
-			"kubeadm 이 보관하게 함. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다. " + updateClusterTime}
+		Note: i18n.T("Applies the JWKS entries left out of K3 (authentication-config), so that kubeadm keeps what "+
+			"k8s-jwks of setup-aipub put in by hand.") + " " + updateNote()}
 	return []Step{fill, apply}
 }
 
@@ -455,18 +466,18 @@ func emptyAt(cp *state.ControlPlane, stage int) bool {
 func clusterStep(s *state.AppState, o Options) Step {
 	cp := s.AppliedControlPlane()
 	st := Step{ID: "K3", Title: "setup-cluster", Kind: Playbook, Playbook: "playbooks/setup-cluster.yml",
-		Note: "kubeadm. 끝나면 CNI가 없어 노드가 NotReady인 것이 정상", applies: true, stage: state.StageCluster}
+		Note: i18n.T("kubeadm. When it ends the nodes are NotReady, as there is no CNI yet: that is expected"), applies: true, stage: state.StageCluster}
 	if o.Existing {
-		st.Title, st.Playbook = "update-cluster (클러스터 단계 컨트롤 플레인 항목)", "playbooks/update-cluster.yml"
-		st.Note = "기존 클러스터: setup-cluster 대신 update-cluster.yml 로 클러스터 단계의 컨트롤 플레인 항목 (감사 로그, runtime-config 등) 을 " +
-			"AIPub 단계 전에 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다. " + updateClusterTime
+		st.Title, st.Playbook = i18n.T("update-cluster (control plane entries of the cluster stage)"), "playbooks/update-cluster.yml"
+		st.Note = i18n.T("Existing cluster: update-cluster.yml, in place of setup-cluster, applies the control plane entries of the cluster stage "+
+			"(the audit log, runtime-config and the like) before the AIPub steps.") + " " + updateNote()
 		switch {
 		case !s.AipubEnabled && !cp.Empty():
-			st.Skip, st.SkipWhy = true, "기존 클러스터: K5 가 컨트롤 플레인 항목을 한 번에 적용"
+			st.Skip, st.SkipWhy = true, i18n.T("Existing cluster: K5 applies the control plane entries at once")
 		case s.AipubEnabled && o.direct(cp) && !cp.Empty():
-			st.Skip, st.SkipWhy = true, "기존 사이트: A2.5 가 컨트롤 플레인 항목을 한 번에 적용"
+			st.Skip, st.SkipWhy = true, i18n.T("Existing site: A2.5 applies the control plane entries at once")
 		case emptyAt(cp, state.StageCluster):
-			st.Skip, st.SkipWhy = true, "기존 클러스터: 이 단계에서 적용할 컨트롤 플레인 항목 없음"
+			st.Skip, st.SkipWhy = true, i18n.T("Existing cluster: no control plane entry to apply at this stage")
 		}
 	}
 	if !staged(s, o) {
@@ -474,12 +485,12 @@ func clusterStep(s *state.AppState, o Options) Step {
 	}
 	var later []string
 	if cp.HasStage(state.StageAfterCert) {
-		later = append(later, "인증 웹훅은 A2.5")
+		later = append(later, i18n.T("the authentication webhook in A2.5"))
 	}
 	if cp.HasStage(state.StageAfterAipub) {
-		later = append(later, "JWKS 는 A5.2")
+		later = append(later, i18n.T("JWKS in A5.2"))
 	}
-	st.Note += ". AIPub 인증 항목은 빼고 (-e), " + strings.Join(later, ", ") + " 에서 적용합니다"
+	st.Note += ". " + i18n.T("AIPub authentication entries left out (-e), applied later: %s", strings.Join(later, ", "))
 	return st
 }
 
@@ -487,7 +498,7 @@ func haNote(s *state.AppState) string {
 	if s.AipubHaMode {
 		return "HA, StorageClass " + s.AipubHaModeStorageClass
 	}
-	return "HA 아님, 데이터는 " + s.AipubHarborLocalPVNode
+	return i18n.T("not HA, data on %s", s.AipubHarborLocalPVNode)
 }
 
 // Command is the line a playbook step runs, from the ansible directory with the
@@ -513,12 +524,12 @@ func Command(st Step) string {
 func Script(steps []Step, o Options, savedIn string) string {
 	var b strings.Builder
 	b.WriteString("#!/usr/bin/env bash\n")
-	b.WriteString("# 설치 계획 (k8s-installer-tui). 실패하면 그 단계에서 멈춥니다. setup 플레이북은 다시 실행해도\n")
-	b.WriteString("# 안전하므로, 고친 뒤 실패한 단계부터 다시 실행하면 됩니다.\n")
+	b.WriteString(i18n.T("# Install plan (k8s-installer-tui). It stops at the step that fails. The setup playbooks are safe\n" +
+		"# to run again: fix the cause, then run it again from the failed step.\n"))
 	b.WriteString("set -euo pipefail\n\n")
 
 	if copies := CopyCommands(o, savedIn); len(copies) > 0 {
-		b.WriteString("# 저장한 설정 파일을 설치 디렉터리로 (root 소유라 sudo)\n")
+		b.WriteString(i18n.T("# Copy the saved settings to the install directory (sudo: it is root's)\n"))
 		for _, c := range copies {
 			b.WriteString(c + "\n")
 		}
@@ -534,13 +545,13 @@ func Script(steps []Step, o Options, savedIn string) string {
 		case st.Kind == Check:
 			fmt.Fprintf(&b, "# %s %s: %s\n", st.ID, st.Title, st.Note)
 		case st.Kind == Manual && st.Skip:
-			fmt.Fprintf(&b, "# %s %s: 건너뜀 (%s)\n", st.ID, st.Title, st.SkipWhy)
+			fmt.Fprintf(&b, "# %s %s: %s\n", st.ID, st.Title, i18n.T("skipped (%s)", st.SkipWhy))
 		case st.Kind == Manual:
 			// a person running the script stops here too; without a terminal it goes on
-			fmt.Fprintf(&b, "# %s %s (수동): %s\nread -r -p %s _ || true\n", st.ID, st.Title, st.Note,
-				shellQuote("── "+st.ID+" "+ManualPrompt(st)+". 설치했으면 Enter: "))
+			fmt.Fprintf(&b, "# %s %s %s: %s\nread -r -p %s _ || true\n", st.ID, st.Title, i18n.T("(manual)"), st.Note,
+				shellQuote("── "+st.ID+" "+ManualPrompt(st)+". "+i18n.T("Enter once it is installed:")+" "))
 		case st.Skip:
-			fmt.Fprintf(&b, "# %s %s: 건너뜀 (%s)\n#   %s\n", st.ID, st.Title, st.SkipWhy, strings.ReplaceAll(Command(st), "\n", "\n#   "))
+			fmt.Fprintf(&b, "# %s %s: %s\n#   %s\n", st.ID, st.Title, i18n.T("skipped (%s)", st.SkipWhy), strings.ReplaceAll(Command(st), "\n", "\n#   "))
 		default:
 			fmt.Fprintf(&b, "echo '── %s %s'\n%s\n", st.ID, st.Title, Command(st))
 		}

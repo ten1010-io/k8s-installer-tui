@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 )
 
@@ -24,7 +25,7 @@ func (d *driver) fits(h int, right string) {
 	d.t.Helper()
 	view := ansi.ReplaceAllString(d.app.View(), "")
 	lines := strings.Split(view, "\n")
-	step := stepTitles[d.app.current]
+	step := i18n.T(stepTitles[d.app.current])
 	bottom := -1
 	for i, l := range lines {
 		if strings.Contains(l, "╰") {
@@ -38,8 +39,9 @@ func (d *driver) fits(h int, right string) {
 	}
 	buttons, hints, panel := false, false, false
 	for _, l := range lines {
-		buttons = buttons || strings.Contains(l, "< 이전 >") && strings.Contains(l, "< "+right+" >")
-		hints = hints || strings.Contains(l, "Ctrl+N 다음 · Ctrl+P 이전")
+		// in the language of the run: the Korean of the tests, English where a test sets it
+		buttons = buttons || strings.Contains(l, "< "+i18n.T("Back")+" >") && strings.Contains(l, "< "+right+" >")
+		hints = hints || strings.Contains(l, i18n.T("Ctrl+N next")+" · "+i18n.T("Ctrl+P back"))
 		panel = panel || strings.Contains(l, "┗")
 	}
 	if len(lines) != h || !opened || !closed || !panel || !buttons || !hints {

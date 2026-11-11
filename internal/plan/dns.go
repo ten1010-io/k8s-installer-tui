@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -40,11 +41,11 @@ func CheckDNS(ctx context.Context, o Options, s *state.AppState, run RunFunc) Ch
 	hosts := AccessHosts(s)
 	switch {
 	case !s.AipubEnabled:
-		return CheckResult{OK: true, Skipped: true, Lines: []string{"AIPub 을 설치하지 않음"}}
+		return CheckResult{OK: true, Skipped: true, Lines: []string{i18n.T("AIPub not installed")}}
 	case vip == "":
-		return CheckResult{OK: true, Skipped: true, Lines: []string{"인그레스 VIP 가 정해지지 않음"}}
+		return CheckResult{OK: true, Skipped: true, Lines: []string{i18n.T("No ingress VIP set")}}
 	case len(hosts) == 0:
-		return CheckResult{OK: true, Skipped: true, Lines: []string{"AIPub 도메인 (aipub_ingress_zone) 이 정해지지 않음"}}
+		return CheckResult{OK: true, Skipped: true, Lines: []string{i18n.T("No AIPub domain (aipub_ingress_zone) set")}}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -61,17 +62,17 @@ func CheckDNS(ctx context.Context, o Options, s *state.AppState, run RunFunc) Ch
 		switch {
 		case len(got) == 0:
 			r.Warn = true
-			r.Lines = append(r.Lines, h+": 답 없음 (기대값 인그레스 VIP "+vip+")")
+			r.Lines = append(r.Lines, i18n.T("%s: no answer (ingress VIP %s expected)", h, vip))
 		case contains(got, vip):
-			r.Lines = append(r.Lines, h+" → "+vip+" (인그레스 VIP 와 같음)")
+			r.Lines = append(r.Lines, i18n.T("%s → %s (the ingress VIP)", h, vip))
 		default:
 			r.Warn = true
-			r.Lines = append(r.Lines, h+": "+strings.Join(got, ", ")+" (기대값 인그레스 VIP "+vip+")")
+			r.Lines = append(r.Lines, i18n.T("%s: %s (ingress VIP %s expected)", h, strings.Join(got, ", "), vip))
 		}
 	}
 	if r.Warn {
-		r.Lines = append(r.Lines, "DNS 는 설치 뒤에 등록하는 경우가 많아 경고로만 표시합니다. 외부에서 접속하려면 *."+
-			strings.Trim(s.AipubIngressZone, ".")+" 가 인그레스 VIP 를 가리켜야 합니다")
+		r.Lines = append(r.Lines, i18n.T("DNS is often registered after the install, so this is only a warning. For access from outside, *.%s has to point at the ingress VIP",
+			strings.Trim(s.AipubIngressZone, ".")))
 	}
 	return r
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -235,11 +236,21 @@ func TestJWKSAppliedAfterAipub(t *testing.T) {
 		t.Errorf("K3 does not leave JWKS out: %+v", k3)
 	}
 	fill, apply := byID["A5.1"], byID["A5.2"]
-	if want := "sudo /usr/local/bin/k8s-installer-tui --fill-auth-config --inventory /opt/k8s-installer/ansible/inventory.yml " +
+	// the tests run in Korean (TestMain), which A5.1 is told: sudo drops the
+	// environment
+	fillCmd := "sudo /usr/local/bin/k8s-installer-tui --fill-auth-config --inventory /opt/k8s-installer/ansible/inventory.yml " +
 		"--vars /opt/k8s-installer/ansible/group_vars/all/vars.yml --aipub-vars /opt/k8s-installer/ansible/files/aipub/vars.yml " +
-		"--installer-root /opt/k8s-installer"; fill.Kind != Shell || len(fill.Shell) != 1 || fill.Shell[0] != want {
+		"--installer-root /opt/k8s-installer"
+	if want := fillCmd + " --lang ko"; fill.Kind != Shell || len(fill.Shell) != 1 || fill.Shell[0] != want {
 		t.Errorf("A5.1: %+v\nwant %s", fill, want)
 	}
+	i18n.Set(i18n.EN)
+	for _, st := range Build(s, o) {
+		if st.ID == "A5.1" && st.Shell[0] != fillCmd+" --lang en" {
+			t.Errorf("A5.1 in English: %s\nwant %s --lang en", st.Shell[0], fillCmd)
+		}
+	}
+	i18n.Set(i18n.KO)
 	if apply.Playbook != "playbooks/update-cluster.yml" || len(apply.Args) != 0 || !strings.Contains(apply.Note, "한 대씩") {
 		t.Errorf("A5.2: %+v", apply)
 	}

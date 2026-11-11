@@ -6,11 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"gopkg.in/yaml.v3"
 )
 
-var update = flag.Bool("update", false, "rewrite testdata/site-values.golden.yml")
+var update = flag.Bool("update", false, "rewrite testdata/site-values.golden.yml and site-values.en.golden.yml")
 
 // A small site: two nodes, AIPub without HA, one value moved off its default.
 func goldenState() *state.AppState {
@@ -36,8 +37,22 @@ func goldenState() *state.AppState {
 }
 
 func TestSiteValuesGolden(t *testing.T) {
+	checkGolden(t, "testdata/site-values.golden.yml")
+}
+
+// The English default has its own golden file, and no Hangul in it.
+func TestSiteValuesGoldenEnglish(t *testing.T) {
+	i18n.Set(i18n.EN)
+	defer i18n.Set(i18n.KO)
+	got := checkGolden(t, "testdata/site-values.en.golden.yml")
+	if hasHangul(string(got)) {
+		t.Errorf("Korean in the English site values:\n%s", got)
+	}
+}
+
+func checkGolden(t *testing.T, path string) []byte {
+	t.Helper()
 	got := SiteValues(goldenState())
-	const path = "testdata/site-values.golden.yml"
 	if *update {
 		if err := os.MkdirAll("testdata", 0755); err != nil {
 			t.Fatal(err)
@@ -53,6 +68,7 @@ func TestSiteValuesGolden(t *testing.T) {
 	if string(got) != string(want) {
 		t.Errorf("site values differ from %s (run with -update to accept):\n%s", path, got)
 	}
+	return got
 }
 
 // What the view says is yaml, and its live lines are the values of the state.

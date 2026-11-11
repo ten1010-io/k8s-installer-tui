@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 )
 
 // ClusterRecord is the file that says a cluster was built from this control
@@ -45,21 +47,21 @@ func DetectSite(existing, aipubInstalled bool) Site {
 	s := Site{Existing: existing, AipubInstalled: aipubInstalled}
 	switch _, err := os.Stat(ClusterRecord); {
 	case existing:
-		s.Why = "기존 사이트: --existing 으로 지정"
+		s.Why = i18n.T("Existing site: given with --existing")
 	case err == nil:
 		s.Existing = true
-		s.Why = "기존 사이트: " + ClusterRecord + " 있음 (k8s-installer 가 클러스터를 만든 기록, reset-cluster.yml 이 지움)"
+		s.Why = i18n.T("Existing site: %s is there (the record k8s-installer leaves once it built the cluster, which reset-cluster.yml removes)", ClusterRecord)
 	case errors.Is(err, fs.ErrNotExist):
-		s.Why = "새 사이트: " + ClusterRecord + " 없음 (클러스터가 이미 있으면 --existing 으로 시작)"
+		s.Why = i18n.T("New site: no %s (start with --existing when there is a cluster already)", ClusterRecord)
 	default:
 		s.Unknown = true
-		s.Why = "새 사이트로 계획: " + ClusterRecord + " 를 확인하지 못함 (" + err.Error() + "). 클러스터가 이미 있으면 --existing 으로 시작"
+		s.Why = i18n.T("Planned as a new site: %s could not be looked at (%v). Start with --existing when there is a cluster already", ClusterRecord, err)
 	}
 	if s.Existing {
 		if aipubInstalled {
-			s.Why += ". AIPub: --aipub-installed 로 지정"
+			s.Why += ". " + i18n.T("AIPub: given with --aipub-installed")
 		} else {
-			s.Why += ". AIPub 은 새로 설치하는 것으로 계획 (이미 설치돼 있으면 --aipub-installed: 설치 기록이 없어 플래그로만 정함)"
+			s.Why += ". " + i18n.T("AIPub planned as a new install (--aipub-installed when it is installed already: there is no record of it, so only this flag decides)")
 		}
 	}
 	return s
@@ -68,12 +70,13 @@ func DetectSite(existing, aipubInstalled bool) Site {
 // ResumedSite is the line of a run that goes on with the plan of the last one
 // (state.json): what that run took the site to be, whatever is decided now.
 func ResumedSite(prev *RunState, now string) string {
-	kind := "새 사이트"
+	kind := i18n.T("New site")
 	if prev.Existing {
-		kind = "기존 사이트"
+		kind = i18n.T("Existing site")
 		if prev.AipubInstalled {
-			kind += " (AIPub 설치됨)"
+			kind += " " + i18n.T("(AIPub installed)")
 		}
 	}
-	return kind + ": 지난 실행 (" + prev.Started.Format("2006-01-02 15:04") + " 에 시작) 의 계획대로. 바꾸려면 처음부터 실행 (지금 판단: " + now + ")"
+	return i18n.T("%s: as planned by the last run (started %s). To change it, run from the first step (decided now: %s)",
+		kind, prev.Started.Format("2006-01-02 15:04"), now)
 }

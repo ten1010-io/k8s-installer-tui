@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -110,7 +111,7 @@ func TestStorageNeeds(t *testing.T) {
 	s = aipubState()
 	s.AipubHaMode = false
 	o.StorageVars = map[string]string{"aipub_monitoring_storage_type": "dynamic"}
-	if st := m1(s, o); st.Skip || strings.Join(st.Classes, ",") != DefaultClass || !strings.Contains(st.Note, DefaultClass+" ← A4 setup-monitoring") {
+	if st := m1(s, o); st.Skip || strings.Join(st.Classes, ",") != DefaultClass || !strings.Contains(st.Note, i18n.T(DefaultClass)+" ← A4 setup-monitoring") {
 		t.Errorf("monitoring on the default class: %+v", st)
 	}
 	// AIPub off: no stop at all

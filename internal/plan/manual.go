@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -54,8 +55,26 @@ func ReadStorageVars(path string) map[string]string {
 
 // DefaultClass stands among the classes of StorageNeeds for the default class
 // of the cluster, which a claim with no class name gets: what is checked is
-// that some class is marked default.
-const DefaultClass = "(클러스터 기본 StorageClass)"
+// that some class is marked default. English whatever the language, as the
+// classes are compared with it; shown through i18n.T (classNames).
+const DefaultClass = "(cluster default StorageClass)"
+
+// className is a class as it is shown: DefaultClass in the language spoken.
+func className(c string) string {
+	if c == DefaultClass {
+		return i18n.T(DefaultClass)
+	}
+	return c
+}
+
+// classNames are classes as they are shown (className).
+func classNames(classes []string) []string {
+	out := make([]string, len(classes))
+	for i, c := range classes {
+		out[i] = className(c)
+	}
+	return out
+}
 
 // isDefaultClass is the annotation that marks the default StorageClass.
 const isDefaultClass = "storageclass.kubernetes.io/is-default-class"
@@ -103,25 +122,25 @@ func StorageNeeds(s *state.AppState, o Options) map[string][]string {
 }
 
 func storageStep(s *state.AppState, o Options) Step {
-	st := Step{ID: "M1", Title: "StorageClass 드라이버 설치", Kind: Manual, WithPrev: true}
+	st := Step{ID: "M1", Title: i18n.T("Install the StorageClass driver"), Kind: Manual, WithPrev: true}
 	needs := StorageNeeds(s, o)
 	if len(needs) == 0 {
-		st.Skip, st.SkipWhy = true, "StorageClass 를 쓰는 단계가 없음 (HA 아님, 모니터링·공유 볼륨이 static)"
+		st.Skip, st.SkipWhy = true, i18n.T("No step uses a StorageClass (not HA, monitoring and the shared volume static)")
 		return st
 	}
 	var uses []string
 	for _, c := range sortedKeys(needs) {
 		st.Classes = append(st.Classes, c)
-		uses = append(uses, c+" ← "+strings.Join(needs[c], ", "))
+		uses = append(uses, className(c)+" ← "+strings.Join(needs[c], ", "))
 	}
-	st.Note = "setup-cert 와 함께 멈춤. 사이트의 스토리지 드라이버 (CSI) 를 설치해 클래스를 만드세요: " + strings.Join(uses, "; ") +
-		". 첫 k8s 컨트롤 플레인 노드에서 kubectl get storageclass 로 모두 있어야 다음 단계로"
+	st.Note = i18n.T("Waits alongside setup-cert. Install the storage driver (CSI) of the site to make the classes: %s. "+
+		"The next stage starts once kubectl get storageclass on the first k8s control plane node shows them all", strings.Join(uses, "; "))
 	return st
 }
 
 // ManualPrompt is what the operator is asked to do at a Manual step.
 func ManualPrompt(st Step) string {
-	return "스토리지클래스 드라이버를 설치하세요 — 위저드가 쓰는 클래스: " + strings.Join(st.Classes, ", ")
+	return i18n.T("Install the StorageClass driver — the classes the wizard uses: %s", strings.Join(classNames(st.Classes), ", "))
 }
 
 // CheckClasses asks the first k8s control plane node which of classes exist
@@ -129,7 +148,7 @@ func ManualPrompt(st Step) string {
 // missing ones with a line for each class.
 func CheckClasses(ctx context.Context, o Options, s *state.AppState, run RunFunc, classes []string) (missing, lines []string) {
 	if len(s.K8sCpNodes) == 0 {
-		return classes, []string{"k8s 컨트롤 플레인 노드가 없어 확인하지 못했습니다"}
+		return classes, []string{i18n.T("No k8s control plane node to check with")}
 	}
 	node := s.K8sCpNodes[0]
 	for _, c := range classes {
@@ -143,7 +162,7 @@ func CheckClasses(ctx context.Context, o Options, s *state.AppState, run RunFunc
 		}
 		if !storageClassName.MatchString(c) {
 			missing = append(missing, c)
-			lines = append(lines, "StorageClass 이름 "+c+" 이(가) 올바르지 않습니다")
+			lines = append(lines, i18n.T("StorageClass name %s is not valid", c))
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -153,14 +172,14 @@ func CheckClasses(ctx context.Context, o Options, s *state.AppState, run RunFunc
 		got, found := res[node]
 		switch {
 		case found && got.ok():
-			lines = append(lines, node+": StorageClass "+c+" 있음")
+			lines = append(lines, i18n.T("%s: StorageClass %s is there", node, c))
 			continue
 		case found && strings.Contains(got.Raw, "NotFound"):
-			lines = append(lines, node+": StorageClass "+c+" 없음")
+			lines = append(lines, i18n.T("%s: StorageClass %s missing", node, c))
 		case found:
-			lines = append(lines, node+": StorageClass "+c+" 를 확인하지 못했습니다 ("+firstLine(strings.TrimSpace(got.Raw))+")")
+			lines = append(lines, i18n.T("%s: could not check StorageClass %s (%s)", node, c, firstLine(strings.TrimSpace(got.Raw))))
 		default:
-			lines = append(lines, "StorageClass "+c+" 를 확인하지 못했습니다: "+couldNotRun(out, err))
+			lines = append(lines, i18n.T("Could not check StorageClass %s: %s", c, couldNotRun(out, err)))
 		}
 		missing = append(missing, c)
 	}
@@ -180,11 +199,11 @@ func checkDefaultClass(ctx context.Context, o Options, run RunFunc, node string)
 	got, found := res[node]
 	switch {
 	case found && got.ok() && strings.TrimSpace(got.Stdout) != "":
-		return node + ": 기본 StorageClass " + strings.TrimSpace(got.Stdout) + " 있음", true
+		return i18n.T("%s: default StorageClass %s is there", node, strings.TrimSpace(got.Stdout)), true
 	case found && got.ok():
-		return node + ": 기본 StorageClass 가 없습니다 (" + isDefaultClass + ": \"true\" 인 클래스 없음)", false
+		return i18n.T("%s: no default StorageClass (no class with %s: \"true\")", node, isDefaultClass), false
 	case found:
-		return node + ": 기본 StorageClass 를 확인하지 못했습니다 (" + firstLine(strings.TrimSpace(got.Raw)) + ")", false
+		return i18n.T("%s: could not check the default StorageClass (%s)", node, firstLine(strings.TrimSpace(got.Raw))), false
 	}
-	return "기본 StorageClass 를 확인하지 못했습니다: " + couldNotRun(out, err), false
+	return i18n.T("Could not check the default StorageClass: %s", couldNotRun(out, err)), false
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
@@ -58,16 +59,16 @@ func NewS6AipubLB() *S6AipubLB {
 		return t
 	}
 	return &S6AipubLB{
-		ingressLBName: newInput("예: lb1", 64),
+		ingressLBName: newInput(i18n.T("e.g. lb1"), 64),
 		ingressVIP:    newInput("x.x.x.x", 64),
-		gatewayLBName: newInput("예: lb2", 64),
+		gatewayLBName: newInput(i18n.T("e.g. lb2"), 64),
 		gatewayVIP:    newInput("x.x.x.x", 64),
 		hostPort:      newInput("443", 8),
 		mode:          2,
 	}
 }
 
-func (s *S6AipubLB) Title() string { return "AIPub 로드밸런서" }
+func (s *S6AipubLB) Title() string { return i18n.T("AIPub load balancers") }
 func (s *S6AipubLB) SetSize(w, h int) {
 	s.width = w
 	s.height = h
@@ -109,29 +110,29 @@ func (s *S6AipubLB) SyncToState(st *state.AppState) {
 
 func (s *S6AipubLB) Validate() []string {
 	if strings.TrimSpace(s.ingressLBName.Value()) == "" {
-		return []string{"Ingress LB명을 입력해주세요"}
+		return []string{i18n.T("Enter the ingress LB name")}
 	}
 	if strings.TrimSpace(s.ingressVIP.Value()) == "" {
-		return []string{"Ingress VIP를 입력해주세요"}
+		return []string{i18n.T("Enter the ingress VIP")}
 	}
 	if s.mode == 1 {
 		if strings.TrimSpace(s.gatewayLBName.Value()) == "" {
-			return []string{"별도 IP 모드에서는 Gateway LB명을 입력해주세요"}
+			return []string{i18n.T("In separate IP mode, enter the gateway LB name")}
 		}
 		if strings.TrimSpace(s.gatewayLBName.Value()) == strings.TrimSpace(s.ingressLBName.Value()) {
-			return []string{"별도 IP 모드에서는 Ingress LB명과 Gateway LB명이 달라야 합니다"}
+			return []string{i18n.T("In separate IP mode, the ingress and gateway LB names must differ")}
 		}
 		gw := strings.TrimSpace(s.gatewayVIP.Value())
 		if gw == "" {
-			return []string{"별도 IP 모드에서는 Gateway VIP를 입력해주세요"}
+			return []string{i18n.T("In separate IP mode, enter the gateway VIP")}
 		}
 		if gw == strings.TrimSpace(s.ingressVIP.Value()) {
-			return []string{"별도 IP 모드에서는 Ingress VIP와 Gateway VIP가 달라야 합니다"}
+			return []string{i18n.T("In separate IP mode, the ingress and gateway VIPs must differ")}
 		}
 	}
 	p, err := strconv.Atoi(s.hostPort.Value())
 	if err != nil || p < 1 || p > 65535 {
-		return []string{"Host Network Port는 1-65535 범위여야 합니다"}
+		return []string{i18n.T("Host Network Port must be in 1-65535")}
 	}
 	return nil
 }
@@ -251,41 +252,41 @@ func (s *S6AipubLB) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *S6AipubLB) View() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("AIPub 로드밸런서") + "\n")
-	b.WriteString(styles.StyleMuted.Render("Cilium이 L2로 알리는 VIP입니다 (files/aipub/vars.yml → aipub_load_balancers).") + "\n")
-	nodes := "(2단계에서 Master Node를 지정하세요)"
+	b.WriteString(styles.StyleTitle.Render(i18n.T("AIPub load balancers")) + "\n")
+	b.WriteString(styles.StyleMuted.Render(i18n.T("The VIPs Cilium announces over L2 (files/aipub/vars.yml → aipub_load_balancers).")) + "\n")
+	nodes := i18n.T("(set the CP nodes in step 2)")
 	if len(s.lbNodes) > 0 {
 		nodes = strings.Join(s.lbNodes, ", ")
 	}
-	b.WriteString(styles.StyleMuted.Render("VIP에 응답하는 노드: "+nodes+" (Master Node)") + "\n\n")
+	b.WriteString(styles.StyleMuted.Render(i18n.T("Nodes that answer for the VIPs: %s (CP nodes)", nodes)) + "\n\n")
 
 	f := s.focusIdx
 
-	mode1Radio := styles.RadioOff() + " 1. 별도 IP"
-	mode2Radio := styles.RadioOff() + " 2. 공유 IP"
+	mode1Radio := styles.RadioOff() + " " + i18n.T("1. Separate IPs")
+	mode2Radio := styles.RadioOff() + " " + i18n.T("2. Shared IP")
 	if s.mode == 1 {
-		mode1Radio = styles.RadioOn() + " 1. 별도 IP"
+		mode1Radio = styles.RadioOn() + " " + i18n.T("1. Separate IPs")
 	} else {
-		mode2Radio = styles.RadioOn() + " 2. 공유 IP"
+		mode2Radio = styles.RadioOn() + " " + i18n.T("2. Shared IP")
 	}
 	modeHint := ""
 	if f == s6FocusMode {
-		modeHint = styles.StyleMuted.Render("  ← → 또는 Enter")
+		modeHint = styles.StyleMuted.Render("  " + i18n.T("← → or Enter"))
 	}
 	// the focused part stays in sight on a low screen
 	fs := focusSpan{b: &b}
 	fs.mark(f == s6FocusMode)
-	b.WriteString(RenderSectionHeader("인그레스 모드", f == s6FocusMode) + modeHint + "\n")
-	b.WriteString("    " + mode1Radio + styles.StyleMuted.Render("  — Ingress/Gateway 개별 VIP") + "\n")
-	b.WriteString("    " + mode2Radio + styles.StyleMuted.Render("  — Ingress/Gateway 동일 VIP") + "\n\n")
+	b.WriteString(RenderSectionHeader(i18n.T("Ingress mode"), f == s6FocusMode) + modeHint + "\n")
+	b.WriteString("    " + mode1Radio + styles.StyleMuted.Render("  — "+i18n.T("a VIP each for ingress and gateway")) + "\n")
+	b.WriteString("    " + mode2Radio + styles.StyleMuted.Render("  — "+i18n.T("one VIP for ingress and gateway")) + "\n\n")
 
 	fs.mark(f == s6FocusIngressLBName)
-	b.WriteString(RenderSectionHeader("Ingress LB명", f == s6FocusIngressLBName) + "\n")
+	b.WriteString(RenderSectionHeader(i18n.T("Ingress LB name"), f == s6FocusIngressLBName) + "\n")
 	b.WriteString("    " + s.ingressLBName.View() + "\n\n")
 
 	fs.mark(f == s6FocusIngressVIP)
 	if s.mode == 2 {
-		b.WriteString(RenderSectionHeader("Ingress/Gateway 공유 VIP", f == s6FocusIngressVIP) + "\n")
+		b.WriteString(RenderSectionHeader(i18n.T("Ingress/gateway shared VIP"), f == s6FocusIngressVIP) + "\n")
 	} else {
 		b.WriteString(RenderSectionHeader("Ingress VIP", f == s6FocusIngressVIP) + "\n")
 	}
@@ -293,7 +294,7 @@ func (s *S6AipubLB) View() string {
 
 	if s.mode == 1 {
 		fs.mark(f == s6FocusGatewayLBName)
-		b.WriteString(RenderSectionHeader("Gateway LB명", f == s6FocusGatewayLBName) + "\n")
+		b.WriteString(RenderSectionHeader(i18n.T("Gateway LB name"), f == s6FocusGatewayLBName) + "\n")
 		b.WriteString("    " + s.gatewayLBName.View() + "\n\n")
 
 		fs.mark(f == s6FocusGatewayVIP)
@@ -309,7 +310,7 @@ func (s *S6AipubLB) View() string {
 	nextFocused := f == s6FocusNav && s.navIdx == 1
 	b.WriteString("\n")
 	fs.mark(f == s6FocusNav)
-	b.WriteString(RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
+	b.WriteString(RenderNavButtons(i18n.T("Back"), i18n.T("Next"), prevFocused, nextFocused, s.width))
 
 	return fs.fit(s.width, s.height)
 }

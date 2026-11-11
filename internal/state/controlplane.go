@@ -120,7 +120,7 @@ type Preset struct {
 var Presets = []Preset{
 	{
 		ID:    PresetAudit,
-		Title: "AIPub 감사 로그",
+		Title: "AIPub audit log",
 		Args: []ExtraArg{
 			{"audit-policy-file", "/etc/kubernetes/audit-policy.yaml"},
 			{"audit-log-path", "/var/log/aipub/usage/audit.log"},
@@ -145,7 +145,7 @@ var Presets = []Preset{
 		// k8s-jwks of aipub-installer as entries kubeadm keeps, where k8s-jwks
 		// edits the static pod manifest of each node by hand
 		ID:    PresetJWKS,
-		Title: "AIPub 인증 (JWKS)",
+		Title: "AIPub authentication (JWKS)",
 		Args:  []ExtraArg{{"authentication-config", JWKSConfigPath}},
 		Volumes: []ExtraVolume{
 			{Name: "authentication-config", HostPath: JWKSConfigPath, MountPath: JWKSConfigPath, ReadOnly: true, PathType: "File"},
@@ -157,7 +157,7 @@ var Presets = []Preset{
 	},
 	{
 		ID:    PresetWebhook,
-		Title: "AIPub 인증 웹훅 (레거시 — JWKS 로 옮기기 전 사이트)",
+		Title: "AIPub authentication webhook (legacy: for sites not yet moved to JWKS)",
 		Args: []ExtraArg{
 			{"authentication-token-webhook-config-file", "/etc/kubernetes/webhook-token-auth.yaml"},
 			{"authentication-token-webhook-cache-ttl", "2m"},

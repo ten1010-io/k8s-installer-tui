@@ -32,6 +32,8 @@ ROOT="${W}/opt/k8s-installer"
 STATE="${ROOT}/tui-install"
 CALLS="${W}/calls.log"
 fails=0
+# the checks below read the Korean messages: the program speaks English unless told
+export K8S_INSTALLER_TUI_LANG=ko
 ok() { echo "  ✓ $*"; }
 bad() { echo "  ✗ $*"; fails=$((fails + 1)); }
 

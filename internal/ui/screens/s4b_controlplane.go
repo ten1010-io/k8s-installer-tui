@@ -3,7 +3,6 @@ package screens
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"strings"
 
@@ -11,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
@@ -27,14 +27,14 @@ import (
 // the focused row are shown under it. What it shows depends on the state, and so
 // do the stops of the focus (stops), in this order:
 //
-//	AIPub 감사 로그, runtime-config, AIPub 인증 (JWKS) (toggles)
-//	  issuer URL, CA 파일                  (while JWKS is on)
-//	AIPub 인증 웹훅, 레거시 (toggle)       (here on an existing site or when it was on)
-//	  웹훅 URL                              (while the webhook is on)
-//	▸ 고급: 직접 추가 (Enter/Space, →/←: 펼치기/접기)
-//	  the webhook when not above, 추가할 대상 (←/→), 추가할 항목 (Enter: 추가),
-//	  직접 넣은 항목 (d: 삭제)              (while expanded)
-//	nav slot (←/→: 이전/다음)
+//	AIPub audit log, runtime-config, AIPub authentication (JWKS) (toggles)
+//	  issuer URL, CA file                  (while JWKS is on)
+//	AIPub auth webhook, legacy (toggle)    (here on an existing site or when it was on)
+//	  webhook URL                           (while the webhook is on)
+//	▸ Advanced: add by hand (Enter/Space, →/←: expand/collapse)
+//	  the webhook when not above, the target (←/→), the entry (Enter: add),
+//	  the entries added by hand (d: delete) (while expanded)
+//	nav slot (←/→: back/next)
 //
 // Off the text inputs, on an existing site: c reads what the apiserver of the
 // first control plane node was given by hand (read only) and turns on the
@@ -64,6 +64,7 @@ type s4bStop struct {
 }
 
 // cpTarget is a list an entry typed in goes to.
+// label and hint are English, and go through i18n.T where they are drawn.
 type cpTarget struct {
 	label     string
 	kind      string // arg, volume, file
@@ -72,14 +73,14 @@ type cpTarget struct {
 }
 
 var cpTargets = []cpTarget{
-	{"apiserver 인자", "arg", "apiserver", "이름=값 (대시 없이), 예: oidc-issuer-url=https://idp.example.com"},
-	{"apiserver 볼륨", "volume", "apiserver", "이름 hostPath mountPath [ro] [pathType], 예: oidc /etc/oidc /etc/oidc ro Directory"},
-	{"controller-manager 인자", "arg", "controller_manager", "이름=값, 예: node-cidr-mask-size=22"},
-	{"controller-manager 볼륨", "volume", "controller_manager", "이름 hostPath mountPath [ro] [pathType]"},
-	{"scheduler 인자", "arg", "scheduler", "이름=값"},
-	{"scheduler 볼륨", "volume", "scheduler", "이름 hostPath mountPath [ro] [pathType]"},
-	{"etcd 인자", "arg", "etcd", "이름=값, 예: quota-backend-bytes=8589934592 (etcd 는 볼륨 없음)"},
-	{"컨트롤플레인 파일", "file", "", "src dest [mode], 예: oidc/ca.crt /etc/oidc/ca.crt 0644 (src 는 ansible/files 아래)"},
+	{"apiserver args", "arg", "apiserver", "name=value (no dash), e.g. oidc-issuer-url=https://idp.example.com"},
+	{"apiserver volumes", "volume", "apiserver", "name hostPath mountPath [ro] [pathType], e.g. oidc /etc/oidc /etc/oidc ro Directory"},
+	{"controller-manager args", "arg", "controller_manager", "name=value, e.g. node-cidr-mask-size=22"},
+	{"controller-manager volumes", "volume", "controller_manager", "name hostPath mountPath [ro] [pathType]"},
+	{"scheduler args", "arg", "scheduler", "name=value"},
+	{"scheduler volumes", "volume", "scheduler", "name hostPath mountPath [ro] [pathType]"},
+	{"etcd args", "arg", "etcd", "name=value, e.g. quota-backend-bytes=8589934592 (etcd has no volumes)"},
+	{"control plane files", "file", "", "src dest [mode], e.g. oidc/ca.crt /etc/oidc/ca.crt 0644 (src is under ansible/files)"},
 }
 
 var volumePathTypes = []string{"DirectoryOrCreate", "Directory", "FileOrCreate", "File"}
@@ -127,7 +128,6 @@ type legacyDoneMsg struct {
 
 func NewS4bControlPlane() *S4bControlPlane {
 	url := textinput.New()
-	url.Placeholder = "https://<AIPub 토큰 검증 서버>"
 	url.CharLimit = 256
 	issuer := textinput.New()
 	issuer.Placeholder = "https://<aipub_app_host_prefix>.<aipub_ingress_zone>"
@@ -147,7 +147,7 @@ func (s *S4bControlPlane) SetSite(o plan.Options) { s.opts = o }
 // SetRunner replaces how the check runs commands (tests).
 func (s *S4bControlPlane) SetRunner(r plan.RunFunc) { s.run = r }
 
-func (s *S4bControlPlane) Title() string { return "컨트롤플레인" }
+func (s *S4bControlPlane) Title() string { return i18n.T("Control plane") }
 func (s *S4bControlPlane) SetSize(w, h int) {
 	s.width = w
 	s.height = h
@@ -285,7 +285,7 @@ func (s *S4bControlPlane) issuerOverride() string {
 // from a zone, are checked on the preview, once AIPub is chosen.
 func (s *S4bControlPlane) Validate() []string {
 	if strings.TrimSpace(s.entry.Value()) != "" {
-		return []string{"추가할 항목에 입력한 것이 있습니다. Enter 로 추가하거나 지워주세요"}
+		return []string{i18n.T("The entry field has text. Press Enter to add it, or clear it")}
 	}
 	cp := copyControlPlane(s.cp)
 	cp.WebhookURL = strings.TrimSpace(s.url.Value())
@@ -297,12 +297,12 @@ func (s *S4bControlPlane) Validate() []string {
 	// a CA file that is there but is not a CA: never copied, and said so. One
 	// not there yet is waited for (setup-cert puts it there)
 	if ca := s.ca(); cp.JWKS && ca.Err != nil && !errors.Is(ca.Err, fs.ErrPermission) {
-		msgs = append(msgs, "JWKS CA 파일: "+ca.Err.Error())
+		msgs = append(msgs, i18n.T("JWKS CA file: %s", ca.Err.Error()))
 	}
 	return msgs
 }
 
-// RevealErrors expands 고급 when the refusal names text left in its input, so
+// RevealErrors expands Advanced when the refusal names text left in its input, so
 // the input is in sight.
 func (s *S4bControlPlane) RevealErrors() {
 	if strings.TrimSpace(s.entry.Value()) != "" {
@@ -431,7 +431,7 @@ func (s *S4bControlPlane) addEntry() {
 		name, value, ok := strings.Cut(text, "=")
 		name = strings.TrimSpace(name)
 		if !ok || name == "" {
-			s.entryErr = "인자는 이름=값 으로 입력합니다"
+			s.entryErr = i18n.T("An argument is entered as name=value")
 			return
 		}
 		if s.cp.Args == nil {
@@ -442,7 +442,7 @@ func (s *S4bControlPlane) addEntry() {
 	case "volume":
 		f := strings.Fields(text)
 		if len(f) < 3 {
-			s.entryErr = "볼륨은 이름 hostPath mountPath [ro] [pathType] 으로 입력합니다"
+			s.entryErr = i18n.T("A volume is entered as name hostPath mountPath [ro] [pathType]")
 			return
 		}
 		v := state.ExtraVolume{Name: f[0], HostPath: f[1], MountPath: f[2]}
@@ -453,7 +453,7 @@ func (s *S4bControlPlane) addEntry() {
 			case contains(volumePathTypes, opt):
 				v.PathType = opt
 			default:
-				s.entryErr = fmt.Sprintf("'%s' 는 ro 또는 %s 가 아닙니다", opt, strings.Join(volumePathTypes, ", "))
+				s.entryErr = i18n.T("'%s' is not ro or one of %s", opt, strings.Join(volumePathTypes, ", "))
 				return
 			}
 		}
@@ -464,7 +464,7 @@ func (s *S4bControlPlane) addEntry() {
 	case "file":
 		f := strings.Fields(text)
 		if len(f) < 2 || len(f) > 3 {
-			s.entryErr = "파일은 src dest [mode] 로 입력합니다"
+			s.entryErr = i18n.T("A file is entered as src dest [mode]")
 			return
 		}
 		file := state.CpExtraFile{Src: f[0], Dest: f[1], Mode: "0644"}
@@ -515,7 +515,7 @@ func (s *S4bControlPlane) Busy() bool { return s.checking }
 
 // BusyReason is what the wizard says when it does not leave.
 func (s *S4bControlPlane) BusyReason() string {
-	return "기존 apiserver 설정을 확인하는 중입니다. 끝난 뒤 이동하세요"
+	return i18n.T("Reading the existing apiserver settings. Move on when it ends")
 }
 
 func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -577,7 +577,7 @@ func (s *S4bControlPlane) key(msg tea.KeyMsg) (cmd tea.Cmd, done bool) {
 		if p < len(st)-1 {
 			s.focus = st[p+1]
 			if s.focus.kind == s4bNav {
-				s.navIdx = 1 // 다음
+				s.navIdx = 1 // next
 			}
 		}
 		return nil, true
@@ -646,9 +646,9 @@ func (s *S4bControlPlane) detected(id string) string {
 		return ""
 	}
 	if !s.cp.On(id) {
-		return "  ⚠ 노드에서 감지됨 — 끄면 update-cluster 뒤 이 기능이 사라짐"
+		return "  ⚠ " + i18n.T("detected on the node: turning it off removes this feature after update-cluster")
 	}
-	return "  (노드에서 감지됨)"
+	return "  " + i18n.T("(detected on the node)")
 }
 
 // caStatus says in a line whether the authentication config of JWKS is written
@@ -658,11 +658,11 @@ func (s *S4bControlPlane) caStatus() string {
 	var out []string
 	switch {
 	case ca.PEM != "" && !ca.FromSaved:
-		out = append(out, styles.StyleSuccess.Render("    ✓ CA 있음: 저장하면 authentication-config.yaml 을 씁니다"))
+		out = append(out, styles.StyleSuccess.Render("    ✓ "+i18n.T("CA found: saving writes authentication-config.yaml")))
 	case ca.PEM != "":
-		out = append(out, styles.StyleSuccess.Render("    ✓ CA: 전에 쓴 authentication-config.yaml 의 것을 그대로 둡니다"))
+		out = append(out, styles.StyleSuccess.Render("    ✓ "+i18n.T("CA: keeping the one in the authentication-config.yaml written earlier")))
 	default:
-		out = append(out, styles.StyleWarning.Render("    ⚠ CA 대기: 아직 파일이 없음, setup-cert 뒤 A5.1 이 설정을 만듭니다"))
+		out = append(out, styles.StyleWarning.Render("    ⚠ "+i18n.T("CA pending: no file yet, A5.1 creates the config after setup-cert")))
 	}
 	if ca.Err != nil {
 		out = append(out, styles.StyleError.Render("    ✗ "+ca.Err.Error()))
@@ -675,60 +675,60 @@ func (s *S4bControlPlane) help(kind int) []string {
 	switch kind {
 	case s4bAudit:
 		out := []string{
-			"audit-policy-file, audit-log-path=/var/log/aipub/usage/audit.log, 30일·30개·100MB. 첫 설치부터",
-			"정책 ansible/files/" + state.AuditPolicyFile + ": 없을 때만 위저드가 기본 정책(AIP-2611)을 씀, 있는 파일은 덮어쓰지 않음",
+			i18n.T("audit-policy-file, audit-log-path=/var/log/aipub/usage/audit.log, 30 days · 30 files · 100MB. From the first install"),
+			i18n.T("policy ansible/files/%s: the wizard writes the default policy (AIP-2611) only when it is missing, an existing file is not overwritten", state.AuditPolicyFile),
 		}
 		if a := s.auditPlan(); a.Note != "" {
-			out = append(out, "지금: "+a.Note)
+			out = append(out, i18n.T("now: %s", a.Note))
 		}
 		if s.opts.Existing {
-			ok := "꺼짐"
 			if s.cp.AuditDefaultOK {
-				ok = "켜짐"
+				out = append(out, i18n.T("existing site: c takes the node's policy. o: confirm writing the default policy instead of the node's (now on)"))
+			} else {
+				out = append(out, i18n.T("existing site: c takes the node's policy. o: confirm writing the default policy instead of the node's (now off)"))
 			}
-			out = append(out, "기존 사이트: c 로 노드의 정책을 가져옴. o: 노드의 정책 대신 기본 정책 쓰기 확인 (지금 "+ok+")")
 		}
 		return out
 	case s4bRuntime:
-		return []string{"runtime-config=admissionregistration.k8s.io/v1beta1=true. 첫 설치부터"}
+		return []string{i18n.T("runtime-config=admissionregistration.k8s.io/v1beta1=true. From the first install")}
 	case s4bJWKS:
 		return []string{
-			"authentication-config. AIPub 설치 시에만 적용. aipub-installer k8s-jwks 와 같은 플래그·볼륨·파일을 kubeadm 이 보관하게 함",
-			"새 사이트: issuer 는 AIPub 백엔드라 클러스터 생성(K3)에서는 빼고, A5 setup-aipub 뒤 A5.1 이 CA 를 넣어",
-			"파일을 만들고 A5.2 update-cluster 로 적용합니다 (노드 한 대씩 재시작)",
+			i18n.T("authentication-config. Applied only when AIPub is installed. Makes kubeadm keep the same flags, volumes and files as aipub-installer k8s-jwks"),
+			i18n.T("New site: the issuer is the AIPub backend, so it is left out of cluster creation (K3) and, after A5 setup-aipub, A5.1 adds the CA"),
+			i18n.T("and creates the file; A5.2 update-cluster applies it (one node restarted at a time)"),
 		}
 	case s4bIssuer:
-		return []string{"기본은 https://<aipub_app_host_prefix>.<aipub_ingress_zone> (aipub-installer 와 같은 규칙, 존을 바꾸면 따라감)"}
+		return []string{i18n.T("Default is https://<aipub_app_host_prefix>.<aipub_ingress_zone> (same rule as aipub-installer, follows a change of the zone)")}
 	case s4bCA:
 		ca := s.ca()
-		out := []string{"setup-cert 가 두는 공개 CA. 있을 때만 ansible/files/" + state.JWKSConfigFile + " 를 만듭니다 (CA 인라인, 평문 복사)"}
+		out := []string{i18n.T("The public CA that setup-cert puts there. ansible/files/%s is made only when it exists (CA inline, copied as plain text)", state.JWKSConfigFile)}
 		switch {
 		case ca.PEM != "" && !ca.FromSaved:
-			out = append(out, "CA 있음 ("+ca.Path+"): 저장하면 authentication-config.yaml 을 씁니다")
+			out = append(out, i18n.T("CA found (%s): saving writes authentication-config.yaml", ca.Path))
 		case ca.PEM != "":
-			out = append(out, "CA: 전에 쓴 authentication-config.yaml 의 것을 그대로 둡니다 ("+ca.Path+" 없음)")
+			out = append(out, i18n.T("CA: keeping the one in the authentication-config.yaml written earlier (%s is missing)", ca.Path))
 		default:
-			out = append(out, "CA 대기 ("+ca.Path+" 없음): authentication-config.yaml 을 쓰지 않고, setup-cert 뒤 A5.1 이 만듭니다")
+			out = append(out, i18n.T("CA pending (%s is missing): authentication-config.yaml is not written, A5.1 creates it after setup-cert", ca.Path))
 		}
-		return append(out, "CA 없이 update-cluster/노드 추가를 돌리면 설치기가 '소스 파일 없음'으로 거부합니다 (노드는 그대로)")
+		return append(out, i18n.T("Running update-cluster or adding a node without the CA makes the installer refuse with 'source file missing' (the nodes are left as they are)"))
 	case s4bWebhook:
 		return []string{
-			"authentication-token-webhook, cache-ttl 2m. 웹훅을 쓰던 사이트만. JWKS 와 함께 켤 수 있음",
-			"(옮기는 동안 둘 다 돌리고, 확인 뒤 aipub-installer 의",
-			"scripts/aipub/migration/jwks-auth/migrate-webhook-to-jwks.sh 로 웹훅을 뺀 다음 여기서도 끔)",
-			"AIPub 설치 시에만. setup-cert 가 만드는 CA(" + state.WebhookCAPath + ")가 있어야 apiserver 가 뜨므로",
-			"클러스터 생성(K3)에서는 빼고, A2 setup-cert 다음 A2.5 update-cluster 로 적용합니다 (노드 한 대씩 재시작)",
+			i18n.T("authentication-token-webhook, cache-ttl 2m. Only for a site that used the webhook. Can be on together with JWKS"),
+			i18n.T("(run both while moving over; after checking, take the webhook out with aipub-installer's"),
+			i18n.T("scripts/aipub/migration/jwks-auth/migrate-webhook-to-jwks.sh, then turn it off here too)"),
+			i18n.T("Only when AIPub is installed. The apiserver starts only with the CA (%s) that setup-cert makes, so", state.WebhookCAPath),
+			i18n.T("it is left out of cluster creation (K3) and applied by A2.5 update-cluster after A2 setup-cert (one node restarted at a time)"),
 		}
 	case s4bURL:
-		return []string{"ansible/files/" + state.WebhookConfigFile + " (kubeconfig) 로 만들어 둡니다. 평문 복사 — 비밀 금지"}
+		return []string{i18n.T("Made as ansible/files/%s (kubeconfig). Copied as plain text, no secrets", state.WebhookConfigFile)}
 	case s4bAdvanced:
 		return []string{
-			"apiserver·controller-manager·scheduler·etcd 의 인자와 볼륨, 컨트롤플레인 파일. 대부분의 사이트는 필요 없음",
-			"vars.yml 에 들어가 kubeadm 이 클러스터 설정으로 보관하므로 노드 추가·업그레이드에도 다시 적용됩니다",
-			"바꾸면 update-cluster.yml 이 컨트롤 플레인 노드를 한 대씩 재시작합니다. 매니페스트를 손으로 고치지 마세요",
+			i18n.T("Arguments and volumes of apiserver, controller-manager, scheduler and etcd, and control plane files. Most sites do not need them"),
+			i18n.T("They go into vars.yml and kubeadm keeps them in the cluster configuration, so they are applied again when adding a node or upgrading"),
+			i18n.T("A change makes update-cluster.yml restart the control plane nodes one at a time. Do not edit the manifests by hand"),
 		}
 	case s4bTarget:
-		return []string{"←/→ 로 항목을 넣을 곳을 고릅니다"}
+		return []string{i18n.T("←/→ chooses where the entry goes")}
 	}
 	return nil
 }
@@ -738,39 +738,49 @@ func (s *S4bControlPlane) legacyView() string {
 	var b strings.Builder
 	switch {
 	case s.checking:
-		b.WriteString(styles.StyleMuted.Render("확인 중... (ansible -m slurp "+plan.APIServerManifest+")") + "\n")
+		b.WriteString(styles.StyleMuted.Render(i18n.T("Checking... (ansible -m slurp %s)", plan.APIServerManifest)) + "\n")
 	case s.legacyErr != "":
-		b.WriteString(styles.StyleError.Render("✗ apiserver 설정을 읽지 못했습니다: "+s.legacyErr) + "\n")
+		b.WriteString(styles.StyleError.Render("✗ "+i18n.T("Could not read the apiserver settings: %s", s.legacyErr)) + "\n")
 	case s.legacy != nil && !s.legacy.Any():
-		b.WriteString(styles.StyleSuccess.Render("✓ "+s.legacy.Node+": 손으로 넣은 AIPub apiserver 설정 없음") + "\n")
+		b.WriteString(styles.StyleSuccess.Render("✓ "+i18n.T("%s: no AIPub apiserver settings added by hand", s.legacy.Node)) + "\n")
 	case s.legacy != nil:
 		l := s.legacy
-		b.WriteString(styles.StyleWarning.Render("⚠ "+l.Node+" 의 kube-apiserver.yaml 에 손으로 넣은 설정이 있습니다. 맞는 프리셋을 켰습니다:") + "\n")
+		b.WriteString(styles.StyleWarning.Render("⚠ "+i18n.T("%s has settings added by hand in kube-apiserver.yaml. The matching presets were turned on:", l.Node)) + "\n")
 		for _, f := range l.Found {
 			b.WriteString(styles.StyleWarning.Render("   • "+f) + "\n")
 		}
 		for _, d := range l.Differs {
-			b.WriteString(styles.StyleMuted.Render("   값이 다름 (update-cluster 뒤 프리셋 값): "+d) + "\n")
+			b.WriteString(styles.StyleMuted.Render("   "+i18n.T("value differs (the preset's value after update-cluster): %s", d)) + "\n")
 		}
 		if l.WebhookURL != "" {
-			b.WriteString(styles.StyleMuted.Render("   웹훅 URL 을 노드의 kubeconfig 에서 가져옴") + "\n")
+			b.WriteString(styles.StyleMuted.Render("   "+i18n.T("webhook URL taken from the node's kubeconfig")) + "\n")
 		}
 		if l.Issuer != "" {
-			b.WriteString(styles.StyleMuted.Render("   issuer 를 노드의 authentication-config.yaml 에서 가져옴") + "\n")
+			b.WriteString(styles.StyleMuted.Render("   "+i18n.T("issuer taken from the node's authentication-config.yaml")) + "\n")
 		}
 		for _, r := range l.Refused {
-			b.WriteString(styles.StyleWarning.Render("   가져오지 않음: "+r) + "\n")
+			b.WriteString(styles.StyleWarning.Render("   "+i18n.T("not taken: %s", r)) + "\n")
 		}
 		if l.Audit.Note != "" {
-			b.WriteString(styles.StyleMuted.Render("   감사 정책: "+l.Audit.Note) + "\n")
+			b.WriteString(styles.StyleMuted.Render("   "+i18n.T("audit policy: %s", l.Audit.Note)) + "\n")
 		}
 		if l.AuditUnread != "" && !l.Audit.Kept && !s.cp.AuditDefaultOK {
-			b.WriteString(styles.StyleWarning.Render("   감사 정책을 읽지 못함 ("+l.AuditUnread+"): 기본 정책을 쓰지 않습니다. 파일을 직접 두거나 감사 로그 줄에서 o 로 확인") + "\n")
+			b.WriteString(styles.StyleWarning.Render("   "+i18n.T("audit policy could not be read (%s): the default policy is not written. Put the file there yourself, or confirm with o on the audit log row", l.AuditUnread)) + "\n")
 		}
-		b.WriteString(styles.StyleWarning.Render("   update-cluster 가 손으로 고친 것을 설치기가 관리하는 같은 플래그로 바꿉니다 (이제 업그레이드·노드 변경에도 유지)") + "\n")
-		b.WriteString(styles.StyleWarning.Render("   감지된 프리셋을 끄면 update-cluster 뒤 그 기능이 클러스터에서 사라집니다") + "\n")
+		b.WriteString(styles.StyleWarning.Render("   "+i18n.T("update-cluster replaces the hand edits with the same flags the installer manages (kept from now on through upgrades and node changes)")) + "\n")
+		b.WriteString(styles.StyleWarning.Render("   "+i18n.T("turning off a detected preset removes that feature from the cluster after update-cluster")) + "\n")
 	}
 	return b.String()
+}
+
+// labelCol is the width of the column of the targets in the list of entries:
+// the widest label, and a space. In Korean it is 24.
+func labelCol() int {
+	w := 0
+	for _, t := range cpTargets {
+		w = max(w, lipgloss.Width(i18n.T(t.label)))
+	}
+	return w + 1
 }
 
 func checkbox(on bool) string {
@@ -819,33 +829,34 @@ func (s *S4bControlPlane) View() string {
 		}
 	}
 	webhook := func(indent string) {
-		preset(s4bWebhook, indent, state.PresetWebhook, "AIPub 인증 웹훅 (레거시)", "JWKS 이전의 토큰 웹훅 인증. 웹훅을 쓰던 사이트만 켭니다")
+		preset(s4bWebhook, indent, state.PresetWebhook, i18n.T("AIPub auth webhook (legacy)"), i18n.T("Token webhook authentication from before JWKS. Turn it on only for a site that used the webhook"))
 		if s.cp.Webhook {
-			field(s4bURL, indent+"  ", "웹훅 URL", s.url, "")
+			field(s4bURL, indent+"  ", i18n.T("Webhook URL"), s.url, "")
 		}
 	}
 
-	b.WriteString(styles.StyleTitle.Render("컨트롤플레인") + "\n")
-	b.WriteString(styles.StyleMuted.Render("kube-apiserver 등 컨트롤 플레인에 켤 기능을 고릅니다 (고른 줄 아래에 설명)") + "\n")
+	s.url.Placeholder = i18n.T("https://<AIPub token review server>")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Control plane")) + "\n")
+	b.WriteString(styles.StyleMuted.Render(i18n.T("Choose the features to turn on in the control plane, such as kube-apiserver (explained under the focused row)")) + "\n")
 	if s.opts.Existing {
-		b.WriteString(styles.StyleMuted.Render("기존 사이트: c 로 첫 컨트롤 플레인 노드의 kube-apiserver.yaml 에 손으로 넣은 설정을 읽습니다 (읽기만 함, 입력 칸 밖에서)") + "\n")
+		b.WriteString(styles.StyleMuted.Render(i18n.T("Existing site: c reads the settings added by hand to kube-apiserver.yaml of the first control plane node (read only, outside the input fields)")) + "\n")
 	} else {
-		b.WriteString(styles.StyleMuted.Render("새 사이트는 권장 프리셋이 이미 켜져 있어 그대로 다음(Ctrl+N)으로 가면 됩니다") + "\n")
+		b.WriteString(styles.StyleMuted.Render(i18n.T("On a new site the recommended presets are already on, so just go on to the next step (Ctrl+N)")) + "\n")
 	}
 	b.WriteString(s.legacyView())
 	b.WriteString("\n")
 
-	b.WriteString(styles.StylePrimary.Render("프리셋") + styles.StyleMuted.Render("  Space/Enter: 켜기/끄기") + "\n")
-	audit := "AIPub 사용 기록용 apiserver 감사 로그"
+	b.WriteString(styles.StylePrimary.Render(i18n.T("Presets")) + styles.StyleMuted.Render("  "+i18n.T("Space/Enter: turn on/off")) + "\n")
+	audit := i18n.T("apiserver audit log for AIPub usage records")
 	if s.cp.Audit {
 		audit += " (" + s.auditPlan().Short() + ")"
 	}
-	preset(s4bAudit, "", state.PresetAudit, "AIPub 감사 로그", audit)
-	preset(s4bRuntime, "", state.PresetRuntimeConfig, "runtime-config", "admissionregistration v1beta1 API 를 켭니다")
-	preset(s4bJWKS, "", state.PresetJWKS, "AIPub 인증 (JWKS)", "AIPub 이 발급한 토큰을 apiserver 가 믿게 합니다 (AIPub 설치 시만)")
+	preset(s4bAudit, "", state.PresetAudit, i18n.T("AIPub audit log"), audit)
+	preset(s4bRuntime, "", state.PresetRuntimeConfig, "runtime-config", i18n.T("Turns on the admissionregistration v1beta1 API"))
+	preset(s4bJWKS, "", state.PresetJWKS, i18n.T("AIPub authentication (JWKS)"), i18n.T("Makes the apiserver trust tokens issued by AIPub (only when AIPub is installed)"))
 	if s.cp.JWKS {
 		field(s4bIssuer, "  ", "issuer URL", s.issuer, "")
-		field(s4bCA, "  ", "CA 파일", s.caFile, s.caStatus())
+		field(s4bCA, "  ", i18n.T("CA file"), s.caFile, s.caStatus())
 	}
 	if s.webhookUp() {
 		webhook("")
@@ -858,7 +869,7 @@ func (s *S4bControlPlane) View() string {
 		arrow = "▾"
 	}
 	advFocused := at(s4bStop{kind: s4bAdvanced})
-	b.WriteString(RenderRow(fmt.Sprintf("%s 고급: 직접 추가 (항목 %d개)", arrow, len(entries)), advFocused, w) + "\n")
+	b.WriteString(RenderRow(i18n.T("%s Advanced: add by hand (%d entries)", arrow, len(entries)), advFocused, w) + "\n")
 	if advFocused {
 		help("    ", s4bAdvanced)
 	}
@@ -868,37 +879,37 @@ func (s *S4bControlPlane) View() string {
 		}
 		t := cpTargets[s.target]
 		targetFocused := at(s4bStop{kind: s4bTarget})
-		b.WriteString(RenderSectionHeader("  대상", targetFocused) + "  ◀ " + t.label + " ▶\n")
+		b.WriteString(RenderSectionHeader("  "+i18n.T("Target"), targetFocused) + "  ◀ " + i18n.T(t.label) + " ▶\n")
 		if targetFocused {
 			help("      ", s4bTarget)
 		}
 		at(s4bStop{kind: s4bEntry})
-		b.WriteString(RenderSectionHeader("  항목 (Enter: 추가)", s.focus.kind == s4bEntry) + "  " + s.entry.View() + "\n")
-		b.WriteString(styles.StyleMuted.Render("      "+t.hint) + "\n")
+		b.WriteString(RenderSectionHeader("  "+i18n.T("Entry (Enter: add)"), s.focus.kind == s4bEntry) + "  " + s.entry.View() + "\n")
+		b.WriteString(styles.StyleMuted.Render("      "+i18n.T(t.hint)) + "\n")
 		if s.entryErr != "" {
 			b.WriteString(styles.StyleError.Render("      ✗ "+s.entryErr) + "\n")
 		}
 		if len(entries) == 0 {
-			b.WriteString(styles.StyleMuted.Render("      (직접 넣은 항목 없음)") + "\n")
+			b.WriteString(styles.StyleMuted.Render("      "+i18n.T("(no entries added by hand)")) + "\n")
 		}
 		for i, e := range entries {
 			focused := at(s4bStop{kind: s4bList, i: i})
-			label := cpTargets[e.target].label
-			pad := 24 - lipgloss.Width(label)
+			label := i18n.T(cpTargets[e.target].label)
+			pad := labelCol() - lipgloss.Width(label)
 			if pad < 1 {
 				pad = 1
 			}
 			row := "    " + label + strings.Repeat(" ", pad) + e.text
 			if focused {
-				row += "   (d: 삭제)"
+				row += "   " + i18n.T("(d: delete)")
 			}
 			b.WriteString(RenderRow(row, focused, w) + "\n")
 		}
-		b.WriteString(styles.StyleWarning.Render("    ⚠ 컨트롤플레인 파일은 모든 컨트롤 플레인 노드에 평문으로 복사됩니다. 비밀(키·토큰)은 넣지 마세요") + "\n")
+		b.WriteString(styles.StyleWarning.Render("    ⚠ "+i18n.T("Control plane files are copied as plain text to every control plane node. Do not put secrets (keys, tokens) in them")) + "\n")
 	}
 
 	b.WriteString("\n")
 	at(s4bStop{kind: s4bNav})
-	b.WriteString(RenderNavButtons("이전", "다음", s.focus.kind == s4bNav && s.navIdx == 0, s.focus.kind == s4bNav && s.navIdx == 1, w))
+	b.WriteString(RenderNavButtons(i18n.T("Back"), i18n.T("Next"), s.focus.kind == s4bNav && s.navIdx == 0, s.focus.kind == s4bNav && s.navIdx == 1, w))
 	return FitView(b.String(), focusLine, focusEnd, w, s.height)
 }

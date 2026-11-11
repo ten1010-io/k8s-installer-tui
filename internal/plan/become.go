@@ -2,10 +2,11 @@ package plan
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 )
 
 // P6: Ansible runs its become command through a shell (/bin/sh -c ...), so a
@@ -46,17 +47,17 @@ func CheckBecomeShell(ctx context.Context, o Options, run RunFunc) (CheckResult,
 	}
 	var lines []string
 	if len(good) > 0 {
-		lines = append(lines, "정상 (sudo -n /bin/sh -c true): "+strings.Join(good, " "))
+		lines = append(lines, i18n.T("OK (sudo -n /bin/sh -c true): %s", strings.Join(good, " ")))
 	}
 	if len(noSudo) > 0 {
-		lines = append(lines, "sudo 자체가 안 되는 노드는 P2 에서 봅니다: "+strings.Join(noSudo, " "))
+		lines = append(lines, i18n.T("Nodes where sudo itself fails, which P2 reports: %s", strings.Join(noSudo, " ")))
 	}
 	if len(refused) == 0 {
 		return CheckResult{OK: true, Lines: lines}, ""
 	}
 
-	head := "sudo 가 /bin/sh 를 거부하는 노드: " + strings.Join(refused, " ") +
-		" (sudoers 의 !/bin/sh 로 보임). 그대로 두면 Ansible become 이 'Shared connection closed' 로 실패합니다"
+	head := i18n.T("Nodes where sudo refuses /bin/sh: %s (seemingly !/bin/sh in sudoers). If left as is, Ansible become fails with 'Shared connection closed'",
+		strings.Join(refused, " "))
 	probe, _, _ := adhoc(ctx, o, run, strings.Join(refused, ","), false, "raw", sudoShellProbe)
 	paths := map[string][]string{} // dash path -> nodes
 	var problems []string
@@ -71,11 +72,11 @@ func CheckBecomeShell(ctx context.Context, o Options, run RunFunc) (CheckResult,
 		case p.ok() && p.Stdout != "":
 			paths[p.Stdout] = append(paths[p.Stdout], n)
 		case p.RC == "3":
-			problems = append(problems, n+": dash 가 없습니다")
+			problems = append(problems, i18n.T("%s: no dash", n))
 		case p.RC == "4":
-			problems = append(problems, n+": dash ("+p.Stdout+") 가 있으나 sudo 가 거부합니다")
+			problems = append(problems, i18n.T("%s: dash (%s) is there, but sudo refuses it", n, p.Stdout))
 		default:
-			problems = append(problems, n+": dash 를 확인하지 못했습니다 (접속·sudo 확인)")
+			problems = append(problems, i18n.T("%s: could not look for dash (check the connection and sudo)", n))
 		}
 	}
 	if len(problems) == 0 && len(paths) > 1 {
@@ -83,18 +84,18 @@ func CheckBecomeShell(ctx context.Context, o Options, run RunFunc) (CheckResult,
 		for _, p := range sortedKeys(paths) {
 			parts = append(parts, strings.Join(paths[p], " ")+": "+p)
 		}
-		problems = append(problems, "노드마다 dash 경로가 다릅니다 ("+strings.Join(parts, ", ")+
-			"): ansible_shell_executable 은 하나만 쓸 수 있으니 경로를 맞추세요")
+		problems = append(problems, i18n.T("The path of dash differs between the nodes (%s): ansible_shell_executable takes one only, so make them the same",
+			strings.Join(parts, ", ")))
 	}
 	if len(problems) > 0 {
 		sort.Strings(problems)
 		lines = append(lines, head)
 		lines = append(lines, problems...)
-		lines = append(lines, "sudoers 가 /bin/sh 를 허용하게 하거나, sudo 로 실행할 수 있는 셸 (dash) 을 이 노드들에 두세요")
+		lines = append(lines, i18n.T("Let sudoers allow /bin/sh, or put a shell sudo may run (dash) on these nodes"))
 		return CheckResult{Lines: lines}, ""
 	}
 	dash := sortedKeys(paths)[0]
 	lines = append(lines, head,
-		fmt.Sprintf("모두 dash (%s) 가 있고 sudo 로 실행됩니다: 계획의 ansible-playbook 에 -e ansible_shell_executable=%s 를 붙입니다", dash, dash))
+		i18n.T("All have dash (%s) and sudo runs it: the ansible-playbook lines of the plan get -e ansible_shell_executable=%s", dash, dash))
 	return CheckResult{OK: true, Warn: true, Lines: lines}, dash
 }

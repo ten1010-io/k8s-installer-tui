@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -25,28 +26,28 @@ import (
 // nodes, before the update-cluster.yml that applies the preset.
 func FillAuthConfig(p Paths, s *state.AppState, installerFiles string) ([]string, error) {
 	if !s.AipubEnabled {
-		return nil, errors.New("AIPub 을 설치하지 않는 사이트입니다 (JWKS issuer 는 AIPub)")
+		return nil, errors.New(i18n.T("this site does not install AIPub (the JWKS issuer is AIPub)"))
 	}
 	if !s.ControlPlane.JWKS {
-		return nil, errors.New("AIPub 인증 (JWKS) 프리셋이 꺼져 있습니다")
+		return nil, errors.New(i18n.T("the AIPub authentication (JWKS) preset is off"))
 	}
 	if s.JWKSIssuer() == "" {
-		return nil, errors.New("JWKS issuer 가 없습니다 (aipub_ingress_zone 또는 issuer URL)")
+		return nil, errors.New(i18n.T("there is no JWKS issuer (aipub_ingress_zone or the issuer URL)"))
 	}
 	ca := LookupCA(s)
 	if ca.PEM == "" || ca.FromSaved {
-		msg := "CA 가 없습니다: " + ca.Path + " (aipub-installer setup-cert 가 둡니다. setup-cert 뒤에 다시 실행하세요)"
+		msg := i18n.T("there is no CA: %s (aipub-installer setup-cert puts it there. Run again after setup-cert)", ca.Path)
 		if ca.Err != nil {
-			msg = "CA 를 읽지 못했습니다: " + ca.Err.Error()
+			msg = i18n.T("could not read the CA: %v", ca.Err)
 		}
 		if ca.FromSaved {
-			msg += ". 저장된 인증 설정의 CA 는 이 클러스터의 것인지 알 수 없어 쓰지 않습니다"
+			msg += i18n.T(". The CA of the saved authentication config may not be this cluster's, so it is not used")
 		}
 		return nil, errors.New(msg)
 	}
 	data := AuthConfig(s, ca.PEM)
 	if data == nil {
-		return nil, errors.New("authentication-config.yaml 을 만들지 못했습니다 (템플릿이 바뀌었는지 확인)")
+		return nil, errors.New(i18n.T("could not make authentication-config.yaml (check whether the template changed)"))
 	}
 
 	targets := []string{p.AuthConfig()}

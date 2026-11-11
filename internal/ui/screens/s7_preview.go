@@ -1,13 +1,13 @@
 package screens
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/schema"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
@@ -31,16 +31,19 @@ const (
 // The last tab is the site-values view, which has no path: it is not saved.
 // The first tab is 확인할 점 when there is anything to report; no path either.
 // kept says why a file with a path is not written (it is kept as it is).
+// isNotes marks the 확인할 점 tab, whatever its name is in the language of the run.
 type previewTab struct {
 	name    string
 	path    string
 	content string
 	kept    string
+	isNotes bool
 }
 
 // notesTab is the name of the tab of what the preview reports: validation
-// errors, warnings and notes, and the files once saved.
-const notesTab = "확인할 점"
+// errors, warnings and notes, and the files once saved. English here, said
+// through i18n.T where it is shown.
+const notesTab = "Notes"
 
 // note is one line of the 확인할 점 tab, wrapped to the width of the viewport
 // in its style.
@@ -98,7 +101,7 @@ func NewS7Preview(s *state.AppState, paths fileio.Paths, installerFiles string) 
 // read for the warnings about it).
 func (s *S7Preview) SetInstaller(o plan.Options) { s.installer = o }
 
-func (s *S7Preview) Title() string { return "미리보기 & 저장" }
+func (s *S7Preview) Title() string { return i18n.T("Preview & save") }
 func (s *S7Preview) SetSize(w, h int) {
 	s.width = w
 	s.height = h
@@ -117,9 +120,8 @@ func (s *S7Preview) layout() {
 			s.vp.SetContent(s.tabs[0].content)
 		}
 	}
-	measure := lipgloss.NewStyle().Width(s.width)
 	room := func() int {
-		return s.height - lipgloss.Height(measure.Render(s.above())) - lipgloss.Height(measure.Render(s.below())) - 2 // the lines of the scroll bar
+		return s.height - lipgloss.Height(Wrap(s.above(), s.width)) - lipgloss.Height(Wrap(s.below(), s.width)) - 2 // the lines of the scroll bar
 	}
 	// on a low screen the title goes first (the step bar names the screen)
 	s.noTitle = false
@@ -200,7 +202,7 @@ func (s *S7Preview) buildNotes(st *state.AppState) {
 	s.notes = nil
 	add := func(style lipgloss.Style, text string) { s.notes = append(s.notes, note{style, text}) }
 	if len(s.errors) > 0 {
-		add(styles.StyleError, fmt.Sprintf("✗ 검증 오류 %d건:", len(s.errors)))
+		add(styles.StyleError, i18n.T("✗ Validation errors (%d):", len(s.errors)))
 		for _, e := range s.errors {
 			add(styles.StyleError, "  • "+e.Error())
 		}
@@ -209,7 +211,7 @@ func (s *S7Preview) buildNotes(st *state.AppState) {
 	// not blocking: the operator may mean it, but update-cluster.yml will refuse
 	// or rebuild nodes for it
 	if len(s.warnings) > 0 {
-		add(styles.StyleWarning, fmt.Sprintf("⚠ 기존 클러스터에서 바꾸기 어려운 값 %d건:", len(s.warnings)))
+		add(styles.StyleWarning, i18n.T("⚠ Values hard to change on an existing cluster (%d):", len(s.warnings)))
 		for _, w := range s.warnings {
 			add(styles.StyleWarning, "  • "+w.Message())
 		}
@@ -217,7 +219,7 @@ func (s *S7Preview) buildNotes(st *state.AppState) {
 
 	// not blocking either: the site puts these files there, maybe after saving
 	if len(s.missing) > 0 {
-		add(styles.StyleWarning, fmt.Sprintf("⚠ 컨트롤플레인 파일 %d건이 ansible/files 에 없습니다 (setup-cluster 전에 두세요):", len(s.missing)))
+		add(styles.StyleWarning, i18n.T("⚠ Control plane files missing from ansible/files (%d), put them there before setup-cluster:", len(s.missing)))
 		for _, f := range s.missing {
 			add(styles.StyleWarning, "  • "+s.installerFiles+"/"+f.Src+schema.FileSource(&st.ControlPlane, f))
 		}
@@ -255,10 +257,10 @@ func (s *S7Preview) warningCount() int {
 // and returns whether it added it.
 func (s *S7Preview) notesFirst() bool {
 	s.notesW = -1 // wrapped again by layout
-	if len(s.notes) == 0 || (len(s.tabs) > 0 && s.tabs[0].name == notesTab) {
+	if len(s.notes) == 0 || (len(s.tabs) > 0 && s.tabs[0].isNotes) {
 		return false
 	}
-	s.tabs = append([]previewTab{{name: notesTab}}, s.tabs...)
+	s.tabs = append([]previewTab{{name: i18n.T(notesTab), isNotes: true}}, s.tabs...)
 	return true
 }
 
@@ -292,16 +294,16 @@ func (s *S7Preview) SyncFromState(st *state.AppState) {
 	s.tabs = nil
 	r, err := fileio.Render(s.paths, st)
 	if err != nil {
-		s.tabs = []previewTab{{name: "오류", content: fmt.Sprintf("렌더링 오류: %v", err)}}
+		s.tabs = []previewTab{{name: i18n.T("Error"), content: i18n.T("Render error: %v", err)}}
 	} else {
 		s.caNote = nil
 		if r.JWKSPending(st) {
-			s.caNote = append(s.caNote, "AIPub 인증 (JWKS): CA 대기 ("+r.CA.Path+" 없음). "+state.JWKSConfigFile+" 는 쓰지 않고, "+
-				"설치 계획의 A5.1 (--fill-auth-config) 이 setup-cert 뒤에 만듭니다",
-				"그 전에 update-cluster/노드 추가를 돌리면 설치기가 '소스 파일 없음'으로 거부합니다 (노드는 그대로)")
+			s.caNote = append(s.caNote, i18n.T("AIPub authentication (JWKS): waiting for the CA (%s missing). %s is not written; "+
+				"A5.1 of the install plan (--fill-auth-config) makes it after setup-cert", r.CA.Path, state.JWKSConfigFile),
+				i18n.T("Before that, update-cluster or adding a node is refused by the installer with 'source file missing' (the nodes are left as they are)"))
 		}
 		if r.CA.Err != nil && st.AppliedControlPlane().JWKS {
-			s.caNote = append(s.caNote, "JWKS CA 파일: "+r.CA.Err.Error())
+			s.caNote = append(s.caNote, i18n.T("JWKS CA file: %s", r.CA.Err.Error()))
 		}
 		s.tabs = []previewTab{
 			{name: "inventory.yml", path: s.paths.Inventory, content: string(r.Inventory)},
@@ -338,7 +340,7 @@ func (s *S7Preview) Validate() []string {
 	errs := validator.Validate(s.appState)
 	if len(errs) == 0 {
 		if !s.saved {
-			return []string{"저장(s)한 뒤에 설치 계획으로 넘어갈 수 있습니다"}
+			return []string{i18n.T("Save (s) before going on to the install plan")}
 		}
 		return nil
 	}
@@ -431,11 +433,11 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 		return s, nil
 	}
 	if len(s.errors) > 0 {
-		s.saveErr = "검증 오류가 있어 저장할 수 없습니다"
+		s.saveErr = i18n.T("Cannot save: there are validation errors")
 		return s, nil
 	}
 	if err := fileio.WriteAll(s.paths, s.appState); err != nil {
-		s.saveErr = fmt.Sprintf("저장 실패: %v", err)
+		s.saveErr = i18n.T("Save failed: %v", err)
 		return s, nil
 	}
 	s.saved = true
@@ -447,7 +449,7 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 	if len(s.notes) > 0 {
 		s.notes = append(s.notes, note{styles.StyleMuted, ""})
 	}
-	s.notes = append(s.notes, note{styles.StyleSuccess, "✓ 저장한 파일 (이전 내용은 " + fileio.HistoryFile + " 에 남김):"})
+	s.notes = append(s.notes, note{styles.StyleSuccess, i18n.T("✓ Saved files (the previous content kept in %s):", fileio.HistoryFile)})
 	for _, t := range s.tabs {
 		if t.path != "" && t.kept == "" {
 			s.notes = append(s.notes, note{styles.StyleMuted, "  " + t.path})
@@ -455,7 +457,7 @@ func (s *S7Preview) doSave() (tea.Model, tea.Cmd) {
 	}
 	for _, t := range s.tabs {
 		if t.kept != "" {
-			s.notes = append(s.notes, note{styles.StyleMuted, "  " + t.path + " — 쓰지 않음: " + t.kept})
+			s.notes = append(s.notes, note{styles.StyleMuted, "  " + i18n.T("%s — not written: %s", t.path, t.kept)})
 		}
 	}
 	if s.notesFirst() {
@@ -526,12 +528,12 @@ func (s *S7Preview) above() string {
 	}
 	tabLine := strings.Join(parts, " ")
 	if contentFocused && len(s.tabs) > 1 {
-		tabLine += styles.StyleMuted.Render("   ←/→ 탭 전환")
+		tabLine += styles.StyleMuted.Render("   " + i18n.T("←/→ switch tabs"))
 	}
 	if s.noTitle {
 		return tabLine
 	}
-	return styles.StyleTitle.Render("미리보기 & 저장") + "\n\n" + tabLine
+	return styles.StyleTitle.Render(i18n.T("Preview & save")) + "\n\n" + tabLine
 }
 
 // below is what is under the viewport, a few lines whatever there is to
@@ -539,26 +541,26 @@ func (s *S7Preview) above() string {
 func (s *S7Preview) below() string {
 	var lines []string
 	if len(s.errors) == 0 {
-		lines = append(lines, styles.StyleSuccess.Render("✓ 검증 통과 — 저장 가능합니다"))
+		lines = append(lines, styles.StyleSuccess.Render(i18n.T("✓ Validation passed — ready to save")))
 	} else {
-		lines = append(lines, styles.StyleError.Render(fmt.Sprintf("✗ 검증 오류 %d건 — '%s' 탭", len(s.errors), notesTab)))
+		lines = append(lines, styles.StyleError.Render(i18n.T("✗ Validation errors (%d) — the '%s' tab", len(s.errors), i18n.T(notesTab))))
 	}
 	if n := s.warningCount(); n > 0 {
-		lines = append(lines, styles.StyleWarning.Render(fmt.Sprintf("⚠ 확인할 점 %d건 — '%s' 탭", n, notesTab)))
+		lines = append(lines, styles.StyleWarning.Render(i18n.T("⚠ Notes (%d) — the '%s' tab", n, i18n.T(notesTab))))
 	}
 	if s.saveErr != "" {
 		lines = append(lines, styles.StyleError.Render("✗ "+s.saveErr))
 	}
 	if s.saved {
-		lines = append(lines, styles.StyleSuccess.Render("✓ 저장 완료 — 이전 내용은 "+fileio.HistoryFile+" 에 남김")+
-			styles.StyleMuted.Render(" · 저장한 파일은 '"+notesTab+"' 탭"))
+		lines = append(lines, styles.StyleSuccess.Render(i18n.T("✓ Saved — the previous content kept in %s", fileio.HistoryFile))+
+			styles.StyleMuted.Render(" · "+i18n.T("saved files: see the '%s' tab", i18n.T(notesTab))))
 	}
 
 	prevFocused := s.focusIdx == s7FocusNav && s.navIdx == 0
 	saveFocused := s.focusIdx == s7FocusNav && s.navIdx == 1
-	right := "저장 (s)"
+	right := i18n.T("Save (s)")
 	if s.saved {
-		right = "다음"
+		right = i18n.T("Next")
 	}
-	return strings.Join(lines, "\n") + "\n\n" + RenderNavButtons("이전", right, prevFocused, saveFocused, s.width)
+	return strings.Join(lines, "\n") + "\n\n" + RenderNavButtons(i18n.T("Back"), right, prevFocused, saveFocused, s.width)
 }

@@ -106,21 +106,22 @@ type Var struct {
 	Optional bool
 }
 
-// Groups are the sections of the site-values view, in the order shown.
+// Groups are the sections of the site-values view, in the order shown. Title is
+// English; show it through i18n.T (it is a table, built before --lang is read).
 var Groups = []struct{ Name, Title string }{
-	{"nodes", "노드 / 접속"},
-	{"host", "노드 디스크 / 커널"},
-	{"network", "내부 네트워크 / ki-cp"},
-	{"kubernetes", "쿠버네티스"},
-	{"control_plane", "컨트롤 플레인 추가 인자"},
-	{"preflight", "실행 전 점검 / etcd 백업"},
+	{"nodes", "Nodes / access"},
+	{"host", "Node disk / kernel"},
+	{"network", "Internal network / ki-cp"},
+	{"kubernetes", "Kubernetes"},
+	{"control_plane", "Extra control plane arguments"},
+	{"preflight", "Checks before the run / etcd backup"},
 	{"kubelet", "kubelet"},
-	{"ingress", "도메인 / 인그레스 / 로드밸런서"},
-	{"cert", "인증서"},
-	{"harbor", "Harbor / HA 스토리지"},
-	{"app", "AIPub 앱"},
-	{"deploy", "배포 도구"},
-	{"monitoring", "모니터링"},
+	{"ingress", "Domain / ingress / load balancer"},
+	{"cert", "Certificates"},
+	{"harbor", "Harbor / HA storage"},
+	{"app", "AIPub app"},
+	{"deploy", "Deploy tools"},
+	{"monitoring", "Monitoring"},
 }
 
 // Classes of k8s-installer a change to an existing cluster is refused for or

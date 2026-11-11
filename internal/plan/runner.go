@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
 
@@ -318,7 +319,7 @@ func (e *LockedError) Error() string {
 	if pid == "" {
 		pid = "?"
 	}
-	return "다른 k8s-installer-tui (pid " + pid + ") 가 이 설치를 실행 중입니다 (" + e.Path + ")"
+	return i18n.T("another k8s-installer-tui (pid %s) is running this install (%s)", pid, e.Path)
 }
 
 // Runner runs the stages once (Run). Continue, Stop and Kill may be called from
@@ -414,7 +415,7 @@ func (r *Runner) Run(ctx context.Context, resume bool) (Outcome, error) {
 	}
 
 	if err := ensureDir(ctx, r.Dir, r.Cmd); err != nil {
-		return "", fmt.Errorf("상태 디렉터리 %s: %w", r.Dir, err)
+		return "", fmt.Errorf("%s: %w", i18n.T("state directory %s", r.Dir), err)
 	}
 	lock, err := lockFile(filepath.Join(r.Dir, "lock"))
 	if err != nil {
@@ -463,7 +464,7 @@ type StillRunningError struct {
 }
 
 func (e *StillRunningError) Error() string {
-	return fmt.Sprintf("지난 실행의 %s 가 아직 실행 중입니다 (프로세스 그룹 %d, pid %d). 끝나기를 기다리거나 kill -INT -- -%d 로 멈춘 뒤 다시 실행하세요",
+	return i18n.T("%s of the last run is still running (process group %d, pid %d). Wait for it to end, or stop it with kill -INT -- -%d, then run again",
 		e.Step, e.PGID, e.PGID, e.PGID)
 }
 
@@ -498,9 +499,9 @@ func (r *Runner) sudoReady(ctx context.Context) error {
 	}
 	out, err := r.Cmd(ctx, "/", "sudo", "-n", "true")
 	if err != nil {
-		return fmt.Errorf("%s 는 이 제어 노드에서 sudo 로 실행하는데, sudo 가 비밀번호를 묻습니다 (sudo -n true: %s). "+
-			"이 사용자에게 비밀번호 없는 sudo (NOPASSWD) 를 준 뒤 다시 실행하세요",
-			strings.Join(ids, ", "), firstLine(strings.TrimSpace(string(out)+" "+err.Error())))
+		return errors.New(i18n.T("Steps %s run with sudo on this control node, and sudo asks for a password (sudo -n true: %s). "+
+			"Give this user sudo without a password (NOPASSWD), then run again",
+			strings.Join(ids, ", "), firstLine(strings.TrimSpace(string(out)+" "+err.Error()))))
 	}
 	return nil
 }
@@ -525,7 +526,8 @@ func (r *Runner) init(prev *RunState) {
 				s.Status, s.Note = StatusSkipped, st.SkipWhy
 			} else if p != nil && !st.AlwaysRun && !again && p.Status == StatusOK {
 				s = *p
-				s.Stage = i
+				// the title in the language of this run, which may not be the last one's
+				s.Stage, s.Title = i, st.Title
 			}
 			if p != nil && p.Status == StatusFailed && p.Continued {
 				again = true
@@ -650,17 +652,19 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	logPath := filepath.Join(r.Dir, "logs", st.ID+".log")
 	if forbidden(st) {
 		r.set(st.ID, func(s *StepState) {
-			s.Status, s.Note = StatusFailed, "삭제·초기화 플레이북은 실행하지 않습니다: "+Command(st)
+			s.Status, s.Note = StatusFailed, i18n.T("Playbooks that delete or reset are never run: %s", Command(st))
 		})
 		return false
 	}
 	// appended: the log of every attempt is kept
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
-		r.set(st.ID, func(s *StepState) { s.Status, s.Note = StatusFailed, "로그 파일: "+err.Error() })
+		r.set(st.ID, func(s *StepState) { s.Status, s.Note = StatusFailed, i18n.T("Log file: %v", err) })
 		return false
 	}
 	defer f.Close()
+	// the header of the attempt (attemptLines): its time, the ID and the title,
+	// then the command
 	fmt.Fprintf(f, "── %s %s %s\n── %s\n", time.Now().Format(time.RFC3339), st.ID, st.Title, strings.ReplaceAll(Command(st), "\n", "\n── "))
 	copying := st.ID == copyStepID && r.Opts.SiteDir != ""
 	if copying {
@@ -668,16 +672,16 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 		// edited on the installer side since the last copy stops it once
 		changed, unchecked, err := fileio.GuardCopy(r.Opts.SiteDir, r.Opts.AnsibleDir())
 		if len(unchecked) > 0 {
-			fmt.Fprintf(f, "── 읽을 수 없어 확인하지 못하고 덮어씀 (이력에 없음): %s\n", strings.Join(unchecked, ", "))
+			fmt.Fprintf(f, "── %s\n", i18n.T("Overwritten unchecked, as they could not be read (not in the history): %s", strings.Join(unchecked, ", ")))
 		}
 		note := ""
 		switch {
 		case err != nil:
-			note = "복사 전 확인 실패: " + err.Error()
+			note = i18n.T("The check before the copy failed: %v", err)
 		case len(changed) > 0:
-			note = "설치기 쪽 파일을 마지막 복사 뒤 손으로 고쳤습니다: " + strings.Join(changed, ", ") +
-				". 그 내용은 " + filepath.Join(r.Opts.SiteDir, fileio.HistoryFile) + " 에 남겼습니다. " +
-				"확인한 뒤 (필요하면 사이트에 반영하고) 다시 실행하면 덮어씁니다"
+			note = i18n.T("Files on the installer side were edited by hand since the last copy: %s. "+
+				"What they held is kept in %s. Look at it (and bring it into the site if needed), then run again to overwrite them",
+				strings.Join(changed, ", "), filepath.Join(r.Opts.SiteDir, fileio.HistoryFile))
 		}
 		if note != "" {
 			fmt.Fprintf(f, "── %s\n", note)
@@ -712,16 +716,16 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	if err == nil && copying {
 		// not a failure of the copy, which is done: the next one says it again
 		if rerr := fileio.RecordCopy(r.Opts.SiteDir, r.Opts.AnsibleDir()); rerr != nil {
-			fmt.Fprintf(f, "── 이력에 복사를 남기지 못함: %v\n", rerr)
+			fmt.Fprintf(f, "── %s\n", i18n.T("The copy could not be recorded in the history: %v", rerr))
 		}
 	}
-	fmt.Fprintf(f, "── %s %s 끝: 종료 코드 %d\n", time.Now().Format(time.RFC3339), st.ID, code)
+	fmt.Fprintf(f, "── %s %s %s\n", time.Now().Format(time.RFC3339), st.ID, i18n.T("end: exit code %d", code))
 	var note string
 	goesOn := false
 	if err != nil && ctx.Err() == nil {
 		note = knownFailure(st, logPath, r.failureContext(st))
 		if goesOn = informerOnly(st, attemptLines(logPath, st)); goesOn {
-			note += ". 실패한 것은 backend-informer 하나이고 뒤 단계는 그것에 기대지 않아, 이 단계는 실패로 남기고 계속합니다"
+			note += ". " + i18n.T("Only backend-informer failed, and the steps after this one do not depend on it: this step stays failed and the run goes on")
 		}
 	}
 	r.set(st.ID, func(s *StepState) {
@@ -730,7 +734,7 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 		case err == nil:
 			s.Status = StatusOK
 		case ctx.Err() != nil:
-			s.Status, s.Note = StatusCancelled, "중단함 (Ctrl+C 두 번)"
+			s.Status, s.Note = StatusCancelled, i18n.T("Stopped (Ctrl+C twice)")
 		default:
 			s.Status, s.Note, s.Continued = StatusFailed, note, goesOn
 		}
@@ -752,23 +756,38 @@ var componentFailed = regexp.MustCompile(`AIPUB(?:_JAVA)?_RESULT .*\bcomponent=(
 
 // attemptLines are the lines of the last attempt of a step: its log keeps
 // every attempt, each under the header command() writes ("── <time> <ID>
-// <title>"). What an earlier attempt said must not decide this one.
+// <title>", then "── <command>"). What an earlier attempt said must not decide
+// this one.
 func attemptLines(logPath string, st Step) []string {
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		return nil
 	}
 	lines := strings.Split(string(data), "\n")
-	// the header is "── <time> <ID> <title>": a time has no space in it, so a
-	// line of the command echoed under it ("── ansible-playbook ...") is not one
-	start, header := 0, " "+st.ID+" "+st.Title
-	for i, l := range lines {
-		if rest, ok := strings.CutPrefix(l, "── "); ok && strings.HasSuffix(rest, header) &&
-			!strings.Contains(strings.TrimSuffix(rest, header), " ") {
+	// the header is known by its time, the ID and the command echoed under it,
+	// not by the title: that is in the language of the run that wrote it, and a
+	// resume may speak the other. The line that ends an attempt ("── <time>
+	// <ID> ...") has no command under it
+	start, echo := 0, "── "+firstLine(Command(st))
+	for i := 0; i+1 < len(lines); i++ {
+		if lines[i+1] == echo && attemptHeader(lines[i], st.ID) {
 			start = i
 		}
 	}
 	return lines[start:]
+}
+
+// attemptHeader reports whether l is "── <time> <id>", with anything after.
+func attemptHeader(l, id string) bool {
+	rest, ok := strings.CutPrefix(l, "── ")
+	if !ok {
+		return false
+	}
+	at, rest, _ := strings.Cut(rest, " ")
+	if _, err := time.Parse(time.RFC3339, at); err != nil {
+		return false
+	}
+	return rest == id || strings.HasPrefix(rest, id+" ")
 }
 
 // failedTasks are the tasks of an ansible log that failed and were not
@@ -923,34 +942,34 @@ func knownFailure(st Step, logPath string, fc failureContext) string {
 	// before it are installed" of a setup-aipub that failed on something else
 	if informerOnly(st, attemptLines(logPath, st)) {
 		// deterministic until then, so no retry: aipub-installer README "What to expect on a new cluster"
-		return "알려진 일: backend-informer 는 Python 서비스가 만드는 Workspace CRD 를 기다립니다. 그 앞의 서비스는 설치됐습니다. " +
-			"Python 서비스를 설치한 뒤 이어서 실행하세요 (aipub-installer README)"
+		return i18n.T("Known issue: backend-informer waits for the Workspace CRD the Python services make. The services before it are installed. " +
+			"Install the Python services, then resume (aipub-installer README)")
 	}
 	if ns, helm := helmNamespaces[st.Playbook]; helm && containsAny(full, podsNotStarted) {
-		note := "진단: 파드가 시작되지 못해 helm 이 기다리다 멈췄습니다. 흔한 원인은 사용자 레지스트리에 이미지가 없는 것 (ImagePullBackOff) 입니다. " +
-			"컨트롤 플레인 노드에서 kubectl " + ns + " get pods 로 확인하세요"
+		note := i18n.T("Diagnosis: pods did not start, and helm stopped waiting for them. The usual cause is images missing from the user registry (ImagePullBackOff). "+
+			"Look with kubectl %s get pods on a control plane node", ns)
 		if fc.k4 == StatusSkipped || fc.k4 == StatusPending {
-			note += ". 이번 실행은 K4 push-user-registry-artifacts 를 건너뛰었습니다: 아카이브 경로에 " + ArchiveName +
-				" 의 경로를 넣고 이어서 실행하세요 (--install --resume --archive <파일>). K4 를 먼저 실행한 뒤 이 단계부터 갑니다"
+			note += ". " + i18n.T("This run skipped K4 push-user-registry-artifacts: give the path of %s as the archive path and resume "+
+				"(--install --resume --archive <file>). K4 runs first, then this step", ArchiveName)
 		}
 		return note
 	}
 	if strings.Contains(full, "error syncing endpoints with etcd") || (strings.Contains(full, "check-etcd") && strings.Contains(full, "context deadline exceeded")) {
-		return "진단: 컨트롤 플레인 간 etcd 통신(포트 2379/2380)이 방화벽에 차단되었습니다. 복구: 각 노드에서 방화벽 포트(2379, 2380/tcp)를 개방하거나 방화벽 상태를 확인하세요."
+		return i18n.T("Diagnosis: a firewall blocks etcd between the control plane nodes (ports 2379/2380). Fix: open ports 2379 and 2380/tcp on every node, or check the state of the firewall.")
 	}
 	// the leftovers of an earlier install: only where a reset is a way out
 	// (ResetHelps), else the raw error below says what failed
 	if fc.resettable && (strings.Contains(full, "package[\"containerd\"] already installed") || (strings.Contains(full, "already installed") && strings.Contains(full, "containerd"))) {
-		return "진단: 노드에 이전 설치 잔재(containerd)가 남아있습니다. 복구: reset-cluster.yml 로 노드를 초기화한 뒤 처음부터 다시 실행하세요 " +
-			"(설치 화면에 x 가 나오면 x, reset 입력)"
+		return i18n.T("Diagnosis: an earlier install left containerd on the nodes. Fix: reset the nodes with reset-cluster.yml, then run again from the first step " +
+			"(x on the install screen when it offers x, then type reset)")
 	}
 	if strings.Contains(full, "Failed dependencies") && strings.Contains(full, "libcrypto.so") {
-		return "진단: openssl-devel 패키지로 인해 python3.12-libs 의존성 충돌이 발생했습니다. 복구: 노드에서 'sudo dnf remove -y openssl-devel' 이 필요합니다."
+		return i18n.T("Diagnosis: the openssl-devel package conflicts with the dependencies of python3.12-libs. Fix: run 'sudo dnf remove -y openssl-devel' on the node.")
 	}
 	if fc.resettable && strings.Contains(full, "Kubelet already enabled") {
-		return "진단: kubelet 서비스가 이미 활성화되어 있습니다. 이전 설치의 잔재이거나, 이 노드에 이미 클러스터가 돌고 있는 것입니다. " +
-			"운영 중인 클러스터라면 초기화하지 말고 --existing 으로 다시 시작하세요. 잔재가 맞으면 reset-cluster.yml 로 노드를 초기화한 뒤 " +
-			"처음부터 다시 실행하세요 (설치 화면에 x 가 나오면 x, reset 입력)"
+		return i18n.T("Diagnosis: the kubelet service is enabled already: left by an earlier install, or a cluster already runs on this node. " +
+			"A cluster in service is not to be reset: start again with --existing. When it is a leftover, reset the nodes with reset-cluster.yml, then " +
+			"run again from the first step (x on the install screen when it offers x, then type reset)")
 	}
 	if (strings.Contains(full, "k8s_cp_extra_files") || strings.Contains(full, "authentication-config.yaml")) && strings.Contains(full, "not there") {
 		// Every playbook of the plan carries the -e of its stage (withStages),
@@ -958,19 +977,19 @@ func knownFailure(st Step, logPath string, fc failureContext) string {
 		// playbook run by hand. An empty file is no way past it: copied to the
 		// control plane nodes, an empty authentication config keeps the
 		// apiserver from starting (fileio.AuthConfig)
-		return "진단: k8s_cp_extra_files 가 가리키는 파일 (JWKS 인증 설정 등, A5.1 이 만듦) 이 설치 디렉터리에 없습니다. " +
-			"위저드는 아직 없는 파일을 단계마다 -e 로 빼고 실행하므로, 이 거부는 플레이북을 손으로 실행했을 때 납니다. " +
-			"복구: 위저드 (또는 --install) 로 실행하거나, 손으로 실행할 때는 이 단계 로그의 ── 줄에 있는 -e 를 그대로 붙이세요. " +
-			"빈 파일을 만들지 마세요: 빈 인증 설정이 컨트롤 플레인 노드로 복사되면 apiserver 가 뜨지 않습니다"
+		return i18n.T("Diagnosis: a file that k8s_cp_extra_files names (the JWKS authentication config or another, made by A5.1) is not in the install directory. " +
+			"At each step the wizard leaves out, with -e, the files not yet written, so this refusal comes from a playbook run by hand. " +
+			"Fix: run it with the wizard (or --install), or, when running it by hand, add the -e from the ── line of this step's log as it is. " +
+			"Do not make an empty file: an empty authentication config copied to the control plane nodes keeps the apiserver from starting")
 	}
 
 	// the informer's error, the failure not shown to be it alone and none of the
 	// above: said, but not that the services before it are there; with it the
 	// raw error of the log without that line
 	if st.Playbook == setupAipubPlaybook && strings.Contains(strings.Join(attemptLines(logPath, st), "\n"), workspaceCRDGone) {
-		note := "backend-informer 의 Workspace CRD 오류가 보입니다 (새 클러스터에서는 Python 서비스를 설치하기 전까지 늘 나옵니다). " +
-			"다만 실패가 그것 하나인지 확인되지 않아 앞의 서비스가 설치됐다고 볼 수 없습니다. 로그에서 다른 실패를 먼저 확인하고, " +
-			"informer 하나뿐이면 Python 서비스를 설치한 뒤 이어서 실행하세요"
+		note := i18n.T("The Workspace CRD error of backend-informer is in the log (on a new cluster it always is, until the Python services are installed). " +
+			"But it is not shown to be the only failure, so the services before it are not known to be installed. Look for other failures in the log first; " +
+			"when the informer is the only one, install the Python services, then resume")
 		var others []string
 		for _, l := range lines {
 			if !strings.Contains(l, workspaceCRDGone) {
@@ -978,14 +997,14 @@ func knownFailure(st Step, logPath string, fc failureContext) string {
 			}
 		}
 		if raw := extractRawError(others); raw != "" {
-			note += ". 실패 원문: " + raw
+			note += ". " + i18n.T("Raw failure: %s", raw)
 		}
 		return note
 	}
 
 	// 2. Fallback: extract the raw failure summary from the Ansible log
 	if raw := extractRawError(lines); raw != "" {
-		return "실패 원문: " + raw
+		return i18n.T("Raw failure: %s", raw)
 	}
 	return ""
 }
@@ -1056,13 +1075,13 @@ func (r *Runner) manual(ctx, waits context.Context, st Step) {
 	}
 	record("── " + st.ID + " " + ManualPrompt(st))
 	r.set(st.ID, func(s *StepState) {
-		s.Status, s.Start, s.End, s.Log, s.Note = StatusRunning, now(), nil, logPath, "확인 중 (kubectl get storageclass)"
+		s.Status, s.Start, s.End, s.Log, s.Note = StatusRunning, now(), nil, logPath, i18n.T("Checking (kubectl get storageclass)")
 	})
 	for {
 		missing, lines := CheckClasses(ctx, r.Opts, r.State, r.Cmd, st.Classes)
 		record(lines...)
 		if ctx.Err() != nil {
-			r.set(st.ID, func(s *StepState) { s.Status, s.End, s.Note = StatusCancelled, now(), "중단함" })
+			r.set(st.ID, func(s *StepState) { s.Status, s.End, s.Note = StatusCancelled, now(), i18n.T("Stopped") })
 			return
 		}
 		if len(missing) == 0 {
@@ -1075,21 +1094,21 @@ func (r *Runner) manual(ctx, waits context.Context, st Step) {
 		default:
 		}
 		r.set(st.ID, func(s *StepState) {
-			s.Status, s.Note = StatusWaiting, "없음: "+strings.Join(missing, ", ")+" — "+strings.Join(lines, "; ")
+			s.Status, s.Note = StatusWaiting, i18n.T("Missing: %s — %s", strings.Join(classNames(missing), ", "), strings.Join(lines, "; "))
 		})
 		select {
 		case <-r.cont:
-			record("설치함 (운영자), 다시 확인")
-			r.set(st.ID, func(s *StepState) { s.Status, s.Note = StatusRunning, "확인 중 (kubectl get storageclass)" })
+			record(i18n.T("Installed (by the operator), checking again"))
+			r.set(st.ID, func(s *StepState) { s.Status, s.Note = StatusRunning, i18n.T("Checking (kubectl get storageclass)") })
 		case <-r.stopped:
 			r.set(st.ID, func(s *StepState) {
-				s.Status, s.End, s.Note = StatusCancelled, now(), "멈춤: 기다리던 중 중단"
+				s.Status, s.End, s.Note = StatusCancelled, now(), i18n.T("Stopped while waiting")
 			})
 			return
 		case <-waits.Done():
-			note := "같은 단계의 다른 단계가 실패해 멈춤"
+			note := i18n.T("Stopped: another step of the same stage failed")
 			if ctx.Err() != nil || r.stopping() {
-				note = "멈춤: 기다리던 중 중단"
+				note = i18n.T("Stopped while waiting")
 			}
 			r.set(st.ID, func(s *StepState) { s.Status, s.End, s.Note = StatusCancelled, now(), note })
 			return

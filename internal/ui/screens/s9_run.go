@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
@@ -66,7 +67,7 @@ func (s *S9Install) loadPrev() {
 	s.last = nil
 	prev, err := plan.LoadRunState(plan.StateDir(s.opts))
 	if err != nil {
-		s.message = "지난 실행 기록을 읽지 못했습니다: " + err.Error()
+		s.message = i18n.T("Could not read the record of the last run: %s", err.Error())
 		return
 	}
 	s.last = prev
@@ -107,9 +108,9 @@ func (s *S9Install) findArchive() {
 	case 0:
 	case 1:
 		s.archive.SetValue(found[0])
-		s.message = "아카이브를 " + filepath.Dir(found[0]) + " 에서 찾아 아카이브 경로에 넣었습니다: " + found[0]
+		s.message = i18n.T("Found the archive in %s and put it in the archive path: %s", filepath.Dir(found[0]), found[0])
 	default:
-		s.message = plan.ArchiveName + " 가 여러 곳에 있습니다: " + strings.Join(found, ", ") + " — 쓸 것을 아카이브 경로에 넣으세요"
+		s.message = i18n.T("%s is in several places: %s — put the one to use in the archive path", plan.ArchiveName, strings.Join(found, ", "))
 	}
 }
 
@@ -161,7 +162,7 @@ func (s *S9Install) archiveGate(waived bool) tea.Cmd {
 		switch {
 		case path != "":
 			if err := plan.CheckArchive(path); err != nil {
-				s.message = "실행하지 않았습니다: " + err.Error() + ". 아카이브 경로를 고친 뒤 실행하세요"
+				s.message = i18n.T("Not run: %s. Fix the archive path, then run", err.Error())
 				return nil
 			}
 		case !waived && plan.NeedsArchive(s.appState.AipubEnabled, s.opts):
@@ -189,7 +190,7 @@ func (s *S9Install) gate(after bool) tea.Cmd {
 	}
 	if s.checking {
 		s.runAfterChecks = true
-		s.message = "사전 확인이 끝나면 실행합니다"
+		s.message = i18n.T("The run starts once the checks end")
 		return nil
 	}
 	if s.checksFor != s.checkKey() {
@@ -198,15 +199,15 @@ func (s *S9Install) gate(after bool) tea.Cmd {
 	notRun, failed := plan.CheckVerdict(s.steps, s.checks)
 	switch {
 	case len(failed) > 0:
-		s.message = "사전 확인 ✗: " + strings.Join(failed, " ") + ". 고친 뒤 c 로 다시 확인하고 실행하세요"
+		s.message = i18n.T("Checks ✗: %s. Fix them, check again with c, then run", strings.Join(failed, " "))
 		return nil
 	case len(notRun) > 0 && after:
 		// they ran and still gave nothing: never loop on them
-		s.message = "사전 확인 결과가 없습니다 (" + strings.Join(notRun, " ") + "). c 로 다시 확인하고 실행하세요"
+		s.message = i18n.T("No check results (%s). Check again with c, then run", strings.Join(notRun, " "))
 		return nil
 	case len(notRun) > 0:
 		s.runAfterChecks = true
-		s.message = "사전 확인을 먼저 실행합니다 (" + strings.Join(notRun, " ") + "). 통과하면 바로 실행합니다"
+		s.message = i18n.T("Running the checks first (%s). The run starts as soon as they pass", strings.Join(notRun, " "))
 		return s.runChecks()
 	}
 	return s.archiveGate(false)
@@ -238,19 +239,19 @@ func (s *S9Install) offerRun() tea.Cmd {
 func (s *S9Install) confirmQuestion() string {
 	switch s.confirm {
 	case "reset-cluster":
-		return "reset-cluster.yml 로 인벤토리의 모든 노드에서 클러스터를 지웁니다 (kubeadm reset, ki cp 서비스, containerd·패키지, 인증서). " +
-			"되돌릴 수 없습니다. 초기화하려면 reset 을 입력하고 Enter, 그 밖에는 취소: " + s.resetTyped
+		return i18n.T("reset-cluster.yml removes the cluster from every node of the inventory (kubeadm reset, ki cp services, containerd·packages, certificates). "+
+			"This cannot be undone. To reset, type reset and press Enter; anything else cancels: %s", s.resetTyped)
 	case "no-archive":
-		return "새 사이트인데 아카이브 경로가 비어 있습니다. K2 가 만드는 사용자 레지스트리는 비어 있어, K4 없이는 A1 setup-network 부터 " +
-			"이미지를 받지 못해 실패합니다. 아카이브 경로 칸에 " + plan.ArchiveName + " 의 경로를 넣으세요. 그래도 K4 없이 실행할까요? (y 예, n·Enter 아니오)"
+		return i18n.T("A new site with an empty archive path. The user registry K2 makes is empty, so without K4 the steps from A1 setup-network "+
+			"cannot pull their images and fail. Put the path of %s in the archive path. Run without K4 anyway? (y yes, n·Enter no)", plan.ArchiveName)
 	}
 	if s.confirm == "resume" {
-		return "지난 실행 뒤에 사이트 파일이 바뀌었습니다. 끝난 단계는 다시 실행하지 않고 이어서 실행할까요? (y 예, n 아니오)"
+		return i18n.T("The site files changed since the last run. Resume, without running the finished steps again? (y yes, n no)")
 	}
 	if s.last != nil && len(s.last.Remaining()) == 0 {
-		return "지난 실행이 모두 끝났습니다. 처음부터 모든 단계를 다시 실행할까요? (y 예, n 아니오)"
+		return i18n.T("The last run finished every step. Run all the steps again from the start? (y yes, n no)")
 	}
-	return "끝난 단계도 모두 처음부터 다시 실행할까요? (y 예, n 아니오)"
+	return i18n.T("Run all the steps again from the start, the finished ones too? (y yes, n no)")
 }
 
 type resetDoneMsg struct {
@@ -302,7 +303,7 @@ type resetReadyMsg struct {
 // node, so it is a command, not a call.
 func (s *S9Install) prepareReset() tea.Cmd {
 	s.resetting = true
-	s.message = "초기화 전 확인 중... (다른 실행, 실행 기록, 모든 노드의 클러스터 기록)"
+	s.message = i18n.T("Checking before the reset... (other runs, the run record, the cluster record of every node)")
 	opts, shown, run := s.opts, s.last, s.run
 	opts.Detect = s.base.Detect
 	return func() tea.Msg {
@@ -316,7 +317,7 @@ func (s *S9Install) prepareReset() tea.Cmd {
 func (s *S9Install) resetReady(msg resetReadyMsg) tea.Cmd {
 	if msg.err != nil {
 		s.resetting = false
-		s.message = "✗ 초기화하지 않았습니다: " + msg.err.Error()
+		s.message = i18n.T("✗ Not reset: %s", msg.err.Error())
 		return nil
 	}
 	s.resetRelease = msg.release
@@ -349,16 +350,16 @@ func (s *S9Install) resetDone(err error) {
 	s.resetting = false
 	log := plan.StateDir(s.opts) + "/logs/reset-cluster.log"
 	if err != nil {
-		s.message = "✗ 클러스터 초기화 실패: " + err.Error() + " (로그 " + log + ")"
+		s.message = i18n.T("✗ Resetting the cluster failed: %s (log %s)", err.Error(), log)
 		return
 	}
 	if err := plan.SetAsideRun(plan.StateDir(s.opts)); err != nil {
-		s.message = "✓ 클러스터를 초기화했습니다. 지난 실행 기록을 치우지 못했습니다 (" + err.Error() + "): f 로 처음부터 실행하세요"
+		s.message = i18n.T("✓ The cluster was reset. The record of the last run could not be set aside (%s): run from the start with f", err.Error())
 		return
 	}
 	s.ex, s.selMoved, s.last = nil, false, nil
 	s.detectSite()
-	s.message = "✓ 클러스터를 초기화했습니다 (로그 " + log + "). 실행을 누르면 처음부터 (K1 부터) 실행합니다"
+	s.message = i18n.T("✓ The cluster was reset (log %s). Run now starts from K1", log)
 }
 
 func (s *S9Install) answer(yes bool) tea.Cmd {
@@ -367,11 +368,11 @@ func (s *S9Install) answer(yes bool) tea.Cmd {
 	if !yes {
 		switch c {
 		case "reset-cluster":
-			s.message = "클러스터 초기화를 취소했습니다"
+			s.message = i18n.T("The cluster reset was cancelled")
 		case "no-archive":
-			s.message = "실행하지 않았습니다. 아카이브 경로 칸에 " + plan.ArchiveName + " 의 경로를 넣고 실행하세요"
+			s.message = i18n.T("Not run. Put the path of %s in the archive path, then run", plan.ArchiveName)
 		default:
-			s.message = "실행하지 않았습니다"
+			s.message = i18n.T("Not run")
 		}
 		return nil
 	}
@@ -379,7 +380,7 @@ func (s *S9Install) answer(yes bool) tea.Cmd {
 	case "reset-cluster":
 		// what was true when x was pressed may not be now
 		if !s.resetOffered() {
-			s.message = "초기화하지 않았습니다: 지금은 초기화할 수 있는 상태가 아닙니다"
+			s.message = i18n.T("Not reset: the cluster cannot be reset now")
 			return nil
 		}
 		return s.prepareReset()
@@ -398,16 +399,16 @@ func (s *S9Install) startRun(resume bool) tea.Cmd {
 	var kept []string
 	if resume && s.last != nil {
 		if s.opts.Monitoring != s.last.Monitoring {
-			mon := "설치 안 함"
+			mon := i18n.T("monitoring: don't install")
 			if s.last.Monitoring {
-				mon = "설치"
+				mon = i18n.T("monitoring: install")
 			}
-			kept = append(kept, "모니터링 "+mon)
+			kept = append(kept, mon)
 		}
 		s.opts.Monitoring = s.last.Monitoring
 		if k4 := s.last.Step("K4"); k4 != nil && k4.Status == plan.StatusOK {
 			if plan.AbsArchive(s.archive.Value()) != s.last.ArchivePath {
-				kept = append(kept, "아카이브 경로 "+s.last.ArchivePath+" (K4 끝남)")
+				kept = append(kept, i18n.T("archive path %s (K4 done)", s.last.ArchivePath))
 			}
 			s.archive.SetValue(s.last.ArchivePath)
 		}
@@ -425,10 +426,10 @@ func (s *S9Install) startRun(resume bool) tea.Cmd {
 			ex.byID[st.ID] = st
 		}
 	}
-	s.ex, s.message, s.showLog = ex, "", false
+	s.ex, s.message, s.showLog, s.rechecking = ex, "", false, false
 	s.active.Store(ex)
 	if len(kept) > 0 {
-		s.message = "이어서 실행은 지난 실행의 설정으로 합니다: " + strings.Join(kept, ", ") + " (바꾸려면 f 처음부터)"
+		s.message = i18n.T("A resume runs with the settings of the last run: %s (to change them, f from the start)", strings.Join(kept, ", "))
 	}
 	done := make(chan runDoneMsg, 1)
 	go func() {
@@ -474,8 +475,8 @@ func (s *S9Install) updateRun(msg tea.Msg) (tea.Cmd, bool) {
 func (s *S9Install) refresh() {
 	s.ex.snap = s.ex.runner.Snapshot()
 	// the word of Enter at the StorageClass stop, gone once nothing waits
-	if _, waiting := s.waitingStep(); !waiting && s.message == recheckMessage {
-		s.message = ""
+	if _, waiting := s.waitingStep(); !waiting && s.rechecking {
+		s.message, s.rechecking = "", false
 	}
 	for i, st := range s.ex.snap.Steps {
 		if st.Status == plan.StatusRunning || st.Status == plan.StatusWaiting || st.Status == plan.StatusFailed {
@@ -488,8 +489,9 @@ func (s *S9Install) refresh() {
 }
 
 // recheckMessage is shown from Enter at the StorageClass stop until the step
-// no longer waits.
-const recheckMessage = "StorageClass 를 다시 확인합니다..."
+// no longer waits (S9Install.rechecking: the message is this one, whatever its
+// language).
+const recheckMessage = "Checking the StorageClass again..."
 
 // waitingStep is the Manual step that waits for the operator, if any.
 func (s *S9Install) waitingStep() (plan.StepState, bool) {
@@ -535,7 +537,7 @@ func (s *S9Install) runKey(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		if _, ok := s.waitingStep(); ok && !s.ex.done {
 			s.ex.runner.Continue()
-			s.message = recheckMessage
+			s.message, s.rechecking = i18n.T(recheckMessage), true
 		}
 	case "r":
 		if s.ex.done && s.ex.outcome == plan.OutcomeFailed && s.confirm == "" {
@@ -548,7 +550,7 @@ func (s *S9Install) runKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		if s.ex.done {
-			s.ex, s.selMoved, s.message = nil, false, ""
+			s.ex, s.selMoved, s.message, s.rechecking = nil, false, "", false
 		}
 	}
 	return nil
@@ -556,13 +558,13 @@ func (s *S9Install) runKey(msg tea.KeyMsg) tea.Cmd {
 
 func (s *S9Install) openLog(st plan.StepState) {
 	if st.Log == "" {
-		s.message = st.ID + " 는 아직 로그가 없습니다"
+		s.message, s.rechecking = i18n.T("%s has no log yet", st.ID), false
 		return
 	}
 	s.logStep = st
 	s.logVP = viewport.New(s.width, max(5, s.height-3))
 	lines := plan.TailLines(st.Log, 5000)
-	s.logVP.SetContent(lipgloss.NewStyle().Width(max(1, s.width)).Render(strings.Join(lines, "\n")))
+	s.logVP.SetContent(Wrap(strings.Join(lines, "\n"), max(1, s.width)))
 	s.logVP.GotoBottom()
 	s.showLog = true
 }
@@ -574,11 +576,11 @@ func (s *S9Install) interruptRun() bool {
 	switch s.ex.presses {
 	case 1:
 		s.ex.runner.Stop()
-		s.message = "실행 중인 단계가 끝나면 멈춥니다. 한 번 더 Ctrl+C 면 바로 멈춤"
+		s.message, s.rechecking = i18n.T("Stops once the running steps end. Ctrl+C again stops now"), false
 		return true
 	case 2:
 		s.ex.runner.Kill()
-		s.message = "실행 중인 단계를 멈추는 중... (한 번 더 Ctrl+C 면 종료)"
+		s.message, s.rechecking = i18n.T("Stopping the running steps... (Ctrl+C again quits)"), false
 		return true
 	}
 	return false
@@ -630,7 +632,8 @@ func statusStyle(st plan.StepStatus) lipgloss.Style {
 // came of it.
 func (s *S9Install) viewRun() string {
 	if s.showLog {
-		head := styles.StyleTitle.Render("로그 "+s.logStep.ID+" "+s.logStep.Title) + styles.StyleMuted.Render("   "+s.logStep.Log+"   ↑/↓ 스크롤   l·Esc 닫기")
+		head := styles.StyleTitle.Render(i18n.T("Log %s %s", s.logStep.ID, s.logStep.Title)) +
+			styles.StyleMuted.Render("   "+s.logStep.Log+"   "+i18n.T("↑/↓ scroll   l·Esc close"))
 		return head + "\n\n" + s.logVP.View()
 	}
 	ex, now := s.ex, time.Now()
@@ -639,8 +642,8 @@ func (s *S9Install) viewRun() string {
 	if ex.done {
 		took = ex.snap.Updated.Sub(ex.started)
 	}
-	b.WriteString(styles.StyleTitle.Render("설치 실행") + styles.StyleMuted.Render("   경과 "+elapsed(took)+"   상태·로그: "+plan.StateDir(s.opts)) + "\n")
-	b.WriteString(styles.StyleMuted.Render("  · 대기  ▶ 실행 중  ✓ 성공  ✗ 실패  ⏸ 기다림  - 건너뜀. 다른 터미널에서 플레이북을 손으로 실행하지 마세요") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Install run")) + styles.StyleMuted.Render("   "+i18n.T("elapsed %s   state·logs: %s", elapsed(took), plan.StateDir(s.opts))) + "\n")
+	b.WriteString(styles.StyleMuted.Render("  "+i18n.T("· pending  ▶ running  ✓ ok  ✗ failed  ⏸ waiting  - skipped. Do not run playbooks by hand in another terminal")) + "\n\n")
 	focus := 0
 	for i, st := range ex.snap.Steps {
 		mark := "  "
@@ -660,7 +663,7 @@ func (s *S9Install) viewRun() string {
 			b.WriteString(styles.StyleWarning.Render("        "+plan.ManualPrompt(step)) + "\n")
 			b.WriteString(styles.StyleMuted.Render("        "+step.Note) + "\n")
 			b.WriteString(styles.StyleWarning.Render("        "+st.Note) + "\n")
-			b.WriteString(styles.StylePrimary.Render("        설치했으면 Enter (설치함, 계속) — 다시 확인합니다") + "\n")
+			b.WriteString(styles.StylePrimary.Render("        "+i18n.T("Once installed, Enter (installed, continue) — it is checked again")) + "\n")
 		case st.Status == plan.StatusFailed && st.Note != "":
 			b.WriteString(styles.StyleWarning.Render("        "+st.Note) + "\n")
 		case st.Note != "" && st.Status != plan.StatusOK:
@@ -669,7 +672,7 @@ func (s *S9Install) viewRun() string {
 	}
 	for _, st := range ex.snap.Steps {
 		if st.Status == plan.StatusRunning && ex.byID[st.ID].Kind != plan.Manual {
-			b.WriteString("\n" + styles.StyleMuted.Render(fmt.Sprintf("── 로그 %s (마지막 %d줄) ──", st.ID, tailLines)) + "\n")
+			b.WriteString("\n" + styles.StyleMuted.Render(i18n.T("── log %s (last %d lines) ──", st.ID, tailLines)) + "\n")
 			for _, l := range plan.TailLines(st.Log, tailLines) {
 				b.WriteString("  " + l + "\n")
 			}
@@ -684,21 +687,21 @@ func (s *S9Install) viewRun() string {
 	if s.message != "" {
 		b.WriteString("\n" + styles.StylePrimary.Render(s.message) + "\n")
 	}
-	keys := "  ↑/↓ 단계   l 로그"
+	keys := "  " + i18n.T("↑/↓ step   l log")
 	switch {
 	case ex.done:
 		if ex.outcome == plan.OutcomeFailed {
-			keys += "   r 실패 단계 재시도"
+			keys += "   " + i18n.T("r retry the failed step")
 		}
 		if s.resetOffered() {
-			keys += "   x 클러스터 초기화(reset)"
+			keys += "   " + i18n.T("x reset the cluster")
 		}
-		keys += "   Esc 계획 화면으로 (실행을 누르면 이어서)"
+		keys += "   " + i18n.T("Esc to the plan (Run resumes)")
 	default:
 		if _, ok := s.waitingStep(); ok {
-			keys += "   Enter 설치함, 계속"
+			keys += "   " + i18n.T("Enter installed, continue")
 		}
-		keys += "   Ctrl+C 멈춤 (한 번: 실행 중인 단계 뒤, 두 번: 바로)"
+		keys += "   " + i18n.T("Ctrl+C stop (once: after the running steps, twice: now)")
 	}
 	b.WriteString("\n" + styles.StyleMuted.Render(keys))
 	return FitView(b.String(), focus, focus+5, s.width, s.height)
@@ -710,24 +713,24 @@ func (s *S9Install) summary() string {
 	var b strings.Builder
 	switch {
 	case ex.err != nil:
-		b.WriteString(styles.StyleError.Render("✗ 시작하지 못했습니다: "+ex.err.Error()) + "\n")
+		b.WriteString(styles.StyleError.Render(i18n.T("✗ Could not start: %s", ex.err.Error())) + "\n")
 		return b.String()
 	}
 	if err := ex.runner.SaveErr(); err != nil {
-		b.WriteString(styles.StyleWarning.Render("! "+plan.StateDir(s.opts)+"/state.json 을 쓰지 못했습니다 ("+err.Error()+
-			"). 기록이 실행보다 뒤처졌을 수 있습니다") + "\n")
+		b.WriteString(styles.StyleWarning.Render(i18n.T("! Could not write %s/state.json (%s). The record may be behind the run",
+			plan.StateDir(s.opts), err.Error())) + "\n")
 	}
 	switch {
 	case ex.outcome == plan.OutcomeOK:
-		b.WriteString(styles.StyleSuccess.Render("✓ 설치를 마쳤습니다") + "\n")
+		b.WriteString(styles.StyleSuccess.Render(i18n.T("✓ The install finished")) + "\n")
 		return b.String()
 	case ex.outcome == plan.OutcomeStopped:
-		b.WriteString(styles.StyleWarning.Render("■ 멈췄습니다. 실행을 누르면 끝나지 않은 단계부터 이어서 실행합니다") + "\n")
+		b.WriteString(styles.StyleWarning.Render(i18n.T("■ Stopped. Run resumes from the steps not finished")) + "\n")
 	case ex.snap.WentOn():
 		// to its end, past a step that stays failed (plan.informerOnly)
-		b.WriteString(styles.StyleWarning.Render("■ 끝까지 실행했지만 아래 단계는 실패로 남았습니다. 원인을 푼 뒤 실행을 누르면 그 단계만 다시 실행합니다") + "\n")
+		b.WriteString(styles.StyleWarning.Render(i18n.T("■ Ran to the end, but the steps below stay failed. Once the cause is fixed, Run runs only those steps again")) + "\n")
 	default:
-		b.WriteString(styles.StyleError.Render("✗ 실패했습니다. 고친 뒤 실행을 누르면 실패한 단계부터 이어서 실행합니다") + "\n")
+		b.WriteString(styles.StyleError.Render(i18n.T("✗ Failed. Once fixed, Run resumes from the failed step")) + "\n")
 	}
 	for _, st := range ex.snap.Steps {
 		if st.Status != plan.StatusFailed {
@@ -735,9 +738,9 @@ func (s *S9Install) summary() string {
 		}
 		code := ""
 		if st.ExitCode != nil {
-			code = fmt.Sprintf(" (종료 코드 %d)", *st.ExitCode)
+			code = " " + i18n.T("(exit code %d)", *st.ExitCode)
 		}
-		b.WriteString(styles.StyleError.Render("✗ "+st.ID+" "+st.Title+code+"  로그: "+st.Log) + "\n")
+		b.WriteString(styles.StyleError.Render("✗ "+st.ID+" "+st.Title+code+"  "+i18n.T("log: %s", st.Log)) + "\n")
 		if st.Note != "" {
 			b.WriteString(styles.StyleWarning.Render("  │ "+st.Note) + "\n")
 		}
@@ -764,16 +767,17 @@ func (s *S9Install) viewPrev() string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("지난 실행") + styles.StyleMuted.Render("  "+s.last.Started.Format("2006-01-02 15:04")+" 시작, "+plan.StateDir(s.opts)) + "\n")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Last run")) +
+		styles.StyleMuted.Render("  "+i18n.T("started %s, %s", s.last.Started.Format("2006-01-02 15:04"), plan.StateDir(s.opts))) + "\n")
 	if len(done) > 0 {
-		b.WriteString(styles.StyleSuccess.Render("  ✓ 끝남: "+strings.Join(done, " ")) + "\n")
+		b.WriteString(styles.StyleSuccess.Render("  "+i18n.T("✓ done: %s", strings.Join(done, " "))) + "\n")
 	}
 	if len(left) == 0 {
-		b.WriteString(styles.StyleMuted.Render("  모두 끝났습니다. f 처음부터 다시 실행") + "\n")
+		b.WriteString(styles.StyleMuted.Render("  "+i18n.T("All done. f runs it again from the start")) + "\n")
 	} else {
-		b.WriteString(styles.StyleWarning.Render("  남음: "+strings.Join(left, " ")+" — 실행 = 이어서 실행, f 처음부터") + "\n")
+		b.WriteString(styles.StyleWarning.Render("  "+i18n.T("left: %s — Run = resume, f from the start", strings.Join(left, " "))) + "\n")
 		if s.last.InputHash != s.inputHash {
-			b.WriteString(styles.StyleWarning.Render("  ! 지난 실행 뒤에 사이트 파일이 바뀌었습니다 (이어서 실행할 때 묻습니다)") + "\n")
+			b.WriteString(styles.StyleWarning.Render("  "+i18n.T("! The site files changed since the last run (asked on resume)")) + "\n")
 		}
 	}
 	return b.String()

@@ -26,6 +26,21 @@ func NeedsArchive(aipubEnabled bool, o Options) bool {
 	return aipubEnabled && !o.Existing
 }
 
+// AbsArchive is the archive path as K4 takes it: absolute. K4 runs in
+// <root>/ansible, where a path relative to the directory the program was started
+// in names another file or none, after CheckArchive found it here. Empty stays
+// empty.
+func AbsArchive(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if a, err := filepath.Abs(p); err == nil {
+		return a
+	}
+	return p
+}
+
 // CheckArchive refuses an archive path that is not a regular file this user
 // can read, before anything runs: K4 would otherwise fail after the steps
 // before it, or push nothing.

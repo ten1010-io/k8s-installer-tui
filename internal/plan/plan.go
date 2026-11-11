@@ -13,11 +13,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 )
+
+// sameDir reports whether a and b are one directory: the same path once cleaned
+// (a / at the end, a // inside), or the same directory on disk (a symlink on the
+// way). cp would refuse to copy a file onto itself.
+func sameDir(a, b string) bool {
+	if path.Clean(filepath.ToSlash(a)) == path.Clean(filepath.ToSlash(b)) {
+		return true
+	}
+	fa, errA := os.Stat(a)
+	fb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(fa, fb)
+}
 
 // Kind tells a check (looked at, nothing changes) from a playbook (run), from
 // commands of the control node (run) and from what a person does (Manual: the run
@@ -520,7 +533,7 @@ func Script(steps []Step, o Options, savedIn string) string {
 // reads them, when the tool saved them somewhere else (a copy on a laptop, a
 // directory of the package). None when they are already there.
 func CopyCommands(o Options, savedIn string) []string {
-	if savedIn == "" || filepath.ToSlash(filepath.Clean(savedIn)) == o.AnsibleDir() {
+	if savedIn == "" || sameDir(savedIn, o.AnsibleDir()) {
 		return nil
 	}
 	src := strings.TrimRight(filepath.ToSlash(savedIn), "/")

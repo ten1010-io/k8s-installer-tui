@@ -918,9 +918,10 @@ func knownFailure(st Step, logPath string, fc failureContext) string {
 
 	// 1. Check known specific patterns
 	// the whole attempt, not its tail: helmfile mode prints a long result after
-	// the component's error. And the error itself, not the CRD's name, which
-	// the checks of an installed informer print too
-	if st.Playbook == setupAipubPlaybook && strings.Contains(strings.Join(attemptLines(logPath, st), "\n"), workspaceCRDGone) {
+	// the component's error. And the informer alone (informerOnly), not its error
+	// alone: that is in the log of every new cluster, and would say "the services
+	// before it are installed" of a setup-aipub that failed on something else
+	if informerOnly(st, attemptLines(logPath, st)) {
 		// deterministic until then, so no retry: aipub-installer README "What to expect on a new cluster"
 		return "알려진 일: backend-informer 는 Python 서비스가 만드는 Workspace CRD 를 기다립니다. 그 앞의 서비스는 설치됐습니다. " +
 			"Python 서비스를 설치한 뒤 이어서 실행하세요 (aipub-installer README)"
@@ -961,6 +962,25 @@ func knownFailure(st Step, logPath string, fc failureContext) string {
 			"위저드는 아직 없는 파일을 단계마다 -e 로 빼고 실행하므로, 이 거부는 플레이북을 손으로 실행했을 때 납니다. " +
 			"복구: 위저드 (또는 --install) 로 실행하거나, 손으로 실행할 때는 이 단계 로그의 ── 줄에 있는 -e 를 그대로 붙이세요. " +
 			"빈 파일을 만들지 마세요: 빈 인증 설정이 컨트롤 플레인 노드로 복사되면 apiserver 가 뜨지 않습니다"
+	}
+
+	// the informer's error, the failure not shown to be it alone and none of the
+	// above: said, but not that the services before it are there; with it the
+	// raw error of the log without that line
+	if st.Playbook == setupAipubPlaybook && strings.Contains(strings.Join(attemptLines(logPath, st), "\n"), workspaceCRDGone) {
+		note := "backend-informer 의 Workspace CRD 오류가 보입니다 (새 클러스터에서는 Python 서비스를 설치하기 전까지 늘 나옵니다). " +
+			"다만 실패가 그것 하나인지 확인되지 않아 앞의 서비스가 설치됐다고 볼 수 없습니다. 로그에서 다른 실패를 먼저 확인하고, " +
+			"informer 하나뿐이면 Python 서비스를 설치한 뒤 이어서 실행하세요"
+		var others []string
+		for _, l := range lines {
+			if !strings.Contains(l, workspaceCRDGone) {
+				others = append(others, l)
+			}
+		}
+		if raw := extractRawError(others); raw != "" {
+			note += ". 실패 원문: " + raw
+		}
+		return note
 	}
 
 	// 2. Fallback: extract the raw failure summary from the Ansible log

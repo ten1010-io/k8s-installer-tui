@@ -12,12 +12,14 @@ import (
 )
 
 // FillAuthConfig is --fill-auth-config: it writes the authentication config of the
-// JWKS preset whole - the issuer and the CA, found as saving finds it (LookupCA) -
-// to the saved site (p) and to the files directory of the installer
+// JWKS preset whole - the issuer and the CA of the file saving looks at
+// (LookupCA) - to the saved site (p) and to the files directory of the installer
 // (installerFiles, <root>/ansible/files), so that the copy k8s-installer reads
 // and the copy the wizard loads again never differ. A copy that already holds
 // it is not touched, so running it again changes nothing. An error, and nothing
-// written, when the preset is off, has no issuer, or there is no CA.
+// written, when the preset is off, has no issuer, or the CA file is not there or
+// not a CA: the CA the config written before holds is not taken for it, as it
+// may be another cluster's (a control node rebuilt since).
 //
 // The plan runs it after setup-cert of aipub-installer has put the CA on the
 // nodes, before the update-cluster.yml that applies the preset.
@@ -32,10 +34,13 @@ func FillAuthConfig(p Paths, s *state.AppState, installerFiles string) ([]string
 		return nil, errors.New("JWKS issuer 가 없습니다 (aipub_ingress_zone 또는 issuer URL)")
 	}
 	ca := LookupCA(s)
-	if ca.PEM == "" {
+	if ca.PEM == "" || ca.FromSaved {
 		msg := "CA 가 없습니다: " + ca.Path + " (aipub-installer setup-cert 가 둡니다. setup-cert 뒤에 다시 실행하세요)"
 		if ca.Err != nil {
 			msg = "CA 를 읽지 못했습니다: " + ca.Err.Error()
+		}
+		if ca.FromSaved {
+			msg += ". 저장된 인증 설정의 CA 는 이 클러스터의 것인지 알 수 없어 쓰지 않습니다"
 		}
 		return nil, errors.New(msg)
 	}
@@ -57,9 +62,6 @@ func FillAuthConfig(p Paths, s *state.AppState, installerFiles string) ([]string
 		return nil, fmt.Errorf("%s: %w", HistoryFile, err)
 	}
 	var out []string
-	if ca.Err != nil {
-		out = append(out, "CA 파일은 쓸 수 없어 저장된 CA 를 씀: "+ca.Err.Error())
-	}
 	for i, t := range targets {
 		if cur, err := os.ReadFile(t); err == nil && bytes.Equal(cur, data) {
 			out = append(out, "unchanged: "+t)

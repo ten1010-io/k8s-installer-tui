@@ -90,6 +90,12 @@ func ParseCA(data []byte) (string, error) {
 	if strings.Contains(string(rest), "-----BEGIN") {
 		return "", errors.New("PEM 블록을 끝까지 읽지 못했습니다")
 	}
+	// pem.Decode passes over a block it cannot read (an END line of another
+	// type, a broken line) and goes on to the next: such a block is still in the
+	// text, and it may be a key. Refused, as anything not a certificate is
+	if n := strings.Count(text, "-----BEGIN "); n != len(blocks) {
+		return "", fmt.Errorf("PEM 블록 %d 개 중 %d 개만 인증서로 읽었습니다 (깨진 블록이 있습니다)", n, len(blocks))
+	}
 	trimmed := strings.TrimSpace(text)
 	var again strings.Builder
 	for _, b := range blocks {

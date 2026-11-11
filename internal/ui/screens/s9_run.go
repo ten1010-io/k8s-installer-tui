@@ -406,7 +406,7 @@ func (s *S9Install) startRun(resume bool) tea.Cmd {
 		}
 		s.opts.Monitoring = s.last.Monitoring
 		if k4 := s.last.Step("K4"); k4 != nil && k4.Status == plan.StatusOK {
-			if strings.TrimSpace(s.archive.Value()) != s.last.ArchivePath {
+			if plan.AbsArchive(s.archive.Value()) != s.last.ArchivePath {
 				kept = append(kept, "아카이브 경로 "+s.last.ArchivePath+" (K4 끝남)")
 			}
 			s.archive.SetValue(s.last.ArchivePath)

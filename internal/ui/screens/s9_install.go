@@ -233,7 +233,7 @@ func (s *S9Install) Validate() []string            { return nil }
 func (s *S9Install) Init() tea.Cmd                 { return nil }
 
 func (s *S9Install) rebuild() {
-	s.opts.ArchivePath = strings.TrimSpace(s.archive.Value())
+	s.opts.ArchivePath = plan.AbsArchive(s.archive.Value())
 	s.opts.SiteDir = s.savedIn()
 	// the plan of what was saved: whether the authentication config of JWKS went
 	// out with its CA
@@ -432,10 +432,12 @@ func (s *S9Install) closePass() {
 	s.syncFocus()
 }
 
-// Busy holds the wizard on this screen while the password is asked or the key
-// sent: the messages of the send come to this screen only.
+// Busy holds the wizard on this screen while the password is asked, the key
+// sent or the checks run (and a run waits for them): their messages come to
+// the screen shown when they end, so this one only.
 func (s *S9Install) Busy() bool {
-	return s.asking || s.sending || s.preparing || s.running() || s.confirm != "" || s.resetting
+	return s.asking || s.sending || s.preparing || s.running() || s.confirm != "" || s.resetting ||
+		s.checking || s.runAfterChecks
 }
 
 // BusyReason is what the wizard says when it does not leave.
@@ -458,7 +460,13 @@ func (s *S9Install) BusyReason() string {
 	if s.sending {
 		return "키를 보내는 중입니다. 끝나거나 Ctrl+C 로 중단한 뒤 이동하세요"
 	}
-	return "비밀번호 입력 중입니다. Enter 로 보내거나 Esc 로 취소한 뒤 이동하세요"
+	if s.asking {
+		return "비밀번호 입력 중입니다. Enter 로 보내거나 Esc 로 취소한 뒤 이동하세요"
+	}
+	if s.runAfterChecks {
+		return "사전 확인이 끝나면 실행합니다. 실행하지 않으려면 Esc, 확인이 끝난 뒤 이동하세요"
+	}
+	return "사전 확인 중입니다. 끝난 뒤 이동하세요"
 }
 
 // KeyHints are the keys of what is going on, for the footer.
@@ -479,6 +487,8 @@ func (s *S9Install) KeyHints() []string {
 		return []string{"Enter 보내기", "Esc 취소"}
 	case s.sending:
 		return []string{"Ctrl+C 중단"}
+	case s.runAfterChecks:
+		return []string{"Esc 실행 취소"}
 	case len(s.refusing()) > 0:
 		return []string{"k·p 키 보내기"}
 	}
@@ -641,6 +651,12 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return s, s.answer(false) // its default is no
 				}
 			}
+			return s, nil
+		}
+		if s.runAfterChecks && msg.Type == tea.KeyEsc {
+			// the run is dropped; the checks go on and are shown
+			s.runAfterChecks = false
+			s.message = "실행하지 않습니다. 사전 확인은 끝까지 진행합니다"
 			return s, nil
 		}
 		if s.ex != nil {

@@ -150,6 +150,28 @@ func TestDiagnosisOfPodsThatDidNotStart(t *testing.T) {
 	}
 }
 
+// setup-aipub stopped by pods that did not start: the informer's error is in
+// the log too, as on every new cluster, and does not hide what failed.
+func TestDiagnosisOfSetupAipubPastTheInformer(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "A5.log")
+	os.WriteFile(log, []byte("[ERROR] CRD 'workspaces.aipub.ten1010.io' does not exist. The informers cannot sync\n"+
+		"backend-api-7f9c   0/1   ImagePullBackOff\n"+
+		"TASK [[aipub] Result of helmfile sync] ***\nfatal: [node1]: FAILED! => \n    msg: helmfile sync failed\n"), 0644)
+	aipub := Step{ID: "A5", Kind: Playbook, Playbook: setupAipubPlaybook}
+	note := knownFailure(aipub, log, failureContext{k4: StatusSkipped})
+	if !strings.Contains(note, "kubectl -n aipub get pods") || !strings.Contains(note, "K4") || strings.Contains(note, "Python") {
+		t.Errorf("%q", note)
+	}
+	// nothing else known: the error is said, not taken for the informer alone,
+	// and the raw failure goes with it
+	os.WriteFile(log, []byte("[ERROR] CRD 'workspaces.aipub.ten1010.io' does not exist. The informers cannot sync\n"+
+		"TASK [[aipub] Something else] ***\nfatal: [node1]: FAILED! => \n    msg: values file missing\n"), 0644)
+	note = knownFailure(aipub, log, failureContext{k4: StatusOK})
+	if strings.Contains(note, "그 앞의 서비스는 설치됐습니다") || !strings.Contains(note, "확인되지 않아") || !strings.Contains(note, "values file missing") {
+		t.Errorf("%q", note)
+	}
+}
+
 // Through the runner: the K4 of the run is what the note says.
 func TestRunnerDiagnosesImagesWhenK4WasSkipped(t *testing.T) {
 	o := testOptions()

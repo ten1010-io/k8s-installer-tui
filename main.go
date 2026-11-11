@@ -68,6 +68,10 @@ func main() {
 		fmt.Println("k8s-installer-tui", version)
 		os.Exit(0)
 	}
+	// absolute and clean, as the site paths are: the steps run in <root>/ansible,
+	// and C1 is left out only when the site is that directory (a / at the end,
+	// from tab completion, would have it copy the files onto themselves)
+	*installerRoot = abs(*installerRoot)
 
 	if *checkSSH || *sendSSHKey {
 		// the nodes as ansible-inventory gives them; the settings are not read
@@ -112,7 +116,7 @@ func main() {
 			os.Exit(2)
 		}
 		opts := plan.DefaultOptions()
-		opts.Root, opts.ArchivePath, opts.Monitoring = *installerRoot, *archive, !*noMonitoring
+		opts.Root, opts.ArchivePath, opts.Monitoring = *installerRoot, plan.AbsArchive(*archive), !*noMonitoring
 		opts.Existing, opts.AipubInstalled, opts.SiteWhy = site.Existing, site.AipubInstalled, site.Why
 		// as the wizard does: P3 of an existing site keeps its nodes' audit policy
 		// under files/aipub where none is, so that C1 copies it to the installer

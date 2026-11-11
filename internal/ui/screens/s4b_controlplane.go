@@ -509,6 +509,15 @@ func contains(l []string, x string) bool {
 	return false
 }
 
+// Busy holds the wizard here while c reads the apiserver of the node: what it
+// read comes to the screen shown when it ends, so this one only.
+func (s *S4bControlPlane) Busy() bool { return s.checking }
+
+// BusyReason is what the wizard says when it does not leave.
+func (s *S4bControlPlane) BusyReason() string {
+	return "기존 apiserver 설정을 확인하는 중입니다. 끝난 뒤 이동하세요"
+}
+
 func (s *S4bControlPlane) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(legacyDoneMsg); ok {
 		s.checking = false

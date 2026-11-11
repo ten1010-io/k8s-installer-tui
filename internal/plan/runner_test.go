@@ -621,6 +621,10 @@ func TestRunnerExplainsTheBackendInformer(t *testing.T) {
 	if outcome != OutcomeFailed || !strings.Contains(a5.Note, "Python 서비스를 설치한 뒤 이어서 실행") {
 		t.Errorf("%s %+v", outcome, a5)
 	}
+	// nor is it known that the informer was all that failed
+	if strings.Contains(a5.Note, "그 앞의 서비스는 설치됐습니다") || !strings.Contains(a5.Note, "확인되지 않아") {
+		t.Errorf("the error alone taken for the informer alone: %q", a5.Note)
+	}
 	if got := f.ranIDs(); strings.Count(got, "A5") != 1 {
 		t.Errorf("setup-aipub retried: %s", got)
 	}
@@ -748,6 +752,10 @@ func TestRunnerStopsWhenMoreThanTheInformerFailed(t *testing.T) {
 		snap := r.Snapshot()
 		if outcome != OutcomeFailed || snap.Step("A5").Continued || snap.Step("A5.1").Status != StatusPending || snap.WentOn() {
 			t.Errorf("%s: went on: %s", name, statuses(snap))
+		}
+		// nor does its note say the informer was all that failed
+		if note := snap.Step("A5").Note; strings.Contains(note, "알려진 일") || strings.Contains(note, "그 앞의 서비스는 설치됐습니다") {
+			t.Errorf("%s: the informer's note: %q", name, note)
 		}
 	}
 

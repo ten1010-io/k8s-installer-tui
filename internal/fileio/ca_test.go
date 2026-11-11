@@ -66,6 +66,9 @@ func TestParseCA(t *testing.T) {
 		{name: "text around it, written again", in: "subject=CN = a\n" + a + "\n", want: a},
 		{name: "a key", in: keyPEM, bad: true},
 		{name: "a certificate and its key", in: a + "\n" + keyPEM, bad: true},
+		// pem.Decode passes over the key, whose END line names another type
+		{name: "a broken key before a certificate", in: strings.Replace(keyPEM, "END EC PRIVATE", "END RSA PRIVATE", 1) + "\n" + a, bad: true},
+		{name: "a broken block before a certificate", in: "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n" + a + "\n", bad: true},
 		{name: "not a certificate", in: "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n", bad: true},
 		{name: "the placeholder", in: "REPLACE_ME_CA", bad: true},
 		{name: "empty", in: "", bad: true},
@@ -220,6 +223,26 @@ func TestFillAuthConfig(t *testing.T) {
 	if _, err := os.Stat(site.AuthConfig() + ".bak"); err == nil {
 		t.Error("a backup made by a run that changed nothing")
 	}
+
+	// the CA file gone or broken (a control node rebuilt, one that is no k8s
+	// node): the CA the config holds is not taken for it, as it may be another
+	// cluster's, and nothing is written
+	before, err := os.ReadFile(site.AuthConfig())
+	must(t, err)
+	for _, c := range []struct{ file, says string }{{"", "CA 가 없습니다"}, {"not a certificate", "CA 를 읽지 못했습니다"}} {
+		withCA(t, c.file)
+		if got := LookupCA(back); !got.FromSaved {
+			t.Fatalf("CA file %q: the saved CA is not offered, so this tests nothing: %+v", c.file, got)
+		}
+		if _, err := FillAuthConfig(site, back, installer); err == nil || !strings.Contains(err.Error(), c.says) ||
+			!strings.Contains(err.Error(), "저장된 인증 설정의 CA") {
+			t.Errorf("CA file %q: %v", c.file, err)
+		}
+		if now, _ := os.ReadFile(site.AuthConfig()); string(now) != string(before) {
+			t.Errorf("CA file %q: the config was written", c.file)
+		}
+	}
+	withCA(t, ca)
 
 	// saved where the installer reads it: one copy
 	inPlace := DefaultPaths(filepath.Dir(installer))

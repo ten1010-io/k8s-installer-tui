@@ -14,7 +14,10 @@
 # refusing an unfinished run without --resume or --fresh, a step left running by
 # a program killed outright keeping the next start out, and an existing cluster
 # (the record k8s-installer leaves under /etc/k8s-installer, made here in the
-# container) planned without setup-cluster. The stub ansible-playbook refuses a
+# container) planned without setup-cluster, and a new site without the archive
+# of the user registry: refused, run with --no-archive to a failure of
+# setup-network on the images, then --resume --archive running K4 first. The
+# new-site runs give a small fake archive. The stub ansible-playbook refuses a
 # run whose k8s_cp_extra_files names a file that is not under files/, as
 # k8s-installer's validate-hostvars.py does.
 set -uo pipefail
@@ -56,6 +59,7 @@ fi
 var="FAKE_SLEEP_${pb//-/_}"
 sleep "${!var:-${FAKE_SLEEP:-0.3}}"
 if [ "${FAKE_FAIL:-}" = "${pb}" ]; then
+    [ -n "${FAKE_SAY:-}" ] && echo "${FAKE_SAY}"
     echo "fatal: [master1]: FAILED! => {\"msg\": \"fake failure of ${pb}\"}"
     echo "$(date +%s.%N) end ${pb} 2" >> "${FAKE_DIR}/calls.log"
     exit 2
@@ -136,6 +140,10 @@ cp -r "${REPO}/test/simulate/fixtures/new-site-non-ha" "${SITE}"
 sed -i 's/^aipub_ha_mode: false/aipub_ha_mode: true\naipub_ha_mode_storage_class: "nfs-client"/; /^aipub_harbor_local_pv_node/d' "${SITE}/files/aipub/vars.yml"
 cd "${SITE}" || exit 1
 install_cmd="${TUI} --installer-root ${ROOT} --install"
+# the archive of the package: a new AIPub site does not start without it
+ARCHIVE="${W}/pkg/ki-cp-user-registry-artifacts.tgz"
+mkdir -p "${W}/pkg" && echo "fake archive" > "${ARCHIVE}"
+new_cmd="${install_cmd} --archive ${ARCHIVE}"
 
 echo "── 1) a run (--no-monitoring) that fails at setup-base, the StorageClass stop answered on a terminal"
 mkfifo "${W}/keys"
@@ -147,7 +155,7 @@ mkfifo "${W}/keys"
     sleep 20
 ) > "${W}/keys" &
 feeder=$!
-FAKE_FAIL=setup-base FAKE_SLEEP_setup_cert=3 script -qfec "${install_cmd} --no-monitoring" /dev/null < "${W}/keys" > "${W}/out1.txt" 2>&1
+FAKE_FAIL=setup-base FAKE_SLEEP_setup_cert=3 script -qfec "${new_cmd} --no-monitoring" /dev/null < "${W}/keys" > "${W}/out1.txt" 2>&1
 code=$?
 kill "${feeder}" 2>/dev/null
 sed 's/^/    /' "${W}/out1.txt"
@@ -155,8 +163,9 @@ sed 's/^/    /' "${W}/out1.txt"
 grep -q '⏸ M1 스토리지클래스 드라이버를 설치하세요 — 위저드가 쓰는 클래스: nfs-client' "${W}/out1.txt" && ok "the stop says what to install" || bad "no stop prompt"
 grep -q 'fake failure of setup-base' "${W}/out1.txt" && ok "the summary shows the last lines of the failed log" || bad "no log lines in the summary"
 order=$(awk '$2=="start"{printf "%s ", $3}' "${CALLS}")
-[ "${order}" = "setup-k8s-installer setup-control-node setup-cluster setup-network setup-cert setup-base " ] &&
+[ "${order}" = "setup-k8s-installer setup-control-node setup-cluster push-user-registry-artifacts setup-network setup-cert setup-base " ] &&
     ok "order: ${order}" || bad "order: ${order}"
+grep -q "start push-user-registry-artifacts .*-e archive=${ARCHIVE}" "${CALLS}" && ok "K4 pushed the archive given" || bad "K4: $(grep push-user "${CALLS}")"
 # the stop beside setup-cert: its kubectl checks start with setup-cert (the
 # first may come a moment before it), the one after Enter while it runs, all
 # before it ends; setup-base only after both
@@ -171,11 +180,11 @@ verdict=$(awk -v cs="${cs}" -v ce="${ce}" -v ne="${ne}" -v bs="${bs}" -v checks=
 [ "${verdict}" = yes ] && ok "M1 checked at ${checks} while setup-cert ran ${cs}..${ce}; setup-base at ${bs}" ||
     bad "M1 checks ${checks} vs setup-cert ${cs}..${ce}, network end ${ne}, base ${bs}"
 grep -q '"id": "A3"' "${STATE}/state.json" && ok "state.json" || bad "no state.json"
-python3 - "${STATE}/state.json" <<'EOF' && ok "state: C1..A2, M1 ok, K4 A4 skipped, A3 failed, the rest pending; monitoring off" || bad "state.json statuses"
+python3 - "${STATE}/state.json" <<'EOF' && ok "state: C1..A2, M1 ok, A4 skipped, A3 failed, the rest pending; monitoring off" || bad "state.json statuses"
 import json, sys
 run = json.load(open(sys.argv[1]))
 st = {s["id"]: s["status"] for s in run["steps"]}
-want = {"C1": "ok", "K1": "ok", "K3": "ok", "K4": "skipped", "A2": "ok", "M1": "ok", "A3": "failed", "A4": "skipped", "A5": "pending"}
+want = {"C1": "ok", "K1": "ok", "K3": "ok", "K4": "ok", "A2": "ok", "M1": "ok", "A3": "failed", "A4": "skipped", "A5": "pending"}
 bad = {k: (st.get(k), v) for k, v in want.items() if st.get(k) != v}
 print("    statuses:", " ".join(f"{k}={v}" for k, v in st.items()), "monitoring:", run.get("monitoring"))
 sys.exit(1 if bad or run.get("monitoring") is not False else 0)
@@ -187,7 +196,7 @@ cmp -s "${SITE}/inventory.yml" "${ROOT}/ansible/inventory.yml" && ok "C1 copied 
 echo "── 2) --install --resume after the site was saved again: the copy, then from the failed step only"
 : > "${CALLS}"
 echo "# saved again" >> "${SITE}/group_vars/all/vars.yml"
-echo y | ${install_cmd} --resume > "${W}/out2.txt" 2>&1
+echo y | ${new_cmd} --resume > "${W}/out2.txt" 2>&1
 code=$?
 sed 's/^/    /' "${W}/out2.txt"
 [ "${code}" = 0 ] && ok "exit 0" || bad "exit ${code}, want 0"
@@ -205,14 +214,14 @@ grep -q '"outcome": "ok"' "${STATE}/state.json" && ok "state.json outcome ok" ||
 
 echo "── 3) a site changed since: --resume asks first"
 echo "# changed" >> "${SITE}/group_vars/all/vars.yml"
-echo n | ${install_cmd} --resume > "${W}/out3.txt" 2>&1
+echo n | ${new_cmd} --resume > "${W}/out3.txt" 2>&1
 code=$?
 grep -q '사이트 파일이 바뀌었습니다' "${W}/out3.txt" && [ "${code}" = 2 ] && ok "asked, refused: exit 2" || bad "exit ${code}: $(cat "${W}/out3.txt")"
 
 echo "── 4) the lock held by another run"
 flock "${STATE}/lock" sleep 5 &
 sleep 0.5
-${install_cmd} < /dev/null > "${W}/out4.txt" 2>&1
+${new_cmd} < /dev/null > "${W}/out4.txt" 2>&1
 code=$?
 wait
 grep -q '다른 k8s-installer-tui' "${W}/out4.txt" && [ "${code}" = 2 ] && ok "refused: exit 2" || bad "exit ${code}: $(tail -3 "${W}/out4.txt")"
@@ -220,7 +229,7 @@ grep -q '다른 k8s-installer-tui' "${W}/out4.txt" && [ "${code}" = 2 ] && ok "r
 echo "── 4b) sudo here wants a password: refused before C1, state.json as it was"
 : > "${CALLS}"
 before=$(md5sum < "${STATE}/state.json")
-FAKE_SUDO_FAILS=1 ${install_cmd} < /dev/null > "${W}/out4b.txt" 2>&1
+FAKE_SUDO_FAILS=1 ${new_cmd} < /dev/null > "${W}/out4b.txt" 2>&1
 code=$?
 [ "${code}" = 2 ] && grep -q 'C1 는 이 제어 노드에서 sudo 로 실행하는데, sudo 가 비밀번호를 묻습니다' "${W}/out4b.txt" &&
     [ "$(md5sum < "${STATE}/state.json")" = "${before}" ] && [ ! -s "${CALLS}" ] &&
@@ -228,7 +237,7 @@ code=$?
 
 echo "── 5) Ctrl-C once: the running step finishes, nothing after it"
 : > "${CALLS}"
-FAKE_SLEEP_setup_k8s_installer=3 ${install_cmd} < /dev/null > "${W}/out5.txt" 2>&1 &
+FAKE_SLEEP_setup_k8s_installer=3 ${new_cmd} < /dev/null > "${W}/out5.txt" 2>&1 &
 pid=$!
 for _ in $(seq 100); do grep -q 'start setup-k8s-installer' "${CALLS}" && break; sleep 0.1; done
 kill -INT "${pid}"
@@ -239,7 +248,7 @@ order=$(awk '$2=="end"{printf "%s ", $3}' "${CALLS}")
 
 echo "── 5b) --install over the stopped run, without --resume or --fresh: refused"
 : > "${CALLS}"
-${install_cmd} < /dev/null > "${W}/out5b.txt" 2>&1
+${new_cmd} < /dev/null > "${W}/out5b.txt" 2>&1
 code=$?
 [ "${code}" = 2 ] && grep -q '이어서 하려면 --resume' "${W}/out5b.txt" && grep -q -- '--fresh' "${W}/out5b.txt" && [ ! -s "${CALLS}" ] &&
     ok "refused: exit 2, nothing ran" || bad "exit ${code}: $(cat "${W}/out5b.txt")"
@@ -247,7 +256,7 @@ code=$?
 echo "── 6) --fresh, Ctrl-C twice: the step is stopped now"
 : > "${CALLS}"
 start=$(date +%s)
-FAKE_SLEEP_setup_k8s_installer=30 ${install_cmd} --fresh < /dev/null > "${W}/out6.txt" 2>&1 &
+FAKE_SLEEP_setup_k8s_installer=30 ${new_cmd} --fresh < /dev/null > "${W}/out6.txt" 2>&1 &
 pid=$!
 for _ in $(seq 100); do grep -q 'start setup-k8s-installer' "${CALLS}" && break; sleep 0.1; done
 kill -INT "${pid}"; sleep 0.3; kill -INT "${pid}"
@@ -260,21 +269,21 @@ grep -q '"status": "cancelled"' "${STATE}/state.json"
 
 echo "── 7) the program killed outright (SIGKILL): its step, left running, keeps the next start out"
 : > "${CALLS}"
-FAKE_SLEEP_setup_k8s_installer=30 ${install_cmd} --fresh < /dev/null > "${W}/out7.txt" 2>&1 &
+FAKE_SLEEP_setup_k8s_installer=30 ${new_cmd} --fresh < /dev/null > "${W}/out7.txt" 2>&1 &
 pid=$!
 for _ in $(seq 100); do grep -q 'start setup-k8s-installer' "${CALLS}" && break; sleep 0.1; done
 sleep 0.3
 kill -KILL "${pid}"
 wait "${pid}" 2>/dev/null
 pgid=$(python3 -c 'import json, sys; print(next((s.get("pgid", 0) for s in json.load(open(sys.argv[1]))["steps"] if s["id"] == "K1"), 0))' "${STATE}/state.json")
-${install_cmd} --resume < /dev/null > "${W}/out7b.txt" 2>&1
+${new_cmd} --resume < /dev/null > "${W}/out7b.txt" 2>&1
 code=$?
 [ "${pgid}" -gt 0 ] && kill -0 -- "-${pgid}" 2>/dev/null && [ "${code}" = 2 ] && grep -q "pid ${pgid}" "${W}/out7b.txt" &&
     ok "refused while K1 (group ${pgid}) still runs: exit 2" || bad "pgid ${pgid}, exit ${code}: $(tail -3 "${W}/out7b.txt")"
 [ "${pgid}" -gt 0 ] && kill -INT -- "-${pgid}" 2>/dev/null
 for _ in $(seq 50); do kill -0 -- "-${pgid}" 2>/dev/null || break; sleep 0.1; done
 : > "${CALLS}"
-${install_cmd} --resume < /dev/null > "${W}/out7c.txt" 2>&1
+${new_cmd} --resume < /dev/null > "${W}/out7c.txt" 2>&1
 code=$?
 [ "${code}" = 0 ] && grep -q 'start setup-k8s-installer' "${CALLS}" && ok "once it ended: --resume ran from K1, exit 0" ||
     bad "exit ${code}: $(tail -3 "${W}/out7c.txt")"
@@ -324,6 +333,61 @@ EOF
     code=$?
     [ "${code}" = 2 ] && grep -q 'File\[aipub/authentication-config.yaml\] of the control node is not there' "${W}/out8b.txt" &&
         ok "the stub refuses a run that names a missing file" || bad "stub: exit ${code}: $(cat "${W}/out8b.txt")"
+fi
+
+echo "── 9) a new site without the archive: refused; with --no-archive K4 skipped and A1 fails on the images; --resume --archive runs K4, then A1"
+# a new site again: the record of scenario 8 gone, as reset-cluster.yml takes it
+[ -n "${MADE_ETC}" ] && rm -f /etc/k8s-installer/applied-release
+# the installer holds site2 since scenario 8: back to the site as C1 last copied
+# it, or the copy stops on what looks like an edit made in the installer
+cp "${SITE}/inventory.yml" "${ROOT}/ansible/inventory.yml"
+cp "${SITE}/group_vars/all/vars.yml" "${ROOT}/ansible/group_vars/all/vars.yml"
+cp "${SITE}/files/aipub/vars.yml" "${ROOT}/ansible/files/aipub/vars.yml"
+if [ -e /etc/k8s-installer/applied-release ]; then
+    bad "/etc/k8s-installer/applied-release is there: run this in the container"
+else
+    : > "${CALLS}"
+    # HOME=${W}: the package unpacked as ~/pkg, where the refusal finds the archive
+    HOME="${W}" ${install_cmd} --fresh < /dev/null > "${W}/out9a.txt" 2>&1
+    code=$?
+    [ "${code}" = 2 ] && grep -q '새 사이트인데 --archive 가 없습니다' "${W}/out9a.txt" && grep -q -- '--no-archive' "${W}/out9a.txt" &&
+        grep -q "찾은 파일: ${ARCHIVE}" "${W}/out9a.txt" && [ ! -s "${CALLS}" ] &&
+        ok "no archive: exit 2, said why and where it is, nothing ran" || bad "exit ${code}: $(cat "${W}/out9a.txt")"
+    ${install_cmd} --fresh --archive "${W}/pkg" < /dev/null > "${W}/out9b.txt" 2>&1
+    code=$?
+    [ "${code}" = 2 ] && grep -q '일반 파일이 아닙니다' "${W}/out9b.txt" && [ ! -s "${CALLS}" ] &&
+        ok "an archive that is no file: exit 2, nothing ran" || bad "exit ${code}: $(cat "${W}/out9b.txt")"
+
+    FAKE_FAIL=setup-network FAKE_SAY="Error: INSTALLATION FAILED: context deadline exceeded" \
+        ${install_cmd} --fresh --no-archive < /dev/null > "${W}/out9c.txt" 2>&1
+    code=$?
+    sed 's/^/    /' "${W}/out9c.txt"
+    order=$(awk '$2=="start"{printf "%s ", $3}' "${CALLS}")
+    [ "${code}" = 1 ] && [ "${order}" = "setup-k8s-installer setup-control-node setup-cluster setup-network " ] &&
+        ok "--no-archive: K4 skipped, A1 failed: ${order}" || bad "exit ${code}, order: ${order}"
+    grep -q 'kubectl -n kube-system get pods' "${W}/out9c.txt" && grep -q 'K4 push-user-registry-artifacts 를 건너뛰었습니다' "${W}/out9c.txt" &&
+        ok "the note points at the images and the skipped K4" || bad "no diagnosis in the summary"
+
+    : > "${CALLS}"
+    ${install_cmd} --resume < /dev/null > "${W}/out9d.txt" 2>&1
+    code=$?
+    [ "${code}" = 2 ] && grep -q '새 사이트인데 --archive 가 없습니다' "${W}/out9d.txt" && [ ! -s "${CALLS}" ] &&
+        ok "--resume with K4 not done and no archive: exit 2" || bad "exit ${code}: $(cat "${W}/out9d.txt")"
+    ${install_cmd} --resume --archive "${ARCHIVE}" < /dev/null > "${W}/out9e.txt" 2>&1
+    code=$?
+    sed 's/^/    /' "${W}/out9e.txt"
+    order=$(awk '$2=="start"{printf "%s ", $3}' "${CALLS}")
+    case "${order}" in
+    "push-user-registry-artifacts setup-network setup-cert "*) [ "${code}" = 0 ] && ok "resumed: ${order}" || bad "exit ${code}" ;;
+    *) bad "exit ${code}, resumed: ${order}" ;;
+    esac
+    grep -q "start push-user-registry-artifacts .*-e archive=${ARCHIVE}" "${CALLS}" && ok "K4 pushed the archive of this start" || bad "K4 args"
+    python3 - "${STATE}/state.json" "${ARCHIVE}" <<'EOF' && ok "state.json: K4 ok, archive recorded" || bad "state.json"
+import json, sys
+run = json.load(open(sys.argv[1]))
+st = {s["id"]: s["status"] for s in run["steps"]}
+sys.exit(0 if st.get("K4") == "ok" and run.get("archive_path") == sys.argv[2] and run.get("outcome") == "ok" else 1)
+EOF
 fi
 
 echo

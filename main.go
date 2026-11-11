@@ -48,14 +48,18 @@ func main() {
 		"StorageClass 단계 (M1) 에서 Enter 를 기다림. 상태·로그는 <installer-root>/tui-install. "+
 		"Ctrl-C 한 번 실행 중인 단계 뒤 멈춤, 두 번 바로 멈춤. 종료 코드 0 완료, 1 실패, 2 시작 못 함, 130 중단")
 	resume := flag.Bool("resume", false, "--install 에서 지난 실행 (state.json) 의 성공한 단계는 건너뛰고 이어서 실행 "+
-		"(계획은 지난 실행의 --existing·--aipub-installed·--archive·--no-monitoring 으로)")
-	fresh := flag.Bool("fresh", false, "--install: 끝나지 않은 지난 실행이 있어도 처음부터 모든 단계를 실행 (없으면 --install 은 시작하지 않음)")
+		"(계획은 지난 실행의 --existing·--aipub-installed·--no-monitoring 으로. --archive 는 지난 실행의 K4 가 성공했으면 그때 것, "+
+		"아니면 이번 것으로 K4 부터)")
+	fresh := flag.Bool("fresh", false, "--install: 끝나지 않은 지난 실행이 있어도 처음부터 모든 단계를 실행 (없으면 --install 은 시작하지 않음). "+
+		"사이트는 지금 상태로 판단 ("+plan.ClusterRecord+")")
 	existing := flag.Bool("existing", false, "클러스터가 이미 있는 사이트로 계획 (마법사와 --install). 없으면 "+plan.ClusterRecord+
 		" (k8s-installer 가 클러스터를 만든 뒤 남기는 기록) 이 있을 때만 기존 사이트. --resume 은 지난 실행의 것을 씀")
 	aipubInstalled := flag.Bool("aipub-installed", false, "기존 사이트에 AIPub 도 이미 설치된 것으로 계획 (마법사와 --install. "+
 		"setup-cert 의 CA 가 노드에 있고 JWKS issuer 가 응답함: 컨트롤 플레인 항목을 update-cluster 한 번에 적용). "+
 		"aipub-installer 는 설치 기록을 남기지 않아 이 플래그로만 정함. 기본은 AIPub 없음")
-	archive := flag.String("archive", "", "--install: K4 의 사용자 레지스트리 아카이브 경로 (비우면 K4 건너뜀)")
+	archive := flag.String("archive", "", "--install: K4 의 사용자 레지스트리 아카이브 ("+plan.ArchiveName+") 경로. "+
+		"AIPub 을 설치하는 새 사이트에는 필요 (없으면 시작하지 않음, --no-archive). 기존 사이트는 비우면 K4 건너뜀")
+	noArchive := flag.Bool("no-archive", false, "--install: AIPub 을 설치하는 새 사이트를 --archive 없이 시작 (K4 건너뜀: 레지스트리가 비어 A1 부터 실패할 수 있음)")
 	noMonitoring := flag.Bool("no-monitoring", false, "--install: 모니터링 (A4) 을 설치하지 않음")
 	showVersion := flag.Bool("version", false, "버전 출력")
 	flag.Parse()
@@ -113,12 +117,15 @@ func main() {
 		// as the wizard does: P3 of an existing site keeps its nodes' audit policy
 		// under files/aipub where none is, so that C1 copies it to the installer
 		opts.AuditPolicy = paths.AuditPolicy()
-		os.Exit(installHeadless(paths, s, opts, *resume, *fresh))
+		os.Exit(installHeadless(paths, s, opts, *resume, *fresh, *noArchive))
 	}
 
 	opts := plan.DefaultOptions()
 	opts.Root = *installerRoot
 	opts.Existing, opts.AipubInstalled, opts.SiteWhy = site.Existing, site.AipubInstalled, site.Why
+	// a run from the first step decides the site again (the cluster may have
+	// been built or reset since the program started), with the same flags
+	opts.Detect = func() plan.Site { return plan.DetectSite(*existing, *aipubInstalled) }
 	app := ui.NewApp(s, paths, opts, version)
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	// SIGTERM and SIGHUP (the ssh session dropped) end the program too, by way

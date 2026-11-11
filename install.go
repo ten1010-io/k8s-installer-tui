@@ -25,8 +25,10 @@ import (
 // terminal (Enter). 0 when every step succeeded, 1 when one failed (or the
 // stop was left without an answer), 2 when it could not start (a check ✗, the
 // lock, a run left unfinished without --resume or --fresh), 130 on Ctrl-C (129
-// SIGHUP, 143 SIGTERM).
-func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, resume, fresh bool) int {
+// SIGHUP, 143 SIGTERM). A new site with AIPub does not start without --archive
+// (exit 2) unless noArchive says the operator means it: its user registry is
+// empty, and A1 would wait for images that are not there.
+func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, resume, fresh, noArchive bool) int {
 	in := bufio.NewReader(os.Stdin)
 	savedIn := filepath.Dir(paths.Inventory)
 	inputs := []string{paths.Inventory, paths.Vars, paths.AipubVars, paths.WebhookConfig()}
@@ -50,6 +52,8 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 			return 2
 		}
 	}
+	// k4Kept: the run goes on with a K4 that succeeded, and its archive path
+	k4Kept := false
 	if resume {
 		switch {
 		case err != nil:
@@ -59,14 +63,24 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 			fmt.Fprintln(os.Stderr, dir+"/state.json 이 없어 이어서 할 실행이 없습니다. --resume 없이 실행하세요")
 			return 2
 		}
+		if k4 := prev.Step("K4"); k4 != nil && k4.Status == plan.StatusOK {
+			k4Kept = true
+		}
 		// the plan of the run it goes on with, whatever the flags say now
-		if differ := keptFromLast(prev, opts); len(differ) > 0 {
+		if differ := keptFromLast(prev, opts, k4Kept); len(differ) > 0 {
 			fmt.Println("! 이어서 실행은 지난 실행의 설정으로 계획합니다 (이번 플래그와 다름): " + strings.Join(differ, ", ") +
 				". 바꾸려면 --fresh 로 처음부터")
 		}
 		opts.Existing, opts.AipubInstalled = prev.Existing, prev.AipubInstalled
 		opts.SiteWhy = plan.ResumedSite(prev, opts.SiteWhy)
-		opts.Monitoring, opts.ArchivePath = prev.Monitoring, prev.ArchivePath
+		opts.Monitoring = prev.Monitoring
+		// a K4 that did not succeed runs with the --archive of this start, before
+		// the step the last run stopped at; one that did keeps its archive
+		if k4Kept {
+			opts.ArchivePath = prev.ArchivePath
+		} else if opts.ArchivePath != "" {
+			fmt.Println("── K4 가 끝나지 않은 실행: 이번 --archive 로 K4 부터 실행합니다: " + opts.ArchivePath)
+		}
 		var done []string
 		for _, st := range prev.Steps {
 			if st.Status == plan.StatusOK {
@@ -81,6 +95,23 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 				fmt.Println("시작하지 않았습니다")
 				return 2
 			}
+		}
+	}
+	if !k4Kept {
+		switch {
+		case opts.ArchivePath != "":
+			if err := plan.CheckArchive(opts.ArchivePath); err != nil {
+				fmt.Fprintln(os.Stderr, "✗ "+err.Error()+". --archive 를 고친 뒤 다시 실행하세요")
+				return 2
+			}
+		case plan.NeedsArchive(s.AipubEnabled, opts) && !noArchive:
+			fmt.Fprintln(os.Stderr, "✗ 새 사이트인데 --archive 가 없습니다. K2 가 만드는 사용자 레지스트리는 비어 있어, K4 (push-user-registry-artifacts) 없이는 "+
+				"A1 setup-network 부터 이미지를 받지 못해 실패합니다.\n"+
+				"  --archive <"+plan.ArchiveName+" 의 경로> 를 붙이세요. 알고도 K4 없이 하려면 --no-archive")
+			for _, f := range plan.FindArchive(plan.ArchiveDirs()) {
+				fmt.Fprintln(os.Stderr, "  찾은 파일: "+f)
+			}
+			return 2
 		}
 	}
 	opts.SiteDir = savedIn
@@ -207,8 +238,9 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 }
 
 // keptFromLast are the flags of this start that differ from the run a resume
-// goes on with, as that run had them.
-func keptFromLast(prev *plan.RunState, o plan.Options) []string {
+// goes on with, as that run had them. The archive is kept only with a K4 that
+// succeeded (k4Kept); otherwise the --archive of this start is used.
+func keptFromLast(prev *plan.RunState, o plan.Options, k4Kept bool) []string {
 	var out []string
 	if o.Existing != prev.Existing {
 		out = append(out, fmt.Sprintf("--existing=%t", prev.Existing))
@@ -219,12 +251,8 @@ func keptFromLast(prev *plan.RunState, o plan.Options) []string {
 	if o.Monitoring != prev.Monitoring {
 		out = append(out, fmt.Sprintf("--no-monitoring=%t", !prev.Monitoring))
 	}
-	if o.ArchivePath != prev.ArchivePath {
-		archive := prev.ArchivePath
-		if archive == "" {
-			archive = "(없음, K4 건너뜀)"
-		}
-		out = append(out, "--archive "+archive)
+	if k4Kept && o.ArchivePath != prev.ArchivePath {
+		out = append(out, "--archive "+prev.ArchivePath+" (K4 끝남)")
 	}
 	return out
 }

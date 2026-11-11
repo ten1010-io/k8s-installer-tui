@@ -144,8 +144,13 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 		fwOut, _ := run(ctx, o.AnsibleDir(), "bash", "-c", fwScript)
 		var fwActive []string
 		for node, a := range parseAdhoc(fwOut) {
-			if strings.TrimSpace(a.Stdout) == "active" {
-				fwActive = append(fwActive, node)
+			// a line a unit: firewalld absent or inactive prints its own line
+			// ("inactive") before the one of ufw
+			for _, l := range strings.Split(a.Stdout, "\n") {
+				if strings.TrimSpace(l) == "active" {
+					fwActive = append(fwActive, node)
+					break
+				}
 			}
 		}
 		if len(fwActive) > 0 {

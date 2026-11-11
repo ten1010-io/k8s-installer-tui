@@ -62,6 +62,11 @@ func CheckBecomeShell(ctx context.Context, o Options, run RunFunc) (CheckResult,
 	var problems []string
 	for _, n := range refused {
 		p := probe[n]
+		// the probe's own line is its last: the raw module runs under a
+		// terminal, where what sudo says on stderr comes out on stdout before it
+		if i := strings.LastIndexByte(p.Stdout, '\n'); i >= 0 {
+			p.Stdout = strings.TrimSpace(p.Stdout[i+1:])
+		}
 		switch {
 		case p.ok() && p.Stdout != "":
 			paths[p.Stdout] = append(paths[p.Stdout], n)

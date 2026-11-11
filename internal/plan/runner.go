@@ -161,6 +161,18 @@ func LoadRunState(dir string) (*RunState, error) {
 	return &st, nil
 }
 
+// SetAsideRun moves state.json of dir to state.json.reset, after reset-cluster.yml
+// has taken apart what the run built: the steps it records as ok are not done
+// any more (the ki cp services of K2 are gone), so a resume would skip them. The
+// next run starts from the first step; the record stays to be read.
+func SetAsideRun(dir string) error {
+	err := os.Rename(filepath.Join(dir, stateFile), filepath.Join(dir, stateFile+".reset"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 // writeAtomic writes path whole or not at all: a reader never sees half of it.
 func writeAtomic(p string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(p), "."+filepath.Base(p)+".*")
@@ -658,6 +670,10 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 		}
 	}
 	fmt.Fprintf(f, "── %s %s 끝: 종료 코드 %d\n", time.Now().Format(time.RFC3339), st.ID, code)
+	var note string
+	if err != nil && ctx.Err() == nil {
+		note = knownFailure(st, logPath, r.failureContext(st))
+	}
 	r.set(st.ID, func(s *StepState) {
 		s.End, s.ExitCode, s.PGID = now(), &code, 0
 		switch {
@@ -666,15 +682,87 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 		case ctx.Err() != nil:
 			s.Status, s.Note = StatusCancelled, "중단함 (Ctrl+C 두 번)"
 		default:
-			s.Status, s.Note = StatusFailed, knownFailure(st, logPath)
+			s.Status, s.Note = StatusFailed, note
 		}
 	})
 	return err == nil
 }
 
+// failureContext is what knownFailure needs of the run besides the log; r.mu
+// is not held.
+func (r *Runner) failureContext(st Step) failureContext {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fc := failureContext{resettable: ResetHelps(r.Opts.Existing, st.ID)}
+	if k4 := r.st.Step(pushStepID); k4 != nil {
+		fc.k4 = k4.Status
+	}
+	return fc
+}
+
+type failureContext struct {
+	// resettable: a new-site run failing while the cluster is still being built,
+	// where reset-cluster.yml is what clears the leftovers (ResetHelps)
+	resettable bool
+	// k4 is the status of K4 in this run: skipped or never run (pending) means
+	// the user registry may be empty
+	k4 StepStatus
+}
+
+// ResetHelps reports whether reset-cluster.yml is a way out of a failure of
+// step id: only on a new site (not existing) and only in K1..K3, where the
+// cluster is still being built and what stops the run is what an earlier
+// install left (packages, kubelet enabled). After K3 the cluster stands and
+// holds what the later steps put in it, and on an existing site it is the
+// site's own cluster: reset-cluster.yml destroys either.
+func ResetHelps(existing bool, id string) bool {
+	return !existing && (id == "K1" || id == "K2" || id == "K3")
+}
+
+// ResetScript is what the install screen runs for x (ResetHelps), as the steps
+// run (StepScript: this user, the venv, the ansible directory), its output also
+// to logs/reset-cluster.log beside the steps' logs. The runner itself never runs
+// it (forbidden): the screen does, only after the operator typed the word.
+//
+// The two -e are those of reset-cluster.yml of k8s-installer for a cluster that
+// never finished coming up. sdfc= ("skip deleting from cluster",
+// tasks/preflight-playbook.yml) skips delete-all-nodes.sh
+// (tasks/reset-k8s-cluster.yml), the one step that asks the apiserver to delete
+// the node objects: after a failure in K1..K3 there may be no apiserver to ask,
+// and its rescue says to run again with -e sdfc=; everything after it works on
+// the nodes themselves, and the node objects go with the cluster anyway.
+// k8s_cp_extra_files=[] keeps validate-hostvars.py (prepare-vars.yml) from
+// refusing the run over a file of the list not written yet (the JWKS config,
+// made by A5.1); what is taken off the nodes is read from each node's own
+// record (tasks/reset-k8s-cp-extra-files.yml reads applied-vars.yml), not from
+// this variable, so the empty list removes nothing less.
+func ResetScript(o Options) string {
+	st := Step{ID: "reset", Title: "reset-cluster", Kind: Playbook, Playbook: "playbooks/reset-cluster.yml",
+		Args: []string{"-e", "sdfc=", "-e", `{"k8s_cp_extra_files":[]}`}}
+	if o.ShellExecutable != "" {
+		st.Args = append(st.Args, "-e", "ansible_shell_executable="+o.ShellExecutable)
+	}
+	logs := StateDir(o) + "/logs"
+	return "set -o pipefail\nmkdir -p " + shellQuote(logs) + "\n(\n" + StepScript(o, st) + ") 2>&1 | tee -a " + shellQuote(logs+"/reset-cluster.log") + "\n"
+}
+
+// helmNamespaces are the steps that install with helm and wait for the pods
+// (helm --wait), by playbook, with the namespace to look at: Cilium in
+// kube-system, Harbor and the AIPub services in aipub (aipub_namespace), the
+// monitoring module in namespaces of its own.
+var helmNamespaces = map[string]string{
+	"aipub-playbooks/setup-network.yml":    "-n kube-system",
+	"aipub-playbooks/setup-base.yml":       "-n aipub",
+	"aipub-playbooks/setup-monitoring.yml": "-A",
+	"aipub-playbooks/setup-aipub.yml":      "-n aipub",
+}
+
+// podsNotStarted are what a helm --wait that ran out of time leaves in the log.
+var podsNotStarted = []string{"ImagePullBackOff", "ErrImagePull", "context deadline exceeded", "timed out waiting for the condition", "not ready"}
+
 // knownFailure returns a human diagnosis for known failure patterns, or extracts
 // the raw failure message as a fallback so unexpected errors are still explained.
-func knownFailure(st Step, logPath string) string {
+func knownFailure(st Step, logPath string, fc failureContext) string {
 	lines := TailLines(logPath, 200)
 	full := strings.Join(lines, "\n")
 
@@ -684,20 +772,42 @@ func knownFailure(st Step, logPath string) string {
 		return "알려진 일: backend-informer 는 Python 서비스가 만드는 Workspace CRD 를 기다립니다. 그 앞의 서비스는 설치됐습니다. " +
 			"Python 서비스를 설치한 뒤 이어서 실행하세요 (aipub-installer README)"
 	}
+	if ns, helm := helmNamespaces[st.Playbook]; helm && containsAny(full, podsNotStarted) {
+		note := "진단: 파드가 시작되지 못해 helm 이 기다리다 멈췄습니다. 흔한 원인은 사용자 레지스트리에 이미지가 없는 것 (ImagePullBackOff) 입니다. " +
+			"컨트롤 플레인 노드에서 kubectl " + ns + " get pods 로 확인하세요"
+		if fc.k4 == StatusSkipped || fc.k4 == StatusPending {
+			note += ". 이번 실행은 K4 push-user-registry-artifacts 를 건너뛰었습니다: 아카이브 경로에 " + ArchiveName +
+				" 의 경로를 넣고 이어서 실행하세요 (--install --resume --archive <파일>). K4 를 먼저 실행한 뒤 이 단계부터 갑니다"
+		}
+		return note
+	}
 	if strings.Contains(full, "error syncing endpoints with etcd") || (strings.Contains(full, "check-etcd") && strings.Contains(full, "context deadline exceeded")) {
 		return "진단: 컨트롤 플레인 간 etcd 통신(포트 2379/2380)이 방화벽에 차단되었습니다. 복구: 각 노드에서 방화벽 포트(2379, 2380/tcp)를 개방하거나 방화벽 상태를 확인하세요."
 	}
-	if strings.Contains(full, "package[\"containerd\"] already installed") || (strings.Contains(full, "already installed") && strings.Contains(full, "containerd")) {
-		return "진단: 노드에 이전 설치 잔재(containerd)가 남아있습니다. 복구: TUI에서 'x' 키로 클러스터를 초기화(reset)한 뒤 'r' 키로 재시도하세요."
+	// the leftovers of an earlier install: only where a reset is a way out
+	// (ResetHelps), else the raw error below says what failed
+	if fc.resettable && (strings.Contains(full, "package[\"containerd\"] already installed") || (strings.Contains(full, "already installed") && strings.Contains(full, "containerd"))) {
+		return "진단: 노드에 이전 설치 잔재(containerd)가 남아있습니다. 복구: reset-cluster.yml 로 노드를 초기화한 뒤 처음부터 다시 실행하세요 " +
+			"(설치 화면에 x 가 나오면 x, reset 입력)"
 	}
 	if strings.Contains(full, "Failed dependencies") && strings.Contains(full, "libcrypto.so") {
 		return "진단: openssl-devel 패키지로 인해 python3.12-libs 의존성 충돌이 발생했습니다. 복구: 노드에서 'sudo dnf remove -y openssl-devel' 이 필요합니다."
 	}
-	if strings.Contains(full, "Kubelet already enabled") {
-		return "진단: kubelet 서비스가 이미 활성화되어 있습니다. 복구: 해당 노드에서 'sudo kubeadm reset -f' 를 실행하거나 TUI에서 'x' 로 초기화하세요."
+	if fc.resettable && strings.Contains(full, "Kubelet already enabled") {
+		return "진단: kubelet 서비스가 이미 활성화되어 있습니다. 이전 설치의 잔재이거나, 이 노드에 이미 클러스터가 돌고 있는 것입니다. " +
+			"운영 중인 클러스터라면 초기화하지 말고 --existing 으로 다시 시작하세요. 잔재가 맞으면 reset-cluster.yml 로 노드를 초기화한 뒤 " +
+			"처음부터 다시 실행하세요 (설치 화면에 x 가 나오면 x, reset 입력)"
 	}
 	if (strings.Contains(full, "k8s_cp_extra_files") || strings.Contains(full, "authentication-config.yaml")) && strings.Contains(full, "not there") {
-		return "진단: JWKS 인증 설정 파일이 아직 없습니다 (A5.1 단계에서 생성 예정). 복구: 'sudo mkdir -p /opt/k8s-installer/ansible/files/aipub && sudo touch /opt/k8s-installer/ansible/files/aipub/authentication-config.yaml' 로 빈 파일을 생성하세요."
+		// Every playbook of the plan carries the -e of its stage (withStages),
+		// which leaves out a file not written yet: this refusal comes from a
+		// playbook run by hand. An empty file is no way past it: copied to the
+		// control plane nodes, an empty authentication config keeps the
+		// apiserver from starting (fileio.AuthConfig)
+		return "진단: k8s_cp_extra_files 가 가리키는 파일 (JWKS 인증 설정 등, A5.1 이 만듦) 이 설치 디렉터리에 없습니다. " +
+			"위저드는 아직 없는 파일을 단계마다 -e 로 빼고 실행하므로, 이 거부는 플레이북을 손으로 실행했을 때 납니다. " +
+			"복구: 위저드 (또는 --install) 로 실행하거나, 손으로 실행할 때는 이 단계 로그의 ── 줄에 있는 -e 를 그대로 붙이세요. " +
+			"빈 파일을 만들지 마세요: 빈 인증 설정이 컨트롤 플레인 노드로 복사되면 apiserver 가 뜨지 않습니다"
 	}
 
 	// 2. Fallback: extract the raw failure summary from the Ansible log
@@ -738,10 +848,21 @@ func cleanErrorLine(s string) string {
 	s = strings.Trim(s, "'\"")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", "")
-	if len(s) > 140 {
-		return s[:137] + "..."
+	// cut on runes, not bytes: the messages are often Korean, and a byte cut
+	// splits a character
+	if r := []rune(s); len(r) > 140 {
+		return string(r[:137]) + "..."
 	}
 	return s
+}
+
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // manual is a Manual step: it checks first (a class may be there already),

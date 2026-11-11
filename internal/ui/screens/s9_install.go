@@ -36,7 +36,8 @@ import (
 //   3  : nav slot (←/→: 이전/실행)
 //
 // Off the text input: c 사전 확인, d 명령 보기, w 스크립트 저장, f 처음부터
-// (when there was a run), and when P2
+// (when there was a run), x reset-cluster.yml (only after a new-site run failed
+// in K1..K3, confirmed by typing the word: resetOffered), and when P2
 // found nodes that refuse the key of the control node: k 키 보내기 (ssh asks
 // the password of each node on the terminal), p 비밀번호 한 번 (a masked input,
 // handed to ssh through SSH_ASKPASS). Both run P2 again at the end.
@@ -125,8 +126,12 @@ type S9Install struct {
 	inputHash      string // of the site files when the screen was entered (viewPrev)
 	confirm        string
 	resetCmd       func() tea.Cmd
-	runAfterChecks bool // 실행 (or f) waits for the checks, then goes on (gate)
-	fresh          bool // the run that waits is from the first step (f)
+	resetTyped     string          // what was typed at the reset question ("reset" runs it)
+	resetting      bool            // a reset is being prepared or runs (prepareReset .. resetDone)
+	resetRelease   func()          // gives back the lock of the runs held through a reset
+	archiveDirs    func() []string // where an empty 아카이브 경로 is looked for (plan.ArchiveDirs)
+	runAfterChecks bool            // 실행 (or f) waits for the checks, then goes on (gate)
+	fresh          bool            // the run that waits is from the first step (f)
 	showLog        bool
 	logVP          viewport.Model
 	logStep        plan.StepState
@@ -147,7 +152,7 @@ func NewS9Install(s *state.AppState, paths fileio.Paths, opts plan.Options) *S9I
 	p.CharLimit = 256
 	p.Prompt = ""
 	return &S9Install{
-		appState: s, paths: paths, opts: opts, base: opts, run: plan.ExecRun,
+		appState: s, paths: paths, opts: opts, base: opts, run: plan.ExecRun, archiveDirs: plan.ArchiveDirs,
 		archive: a, pass: p, checks: map[string]plan.CheckResult{}, vp: viewport.New(80, 20), planVP: viewport.New(80, 20),
 	}
 }
@@ -157,6 +162,9 @@ func (s *S9Install) SetRunner(r plan.RunFunc) { s.run = r }
 
 // SetResetCmd replaces how reset-cluster is run (tests).
 func (s *S9Install) SetResetCmd(f func() tea.Cmd) { s.resetCmd = f }
+
+// SetArchiveDirs replaces where the archive is looked for (tests).
+func (s *S9Install) SetArchiveDirs(f func() []string) { s.archiveDirs = f }
 
 func (s *S9Install) Title() string { return "설치" }
 func (s *S9Install) SetSize(w, h int) {
@@ -207,6 +215,7 @@ func (s *S9Install) SyncFromState(st *state.AppState) {
 	if !s.running() {
 		s.ex, s.selMoved = nil, false
 		s.loadPrev()
+		s.findArchive()
 	}
 	// hashed once here, not on every frame
 	s.inputHash = plan.InputHash(s.inputs())
@@ -426,13 +435,19 @@ func (s *S9Install) closePass() {
 // Busy holds the wizard on this screen while the password is asked or the key
 // sent: the messages of the send come to this screen only.
 func (s *S9Install) Busy() bool {
-	return s.asking || s.sending || s.preparing || s.running() || s.confirm != ""
+	return s.asking || s.sending || s.preparing || s.running() || s.confirm != "" || s.resetting
 }
 
 // BusyReason is what the wizard says when it does not leave.
 func (s *S9Install) BusyReason() string {
 	if s.running() {
 		return "설치를 실행하는 중입니다. 끝나거나 Ctrl+C 로 멈춘 뒤 이동하세요"
+	}
+	if s.resetting {
+		return "클러스터를 초기화하는 중입니다. 끝난 뒤 이동하세요"
+	}
+	if s.confirm == "reset-cluster" {
+		return "초기화하려면 reset 을 입력하고 Enter, 아니면 Esc 로 취소한 뒤 이동하세요"
 	}
 	if s.confirm != "" {
 		return "y 또는 n 으로 답한 뒤 이동하세요"
@@ -454,6 +469,10 @@ func (s *S9Install) KeyHints() []string {
 			return []string{"Enter 설치함, 계속", "Ctrl+C 멈춤"}
 		}
 		return []string{"Ctrl+C 멈춤"}
+	case s.confirm == "reset-cluster":
+		return []string{"reset 입력 후 Enter 초기화", "Esc 취소"}
+	case s.confirm == "no-archive":
+		return []string{"y 예", "n·Enter 아니오"}
 	case s.confirm != "":
 		return []string{"y 예", "n 아니오"}
 	case s.asking:
@@ -474,7 +493,7 @@ func (s *S9Install) Interrupt() bool {
 	case s.running():
 		return s.interruptRun()
 	case s.confirm != "":
-		s.confirm, s.message = "", "실행하지 않았습니다"
+		s.answer(false)
 		return true
 	case s.send != nil && !s.send.stopping:
 		s.send.stopping = true
@@ -582,21 +601,45 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return s, s.runP2()
 
+	case resetReadyMsg:
+		return s, s.resetReady(msg)
+
 	case resetDoneMsg:
-		if msg.err != nil {
-			s.message = "✗ 클러스터 초기화 실패: " + msg.err.Error()
-		} else {
-			s.message = "✓ 클러스터 초기화(reset-cluster.yml) 완료. 'r'을 눌러 실패 단계를 다시 진행하세요."
-		}
+		s.resetDone(msg.err)
 		return s, nil
 
 	case tea.KeyMsg:
+		if s.resetting {
+			// nothing starts while the reset is checked or runs: a run begun now
+			// would be taken apart under it
+			return s, nil
+		}
+		if s.confirm == "reset-cluster" {
+			// the word, not a key: a y pressed out of habit must not destroy a cluster
+			switch msg.Type {
+			case tea.KeyRunes:
+				s.resetTyped += string(msg.Runes)
+			case tea.KeyBackspace:
+				if r := []rune(s.resetTyped); len(r) > 0 {
+					s.resetTyped = string(r[:len(r)-1])
+				}
+			case tea.KeyEnter:
+				return s, s.answer(s.resetTyped == "reset")
+			default:
+				return s, s.answer(false)
+			}
+			return s, nil
+		}
 		if s.confirm != "" {
 			switch msg.String() {
 			case "y", "Y":
 				return s, s.answer(true)
 			case "n", "N", "esc":
 				return s, s.answer(false)
+			case "enter":
+				if s.confirm == "no-archive" {
+					return s, s.answer(false) // its default is no
+				}
 			}
 			return s, nil
 		}
@@ -650,8 +693,8 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "f":
 				return s, s.pressFresh()
 			case "x":
-				if s.last != nil && s.last.Outcome == plan.OutcomeFailed {
-					s.confirm = "reset-cluster"
+				if s.resetOffered() {
+					s.confirm, s.resetTyped, s.message = "reset-cluster", "", ""
 					return s, nil
 				}
 			case "k":
@@ -945,7 +988,7 @@ func (s *S9Install) bottom() string {
 	if s.last != nil {
 		keys += "   f 처음부터"
 	}
-	if s.last != nil && s.last.Outcome == plan.OutcomeFailed {
+	if s.resetOffered() {
 		keys += "   x 클러스터 초기화(reset)"
 	}
 	if len(s.refusing()) > 0 {

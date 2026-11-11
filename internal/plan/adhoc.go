@@ -29,6 +29,14 @@ func (a adhocOut) ok() bool {
 //	node | UNREACHABLE!: Failed to connect ...          (older: "UNREACHABLE! => {...}")
 var adhocFull = regexp.MustCompile(`^(\S+) \| ([A-Z]+)!?:? (?:\| rc=(\d+) )?(.*)$`)
 
+// onelineText undoes what -o does to the output of a command to keep it on one
+// line: a newline printed as \n, a carriage return as \r. The raw module (P2,
+// P6: before K1 the nodes have no python of the installer for the command
+// module) runs under a terminal (ssh -tt), so its stdout ends in \r\n: without
+// this "active\r\n" is not "active", and a dash path would carry it into
+// ansible_shell_executable.
+var onelineText = strings.NewReplacer(`\r\n`, "\n", `\n`, "\n", `\r`, "")
+
 func parseAdhoc(out []byte) map[string]adhocOut {
 	res := map[string]adhocOut{}
 	for _, l := range strings.Split(string(out), "\n") {
@@ -45,7 +53,7 @@ func parseAdhoc(out []byte) map[string]adhocOut {
 			if j := strings.Index(a.Stdout, " (stderr)"); j >= 0 {
 				a.Stdout = a.Stdout[:j]
 			}
-			a.Stdout = strings.TrimSpace(a.Stdout)
+			a.Stdout = strings.TrimSpace(onelineText.Replace(a.Stdout))
 		} else if js, isJSON := strings.CutPrefix(a.Raw, "=> "); isJSON {
 			var r struct {
 				RC     *int   `json:"rc"`

@@ -25,6 +25,10 @@ var ClusterRecord = "/etc/k8s-installer/applied-release"
 type Site struct {
 	Existing       bool
 	AipubInstalled bool
+	// Unknown: the record could not be looked at, so "not existing" is a plan,
+	// not a finding. What destroys a cluster (the reset of the install screen)
+	// is not offered on it
+	Unknown bool
 	// Why is the one line the plan screen and --install show: the decision,
 	// what it rests on and how to say otherwise
 	Why string
@@ -48,6 +52,7 @@ func DetectSite(existing, aipubInstalled bool) Site {
 	case errors.Is(err, fs.ErrNotExist):
 		s.Why = "새 사이트: " + ClusterRecord + " 없음 (클러스터가 이미 있으면 --existing 으로 시작)"
 	default:
+		s.Unknown = true
 		s.Why = "새 사이트로 계획: " + ClusterRecord + " 를 확인하지 못함 (" + err.Error() + "). 클러스터가 이미 있으면 --existing 으로 시작"
 	}
 	if s.Existing {

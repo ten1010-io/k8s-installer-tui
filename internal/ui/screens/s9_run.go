@@ -3,7 +3,6 @@ package screens
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -80,20 +79,101 @@ func (s *S9Install) loadPrev() {
 	}
 }
 
+// detectSite decides the site again as it is now (plan.Options.Detect), for a
+// run from the first step: the record of k8s-installer may have appeared since
+// the program started or since the unfinished run (K3 built the cluster), or
+// gone (reset-cluster.yml). A plan from what the last run saw would run
+// setup-cluster on the live cluster. Without Detect the site is the one the
+// program was started with, never the last run's.
+func (s *S9Install) detectSite() {
+	if s.base.Detect != nil {
+		site := s.base.Detect()
+		// --aipub-installed means nothing without a cluster (main refuses it)
+		s.base.Existing, s.base.AipubInstalled, s.base.SiteWhy = site.Existing, site.AipubInstalled && site.Existing, site.Why
+	}
+	s.opts.Existing, s.opts.AipubInstalled, s.opts.SiteWhy = s.base.Existing, s.base.AipubInstalled, s.base.SiteWhy
+	s.rebuild()
+}
+
+// findArchive fills an empty 아카이브 경로 of a site that needs it
+// (plan.NeedsArchive) with the one archive found where a package is usually
+// unpacked (plan.ArchiveDirs); several are listed and none is chosen.
+func (s *S9Install) findArchive() {
+	if strings.TrimSpace(s.archive.Value()) != "" || !plan.NeedsArchive(s.appState.AipubEnabled, s.opts) || s.archiveDirs == nil {
+		return
+	}
+	found := plan.FindArchive(s.archiveDirs())
+	switch len(found) {
+	case 0:
+	case 1:
+		s.archive.SetValue(found[0])
+		s.message = "아카이브를 " + filepath.Dir(found[0]) + " 에서 찾아 아카이브 경로에 넣었습니다: " + found[0]
+	default:
+		s.message = plan.ArchiveName + " 가 여러 곳에 있습니다: " + strings.Join(found, ", ") + " — 쓸 것을 아카이브 경로에 넣으세요"
+	}
+}
+
 // pressRun is 실행: through the checks (gate), then the run, from where the
-// last one stopped.
+// last one stopped; from the first step when there is nothing to go on with,
+// for the site as it is now.
 func (s *S9Install) pressRun() tea.Cmd {
 	s.fresh = false
+	if s.last == nil || len(s.last.Remaining()) == 0 {
+		s.detectSite()
+	}
 	return s.gate(false)
 }
 
-// pressFresh is f: through the checks too, then asked, the run from the first step.
+// pressFresh is f: through the checks too, then asked, the run from the first
+// step, planned for the site as it is now.
 func (s *S9Install) pressFresh() tea.Cmd {
-	if s.last == nil {
+	if s.last == nil || s.running() {
 		return nil
 	}
 	s.fresh = true
+	s.detectSite()
 	return s.gate(false)
+}
+
+// resuming is whether the run 실행 starts now goes on with the last one.
+func (s *S9Install) resuming() bool {
+	return !s.fresh && s.last != nil && len(s.last.Remaining()) > 0
+}
+
+// k4Kept is whether the run that starts now keeps a K4 of the last run that
+// succeeded, and with it the archive path of that run.
+func (s *S9Install) k4Kept() bool {
+	if !s.resuming() {
+		return false
+	}
+	k4 := s.last.Step("K4")
+	return k4 != nil && k4.Status == plan.StatusOK
+}
+
+// archiveGate is the last stop before a run: an archive path that is given
+// must be a file this user reads, and a site that needs one (plan.NeedsArchive)
+// does not start without it unless the operator says so (waived, the
+// no-archive question, no by default). A run that keeps a K4 that succeeded
+// needs nothing.
+func (s *S9Install) archiveGate(waived bool) tea.Cmd {
+	if !s.k4Kept() {
+		path := strings.TrimSpace(s.archive.Value())
+		switch {
+		case path != "":
+			if err := plan.CheckArchive(path); err != nil {
+				s.message = "실행하지 않았습니다: " + err.Error() + ". 아카이브 경로를 고친 뒤 실행하세요"
+				return nil
+			}
+		case !waived && plan.NeedsArchive(s.appState.AipubEnabled, s.opts):
+			s.confirm = "no-archive"
+			return nil
+		}
+	}
+	if s.fresh {
+		s.confirm = "fresh"
+		return nil
+	}
+	return s.offerRun()
 }
 
 // gate lets a run start only on checks that passed (none ✗) for the site as it
@@ -129,11 +209,7 @@ func (s *S9Install) gate(after bool) tea.Cmd {
 		s.message = "사전 확인을 먼저 실행합니다 (" + strings.Join(notRun, " ") + "). 통과하면 바로 실행합니다"
 		return s.runChecks()
 	}
-	if s.fresh {
-		s.confirm = "fresh"
-		return nil
-	}
-	return s.offerRun()
+	return s.archiveGate(false)
 }
 
 // checkKey is what the checks were made for: the site files and the options
@@ -160,8 +236,13 @@ func (s *S9Install) offerRun() tea.Cmd {
 
 // confirmQuestion is asked after the checks passed (gate): y starts the run.
 func (s *S9Install) confirmQuestion() string {
-	if s.confirm == "reset-cluster" {
-		return "모든 노드의 클러스터를 초기화(reset-cluster.yml)하시겠습니까? (containerd 및 k8s 잔재 삭제) (y 예, n 아니오)"
+	switch s.confirm {
+	case "reset-cluster":
+		return "reset-cluster.yml 로 인벤토리의 모든 노드에서 클러스터를 지웁니다 (kubeadm reset, ki cp 서비스, containerd·패키지, 인증서). " +
+			"되돌릴 수 없습니다. 초기화하려면 reset 을 입력하고 Enter, 그 밖에는 취소: " + s.resetTyped
+	case "no-archive":
+		return "새 사이트인데 아카이브 경로가 비어 있습니다. K2 가 만드는 사용자 레지스트리는 비어 있어, K4 없이는 A1 setup-network 부터 " +
+			"이미지를 받지 못해 실패합니다. 아카이브 경로 칸에 " + plan.ArchiveName + " 의 경로를 넣으세요. 그래도 K4 없이 실행할까요? (y 예, n·Enter 아니오)"
 	}
 	if s.confirm == "resume" {
 		return "지난 실행 뒤에 사이트 파일이 바뀌었습니다. 끝난 단계는 다시 실행하지 않고 이어서 실행할까요? (y 예, n 아니오)"
@@ -176,45 +257,143 @@ type resetDoneMsg struct {
 	err error
 }
 
+// resetOffered is whether x may reset the cluster now: no run under way, and
+// the last run failed in K1..K3 of a new site (plan.ResetHelps), where the
+// cluster is still being built. Never after K3, never on an existing site.
+//
+// Nor when the site as it is now is not plainly new: the run may have been
+// planned new on a control node whose record could not be read, or whose
+// cluster was built by something else, and K3 then fails on "Kubelet already
+// enabled" exactly because a cluster is running there. The record of
+// k8s-installer has to be looked at and absent for a reset to be offered.
+//
+// Not while the checks run or a run waits for them (the gate would ask its own
+// question over this one), nor while a reset is being prepared or runs. Without
+// a way to look at the record (no Detect) it is not offered at all.
+func (s *S9Install) resetOffered() bool {
+	if s.running() || s.resetting || s.checking || s.runAfterChecks || s.base.Detect == nil ||
+		s.last == nil || s.last.Outcome != plan.OutcomeFailed {
+		return false
+	}
+	for _, st := range s.last.Steps {
+		if st.Status != plan.StatusFailed {
+			continue
+		}
+		if !plan.ResetHelps(s.last.Existing, st.ID) {
+			return false
+		}
+		site := s.base.Detect()
+		return !site.Existing && !site.Unknown
+	}
+	return false
+}
+
+// resetReadyMsg is the end of what is checked between the typed word and the
+// reset (plan.PrepareReset): release gives back the lock of the runs, held
+// until the reset has ended.
+type resetReadyMsg struct {
+	release func()
+	err     error
+}
+
+// prepareReset checks, at the moment the word was typed, that nothing else
+// runs this installation, that the record of the run is still the one shown,
+// and that no node holds a built cluster (plan.PrepareReset). It asks every
+// node, so it is a command, not a call.
+func (s *S9Install) prepareReset() tea.Cmd {
+	s.resetting = true
+	s.message = "초기화 전 확인 중... (다른 실행, 실행 기록, 모든 노드의 클러스터 기록)"
+	opts, shown, run := s.opts, s.last, s.run
+	opts.Detect = s.base.Detect
+	return func() tea.Msg {
+		release, err := plan.PrepareReset(context.Background(), opts, shown, run)
+		return resetReadyMsg{release: release, err: err}
+	}
+}
+
+// resetReady takes the answer of prepareReset: the reset runs only when
+// everything held, with the lock of the runs kept until it ends.
+func (s *S9Install) resetReady(msg resetReadyMsg) tea.Cmd {
+	if msg.err != nil {
+		s.resetting = false
+		s.message = "✗ 초기화하지 않았습니다: " + msg.err.Error()
+		return nil
+	}
+	s.resetRelease = msg.release
+	return s.runResetCluster()
+}
+
+// runResetCluster runs reset-cluster.yml (plan.ResetScript) on the terminal,
+// as this user like the steps: not under sudo, whose root has neither the key
+// the nodes take nor this user's known_hosts.
 func (s *S9Install) runResetCluster() tea.Cmd {
 	if s.resetCmd != nil {
 		return s.resetCmd()
 	}
-	ansible := filepath.Join(s.opts.Root, "venv", "bin", "ansible-playbook")
-	if _, err := os.Stat(ansible); err != nil {
-		ansible = "ansible-playbook"
-	}
-	cmd := exec.Command("sudo", ansible,
-		"-i", "inventory.yml",
-		"playbooks/reset-cluster.yml",
-		"-e", "sdfc=",
-		"-e", `{"k8s_cp_extra_files":[]}`)
+	cmd := exec.Command("bash", "-c", plan.ResetScript(s.opts))
 	cmd.Dir = s.opts.AnsibleDir()
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return resetDoneMsg{err: err}
 	})
 }
 
+// resetDone takes the end of reset-cluster.yml. After it the steps the last
+// run records as ok are undone (K2's ki cp services among them), so its record
+// is set aside: 실행 is then a run from the first step, planned for the site
+// as it is now, which is a new site again (the record of the cluster is gone).
+func (s *S9Install) resetDone(err error) {
+	if s.resetRelease != nil {
+		s.resetRelease() // the lock of the runs, held through the reset
+		s.resetRelease = nil
+	}
+	s.resetting = false
+	log := plan.StateDir(s.opts) + "/logs/reset-cluster.log"
+	if err != nil {
+		s.message = "✗ 클러스터 초기화 실패: " + err.Error() + " (로그 " + log + ")"
+		return
+	}
+	if err := plan.SetAsideRun(plan.StateDir(s.opts)); err != nil {
+		s.message = "✓ 클러스터를 초기화했습니다. 지난 실행 기록을 치우지 못했습니다 (" + err.Error() + "): f 로 처음부터 실행하세요"
+		return
+	}
+	s.ex, s.selMoved, s.last = nil, false, nil
+	s.detectSite()
+	s.message = "✓ 클러스터를 초기화했습니다 (로그 " + log + "). 실행을 누르면 처음부터 (K1 부터) 실행합니다"
+}
+
 func (s *S9Install) answer(yes bool) tea.Cmd {
 	c := s.confirm
-	s.confirm = ""
+	s.confirm, s.resetTyped = "", ""
 	if !yes {
-		if c == "reset-cluster" {
+		switch c {
+		case "reset-cluster":
 			s.message = "클러스터 초기화를 취소했습니다"
-		} else {
+		case "no-archive":
+			s.message = "실행하지 않았습니다. 아카이브 경로 칸에 " + plan.ArchiveName + " 의 경로를 넣고 실행하세요"
+		default:
 			s.message = "실행하지 않았습니다"
 		}
 		return nil
 	}
-	if c == "reset-cluster" {
-		return s.runResetCluster()
+	switch c {
+	case "reset-cluster":
+		// what was true when x was pressed may not be now
+		if !s.resetOffered() {
+			s.message = "초기화하지 않았습니다: 지금은 초기화할 수 있는 상태가 아닙니다"
+			return nil
+		}
+		return s.prepareReset()
+	case "no-archive":
+		return s.archiveGate(true)
 	}
 	return s.startRun(c == "resume")
 }
 
 // startRun runs the stages of the plan as it is shown, with resume from the
-// last run, whose 모니터링 and 아카이브 경로 a resume keeps (said when they were
-// changed on the screen since).
+// last run, whose 모니터링 a resume keeps, and its 아카이브 경로 when its K4
+// succeeded (said when they were changed on the screen since). A K4 that did not
+// succeed (skipped without an archive, failed) runs with the path given now,
+// before the step the last run stopped at.
 func (s *S9Install) startRun(resume bool) tea.Cmd {
 	var kept []string
 	if resume && s.last != nil {
@@ -225,15 +404,13 @@ func (s *S9Install) startRun(resume bool) tea.Cmd {
 			}
 			kept = append(kept, "모니터링 "+mon)
 		}
-		if strings.TrimSpace(s.archive.Value()) != s.last.ArchivePath {
-			archive := s.last.ArchivePath
-			if archive == "" {
-				archive = "없음"
-			}
-			kept = append(kept, "아카이브 경로 "+archive)
-		}
 		s.opts.Monitoring = s.last.Monitoring
-		s.archive.SetValue(s.last.ArchivePath)
+		if k4 := s.last.Step("K4"); k4 != nil && k4.Status == plan.StatusOK {
+			if strings.TrimSpace(s.archive.Value()) != s.last.ArchivePath {
+				kept = append(kept, "아카이브 경로 "+s.last.ArchivePath+" (K4 끝남)")
+			}
+			s.archive.SetValue(s.last.ArchivePath)
+		}
 	}
 	s.rebuild()
 	stages := plan.Stages(s.steps, s.opts, s.savedIn())
@@ -365,8 +542,8 @@ func (s *S9Install) runKey(msg tea.KeyMsg) tea.Cmd {
 			return s.pressRun()
 		}
 	case "x":
-		if s.ex.done && s.confirm == "" {
-			s.confirm = "reset-cluster"
+		if s.ex.done && s.confirm == "" && s.resetOffered() {
+			s.confirm, s.resetTyped, s.message = "reset-cluster", "", ""
 			return nil
 		}
 	case "esc":
@@ -511,7 +688,10 @@ func (s *S9Install) viewRun() string {
 	switch {
 	case ex.done:
 		if ex.outcome == plan.OutcomeFailed {
-			keys += "   r 실패 단계 재시도   x 클러스터 초기화(reset)"
+			keys += "   r 실패 단계 재시도"
+		}
+		if s.resetOffered() {
+			keys += "   x 클러스터 초기화(reset)"
 		}
 		keys += "   Esc 계획 화면으로 (실행을 누르면 이어서)"
 	default:

@@ -99,11 +99,12 @@ Docker와 네트워크(패키지, PyPI의 ansible-core)가 필요합니다. 이�
 | `--send-ssh-key` | | 화면 없이 키를 받지 않는 노드에 키를 보내고 같은 표를 출력. 비밀번호는 노드마다 ssh가 물음 |
 | `--ask-pass-once` | | `--send-ssh-key`와 함께: 비밀번호를 터미널에서 한 번만(화면에 보이지 않게) 물어 모든 노드에 씀 |
 | `--install` | | 화면 없이 설치 실행: 사전 확인 뒤 9단계의 단계를 차례로 실행. 아래 "설치 실행" 참고 |
-| `--resume` | | `--install`과 함께: 지난 실행에서 성공한 단계는 건너뛰고 이어서 실행. 계획은 지난 실행의 `--existing`·`--aipub-installed`·`--archive`·`--no-monitoring`으로 하고, 이번 플래그와 다르면 알려 줌 |
-| `--fresh` | | `--install`과 함께: 끝나지 않은 지난 실행이 있어도 처음부터 모든 단계를 실행. 없이 `--install`만 쓰면 그런 실행이 있을 때 시작하지 않음(종료 코드 2) |
+| `--resume` | | `--install`과 함께: 지난 실행에서 성공한 단계는 건너뛰고 이어서 실행. 계획은 지난 실행의 `--existing`·`--aipub-installed`·`--no-monitoring`으로 하고, 이번 플래그와 다르면 알려 줌. `--archive`는 지난 실행의 K4가 성공했으면 그때 것, 아니면(건너뜀·실패) 이번 `--archive`로 K4부터 실행 |
+| `--fresh` | | `--install`과 함께: 끝나지 않은 지난 실행이 있어도 처음부터 모든 단계를 실행. 사이트는 지금 상태로 판단(지난 실행이 아니라). 없이 `--install`만 쓰면 그런 실행이 있을 때 시작하지 않음(종료 코드 2) |
 | `--existing` | | 마법사와 `--install`: 클러스터가 이미 있는 사이트로 계획. 없으면 이 제어 노드에 `/etc/k8s-installer/applied-release`가 있을 때만 기존 사이트(아래 "기존 사이트 판정") |
 | `--aipub-installed` | | 마법사와 `--install`, 기존 사이트에서: AIPub도 이미 설치된 사이트로 계획(setup-cert의 CA가 노드에 있고 JWKS issuer가 응답: 컨트롤 플레인 항목을 update-cluster 한 번에 적용). 기본은 AIPub 없음. aipub-installer는 설치를 마쳤다는 기록을 남기지 않으므로 이 플래그로만 정함(`files/aipub/vars.yml`은 위저드가 AIPub 사이트마다 씀). 새 사이트에 주면 시작하지 않음 |
-| `--archive <path>` | (없음) | `--install`과 함께: K4의 사용자 레지스트리 아카이브 (비우면 K4 건너뜀) |
+| `--archive <path>` | (없음) | `--install`과 함께: K4의 사용자 레지스트리 아카이브(`ki-cp-user-registry-artifacts.tgz`). AIPub을 설치하는 새 사이트에는 필요: 없으면 시작하지 않음(종료 코드 2). 읽을 수 있는 일반 파일이 아니면 시작하지 않음. 기존 사이트·AIPub 없음은 비우면 K4 건너뜀 |
+| `--no-archive` | | `--install`과 함께: AIPub을 설치하는 새 사이트를 `--archive` 없이 시작(K4 건너뜀. 레지스트리가 비어 A1부터 이미지를 받지 못할 수 있음을 알고 쓸 때) |
 | `--no-monitoring` | | `--install`과 함께: 모니터링(A4)을 설치하지 않음 |
 | `--version` | | 버전 출력 |
 
@@ -207,7 +208,7 @@ AIPub을 설치하지 않으면 AIPub 전용 화면(6·7단계)은 건너뜁니�
 | K1 | `setup-k8s-installer` (기존 사이트: 건너뜀) | 플레이북 |
 | K2 | `setup-control-node` (기존 사이트: 건너뜀) | 플레이북 |
 | K3 | `setup-cluster` (기존 사이트: `update-cluster`, 또는 건너뜀) | 플레이북 |
-| K4 | `push-user-registry-artifacts` (선택, 아카이브 경로를 넣었을 때) | 플레이북 |
+| K4 | `push-user-registry-artifacts` (아카이브 경로를 넣었을 때. AIPub을 설치하는 새 사이트에는 필요) | 플레이북 |
 | A1 | `setup-network` | 플레이북 (AIPub) |
 | A2 | `setup-cert` | 플레이북 (AIPub) |
 | M1 | StorageClass 드라이버 설치 (A2와 함께, 쓰는 클래스가 없으면 건너뜀) | 수동 (AIPub) |
@@ -216,6 +217,8 @@ AIPub을 설치하지 않으면 AIPub 전용 화면(6·7단계)은 건너뜁니�
 | A5 | `setup-aipub` | 플레이북 (AIPub) |
 
 A1~A5는 AIPub을 설치할 때만 나옵니다. 화면에서 K4의 아카이브 경로와 모니터링 설치 여부를 정합니다.
+
+K4의 아카이브(`ki-cp-user-registry-artifacts.tgz`, 패키지에 들어 있음)는 새 사이트에서 빼면 안 됩니다. 사용자 레지스트리는 K2가 만들므로 비어 있고, 아카이브를 넣지 않으면 A1 `setup-network`부터 이미지를 받지 못합니다(Cilium 파드가 `ImagePullBackOff`, helm이 15분 기다리다 실패). 그래서 AIPub을 설치하는 새 사이트에서 아카이브 경로가 비어 있으면 `실행`·`f`는 바로 시작하지 않고 묻습니다(기본은 아니오, `Enter`도 아니오). 넣은 경로가 읽을 수 있는 일반 파일이 아니면 시작하지 않습니다. 아카이브 경로가 비어 있으면 화면이 이 프로그램의 디렉터리, 작업 디렉터리, 홈 디렉터리 한 단계 아래(`~/<패키지>/`)에서 그 파일을 찾아, 하나면 채우고 어디서 찾았는지 말하고, 여럿이면 목록만 보입니다. 기존 사이트와 AIPub을 설치하지 않는 사이트는 지금처럼 비워 두면 K4를 건너뜁니다. 이어서 실행하는데 지난 실행의 K4가 이미 성공했으면 아무것도 묻지 않습니다.
 
 기존 사이트(위 "기존 사이트 판정")에서는 K1·K2를 계획에 남기되 건너뜁니다: 노드의 설치본과 ki cp 서비스는 이미 있고, 올리는 것은 이 계획이 아니라 `upgrade-k8s-installer.yml`입니다. K3은 setup-cluster가 아닙니다(살아 있는 클러스터에서는 `init-k8s-cluster.sh`가 "Kubelet already enabled"로 거부). 뒤의 한 단계가 컨트롤 플레인 항목을 한 번에 적용하면(AIPub 없는 사이트의 K5, AIPub이 설치된 사이트의 A2.5) K3은 건너뛰고, 그렇지 않으면(기존 클러스터에 AIPub을 지금 설치) K3은 클러스터 단계 항목(감사 로그, runtime-config)을 AIPub 단계 전에 적용하는 `update-cluster.yml`이며, 그 단계에 적용할 항목이 없으면 건너뜁니다. ID는 그대로 K3이라 `state.json`과 로그의 이름이 바뀌지 않습니다.
 
@@ -226,7 +229,8 @@ A1~A5는 AIPub을 설치할 때만 나옵니다. 화면에서 K4의 아카이브
 | `c` | 사전 확인 실행: P1(설치 디렉터리), P2(모든 노드에 `sudo -n true`) |
 | `d` | 각 단계의 명령 보기 |
 | `w` | 명령을 `install-plan.sh`로 저장 (설정을 저장한 디렉터리에) |
-| `f` | 지난 실행이 있을 때: 처음부터 다시 실행. `실행`과 같이 사전 확인을 거친 뒤(✗면 안 함) 확인을 묻습니다 |
+| `f` | 지난 실행이 있을 때: 처음부터 다시 실행. 사이트를 지금 상태로 다시 판단합니다(지난 실행이 끝나지 않았어도: K3가 클러스터를 만들었으면 기존 사이트 계획이라 setup-cluster를 다시 돌리지 않음). `실행`과 같이 사전 확인을 거친 뒤(✗면 안 함) 확인을 묻습니다 |
+| `x` | 클러스터 초기화(`reset-cluster.yml`). **새 사이트에서 K1~K3 중 하나가 실패해 끝난 실행 뒤에만** 나옵니다(이전 설치 잔재, 이미 켜진 kubelet처럼 클러스터를 만드는 중에 막힌 경우). K3 뒤 단계가 실패했을 때, 기존 사이트, 실행 중에는 없고, 이 제어 노드의 클러스터 기록을 확인해 없을 때만 나옵니다. `reset`을 입력하고 `Enter`해야 실행하고, 그 밖의 입력은 취소입니다 |
 | `k` | 키를 받지 않는 노드에 키 보내기: 화면이 터미널을 넘기고, 노드마다 `ssh-copy-id`가 비밀번호를 물음. 끝나면 Enter로 돌아옴 |
 | `p` | 키를 받지 않는 노드에 키 보내기: 화면의 가림 입력칸에 비밀번호를 한 번 넣음. 노드별 진행이 P2 아래에 나옴. `Ctrl+C`로 중단. 중단 중에 한 번 더 누르면 보내기가 멈출 때까지 "정리 중…"을 보인 뒤 종료(그때 한 번 더 누르면 바로 종료하고, 정리는 프로그램이 끝나기 전에 마저 함) |
 
@@ -274,22 +278,28 @@ k8s-installer-tui --send-ssh-key --ask-pass-once    # 비밀번호를 한 번만
 5. **멈추기**: `Ctrl+C` 한 번은 실행 중인 단계가 끝나면 멈춤(M1 기다림은 바로 끝냄), 두 번은 실행 중인 단계의 프로세스 그룹에 SIGINT, 10초 뒤에도 남으면 SIGKILL(상태 `cancelled`). setup 플레이북은 다시 실행해도 안전하므로 그 단계부터 다시 실행하면 됩니다. 프로그램을 끝내면 실행도 멈춥니다(아직 분리 실행은 없음).
 6. **실패**: 단계가 실패하면 같은 stage의 다른 단계는 끝까지 돌게 두고(플레이북을 중간에 끊지 않음, M1 기다림은 끝냄) 거기서 멈춥니다. 끝에 실패한 단계, 종료 코드, 로그 경로, 로그 마지막 줄을 보여 줍니다.
    - `setup-aipub`이 backend-informer에서 Workspace CRD가 없다고 실패하면, aipub-installer README대로 Python 서비스를 설치한 뒤 이어서 실행하라고 안내합니다. 다시 돌려도 같은 이유로 실패하므로 자동 재시도는 하지 않습니다.
-7. **이어서 실행**: 9단계에 들어오면 지난 실행(`state.json`)의 끝난 단계와 남은 단계를 보여 주고, 버튼이 `이어서 실행`이 됩니다. 성공한 단계는 다시 실행하지 않고 첫 미완료 단계부터 실행합니다. 지난 실행 뒤에 사이트 파일(inventory, vars, AIPub vars, 웹훅 kubeconfig)이 바뀌었으면 먼저 묻습니다. `f`는 처음부터(사전 확인과 확인 후). 끝나지 않은 실행은 시작할 때의 사이트 사실(기존 클러스터·AIPub 여부)과 그때 고른 모니터링·아카이브 경로로 계획합니다. 화면에서 그 둘을 바꾼 뒤 이어서 실행하면 지난 실행의 값으로 한다고 알려 줍니다(바꾸려면 `f`).
+   - helm으로 설치하는 단계(A1 `setup-network`, A3, A4, A5)가 파드를 기다리다 실패하면(`context deadline exceeded`, `ImagePullBackOff`, `ErrImagePull`, not ready), 흔한 원인이 사용자 레지스트리에 이미지가 없는 것이라고 말하고 확인 방법(컨트롤 플레인 노드에서 `kubectl -n <네임스페이스> get pods`)을 보입니다. 이번 실행이 K4를 건너뛰었거나 실행하지 않았으면 아카이브 경로를 넣고 이어서 실행하라고 덧붙입니다.
+   - `k8s_cp_extra_files`가 가리키는 파일(JWKS 인증 설정 등)이 없다는 거부는 플레이북을 손으로 실행했을 때 납니다(이 도구의 단계는 아직 없는 파일을 `-e`로 뺌). 위저드로 실행하거나 그 단계 로그의 `-e`를 붙이라고 안내합니다. 빈 파일을 만들면 안 됩니다: 빈 인증 설정이 컨트롤 플레인 노드로 복사되면 apiserver가 뜨지 않습니다.
+   - 실패한 실행 화면에서 `r`은 실패한 단계부터 이어서 실행(`실행`과 같음)입니다. `x`는 아래 "클러스터 초기화"의 조건에서만 나옵니다.
+7. **이어서 실행**: 9단계에 들어오면 지난 실행(`state.json`)의 끝난 단계와 남은 단계를 보여 주고, 버튼이 `이어서 실행`이 됩니다. 성공한 단계는 다시 실행하지 않고 첫 미완료 단계부터 실행합니다. 지난 실행에서 건너뛴 단계라도 지금 계획이 건너뛰지 않으면 실행합니다(K4를 아카이브 없이 건너뛴 뒤 경로를 넣고 이어서 실행하면 K4를 먼저 실행하고 실패한 단계로 감). 지난 실행 뒤에 사이트 파일(inventory, vars, AIPub vars, 웹훅 kubeconfig)이 바뀌었으면 먼저 묻습니다. `f`는 처음부터(사전 확인과 확인 후)이며 사이트를 지금 상태로 다시 판단합니다. 끝나지 않은 실행은 시작할 때의 사이트 사실(기존 클러스터·AIPub 여부)과 그때 고른 모니터링으로 계획하고, 아카이브 경로는 K4가 성공했으면 그때 것을, 아니면 지금 넣은 것을 씁니다(`state.json`에 기록). 화면에서 지난 실행의 값을 바꾼 뒤 이어서 실행하면 지난 실행의 값으로 한다고 알려 줍니다(바꾸려면 `f`).
 8. **강제 종료**: 프로그램이 SIGKILL·OOM으로 죽으면 잠금은 풀리지만 실행 중이던 단계(자기 세션)는 남습니다. `state.json`에 실행 중인 단계의 프로세스 그룹을 적어 두므로, 다음 시작은 그 그룹이 살아 있는 동안 시작하지 않고 pid를 알려 줍니다(같은 플레이북이 두 번 돌지 않게).
 
 상태와 로그는 `<installer-root>/tui-install/`에 있습니다: `state.json`(단계별 상태·시작·끝·종료 코드·로그 경로, 실행 중인 단계의 프로세스 그룹, 사이트 파일 해시, 실행의 기존 클러스터·AIPub·모니터링·아카이브 경로; 원자적으로 쓰고 디렉터리까지 fsync. 실행 중에 쓰지 못하면 끝에 알려 줌), `logs/<단계>.log`(시도마다 이어 씀), `lock`(flock: 두 TUI가 같은 설치를 동시에 실행하지 못함). 디렉터리는 0700, 로그는 0600(플레이북 출력이 들어 있음). ansible 디렉터리 안이 아닌 이유: 매 플레이북의 `sync-ansible.yml`이 그 디렉터리를 tar로 묶기 때문이고, `upgrade.sh`는 `ansible/`·`scripts/`·`bundle/`·`venv/`만 바꿉니다. 설치 디렉터리가 root 소유이면 처음 한 번 `sudo -n install -d -m 0700`으로 만들어 이 사용자에게 줍니다.
 
-하지 않는 일: reset·remove 플레이북(셸 단계의 명령 안에 있어도)과 `delete_data`·`delete_namespace`는 실행하지 않습니다(러너가 거부). 비밀번호를 묻지 않습니다(NOPASSWD sudo는 P2가 확인하는 전제).
+하지 않는 일: 계획의 단계로는 reset·remove 플레이북(셸 단계의 명령 안에 있어도)과 `delete_data`·`delete_namespace`를 실행하지 않습니다(러너가 거부). 비밀번호를 묻지 않습니다(NOPASSWD sudo는 P2가 확인하는 전제). 예외는 운영자가 화면에서 고르는 클러스터 초기화 하나입니다.
+
+**클러스터 초기화 (`x`)**: 새 사이트(실행의 기존 사이트 판정이 아님)에서 K1·K2·K3 중 하나가 실패해 끝난 실행 뒤에만 나옵니다. 클러스터를 만드는 중이라 초기화가 도움이 되는 경우(이전 설치 잔재, 이미 켜진 kubelet)입니다. K3 뒤 단계가 실패했을 때(클러스터가 이미 섬), 기존 사이트, 실행 중에는 나오지 않고 눌러도 아무것도 하지 않습니다. 이 제어 노드의 `applied-release`를 확인할 수 있고 없어야 나옵니다(있거나 확인하지 못하면 나오지 않음). `reset`을 입력한 뒤에는 실행 전에 다시 확인합니다: 다른 프로그램이 이 설치를 실행 중이 아닌지(실행 잠금을 잡고 초기화가 끝날 때까지 쥠), 실행 기록이 화면에 보인 그대로인지, 인벤토리의 모든 노드(broken_node 제외)에 `applied-release`가 없는지(`sudo -n`으로 확인. 다른 제어 노드에서 만든 클러스터의 노드이거나, 답하지 않거나 sudo가 거부되는 노드가 있으면 초기화하지 않음). k8s-installer가 만들지 않은 클러스터(손으로 한 kubeadm)는 기록이 없어 알아볼 수 없습니다. 확인은 `y`가 아니라 `reset`을 입력하고 `Enter`입니다(그 밖의 입력·`Esc`·`Ctrl+C`는 취소). 단계처럼 이 사용자로(sudo 아님) venv를 켜고 `ansible-playbook -i inventory.yml playbooks/reset-cluster.yml -e sdfc= -e '{"k8s_cp_extra_files":[]}'`(P6의 셸이 있으면 그것도)를 터미널에서 실행하고, 출력은 `logs/reset-cluster.log`에도 남깁니다. `sdfc=`는 k8s-installer의 "skip deleting from cluster"로, apiserver에 노드 삭제를 묻는 단계를 건너뜁니다(만들다 만 클러스터에는 물을 apiserver가 없을 수 있음). `k8s_cp_extra_files=[]`는 아직 쓰지 않은 파일(JWKS 설정) 때문에 `validate-hostvars.py`가 거부하지 않게 하며, 노드에서 지울 파일은 각 노드의 기록(`applied-vars.yml`)에서 읽으므로 덜 지우지 않습니다. 성공하면 지난 실행 기록을 `state.json.reset`으로 옮깁니다(초기화가 K2의 ki cp 서비스까지 지우므로 이어서 실행하면 안 됨). 그다음 `실행`은 K1부터이고, 클러스터 기록(`applied-release`)이 지워졌으므로 새 사이트 계획입니다.
 
 ```bash
 cd /opt/k8s-installer/ansible
-k8s-installer-tui --install                 # 사전 확인, 그다음 모든 단계. M1에서 Enter를 기다림
+k8s-installer-tui --install --archive ~/pkg/ki-cp-user-registry-artifacts.tgz   # 새 사이트: 사전 확인, 그다음 모든 단계. M1에서 Enter를 기다림
 k8s-installer-tui --install --resume        # 실패·중단한 단계부터
-k8s-installer-tui --install --fresh         # 끝나지 않은 실행이 있어도 처음부터
+k8s-installer-tui --install --resume --archive ~/pkg/ki-cp-user-registry-artifacts.tgz   # K4를 건너뛴 실행: K4부터
+k8s-installer-tui --install --fresh         # 끝나지 않은 실행이 있어도 처음부터 (사이트는 지금 상태로 판단)
 k8s-installer-tui --install --existing --aipub-installed   # 클러스터와 AIPub이 이미 있는 사이트 (기록이 있으면 --existing 은 없어도 됨)
 ```
 
-`--install`은 먼저 `── 사이트: ...`로 기존 사이트 판정과 그 이유를 찍고(이어서 실행이면 지난 실행의 판정), 단계가 바뀔 때마다 한 줄씩(`▶`·`✓`·`✗`·`⏸`) 찍고, 끝에 요약을 찍습니다. 종료 코드: `0` 모두 성공, `1` 실패(또는 M1에서 입력이 끝나 멈춤), `2` 시작하지 못함(사전 확인 ✗, 다른 실행이 잠금을 가짐, 지난 실행의 단계가 아직 실행 중, `--resume`·`--fresh` 없이 끝나지 않은 실행이 있음, `--resume`인데 지난 실행 없음, 사이트 파일이 바뀌어 묻는 말에 아니오, 이 제어 노드의 sudo가 비밀번호를 물음), `130` `Ctrl+C`(SIGTERM `143`, SIGHUP `129`). 시험: `test/install/run.sh`가 가짜 `ansible`·`ansible-playbook`으로 컨테이너 안에서 처음부터 끝까지 돌려 봅니다(서버에 접속하지 않음). 가짜 `ansible-playbook`은 k8s-installer처럼 `k8s_cp_extra_files`가 가리키는 파일이 `files/`에 없으면 거부하고, 마지막 시나리오는 컨테이너의 `/etc/k8s-installer/applied-release`를 만들어 기존 클러스터 계획을 돌려 봅니다.
+`--install`은 먼저 `── 사이트: ...`로 기존 사이트 판정과 그 이유를 찍고(이어서 실행이면 지난 실행의 판정), 단계가 바뀔 때마다 한 줄씩(`▶`·`✓`·`✗`·`⏸`) 찍고, 끝에 요약을 찍습니다. 종료 코드: `0` 모두 성공, `1` 실패(또는 M1에서 입력이 끝나 멈춤), `2` 시작하지 못함(사전 확인 ✗, 다른 실행이 잠금을 가짐, 지난 실행의 단계가 아직 실행 중, `--resume`·`--fresh` 없이 끝나지 않은 실행이 있음, `--resume`인데 지난 실행 없음, 사이트 파일이 바뀌어 묻는 말에 아니오, 이 제어 노드의 sudo가 비밀번호를 물음, AIPub을 설치하는 새 사이트에 `--archive`도 `--no-archive`도 없음(찾은 아카이브가 있으면 그 경로를 보임), `--archive`가 읽을 수 있는 일반 파일이 아님), `130` `Ctrl+C`(SIGTERM `143`, SIGHUP `129`). 시험: `test/install/run.sh`가 가짜 `ansible`·`ansible-playbook`으로 컨테이너 안에서 처음부터 끝까지 돌려 봅니다(서버에 접속하지 않음). 가짜 `ansible-playbook`은 k8s-installer처럼 `k8s_cp_extra_files`가 가리키는 파일이 `files/`에 없으면 거부하고, 8번 시나리오는 컨테이너의 `/etc/k8s-installer/applied-release`를 만들어 기존 클러스터 계획을, 9번은 아카이브 없는 새 사이트(거부, `--no-archive`로 A1까지 가서 이미지 진단, `--resume --archive`로 K4부터)를 돌려 봅니다. 새 사이트 시나리오는 작은 가짜 아카이브를 씁니다.
 
 ```bash
 docker run --rm -v tui-gomod:/go/pkg/mod -v "$PWD:/src" -w /src golang:1.23 bash test/install/run.sh

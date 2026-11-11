@@ -86,6 +86,12 @@ type Options struct {
 	// SiteWhy is the line that says why Existing and AipubInstalled are what
 	// they are (Site.Why), shown with the plan
 	SiteWhy string
+	// Detect decides the site again as it is now (DetectSite with the flags the
+	// program was started with): a run from the first step must not take the
+	// site as an unfinished run, or the start of the program, saw it, since a
+	// cluster built (or reset) since then changes what K1..K3 do. Nil: the
+	// screen keeps Existing and AipubInstalled as given
+	Detect func() Site
 	// JWKSCAReady: the authentication config of the JWKS preset was written with
 	// its CA when the settings were saved (fileio.LookupCA)
 	JWKSCAReady bool
@@ -199,12 +205,16 @@ func build(s *state.AppState, o Options) []Step {
 	steps = append(steps, k1, k2, clusterStep(s, o))
 	cp := s.AppliedControlPlane()
 
-	push := Step{ID: "K4", Title: "push-user-registry-artifacts", Kind: Playbook,
+	push := Step{ID: pushStepID, Title: "push-user-registry-artifacts", Kind: Playbook,
 		Playbook: "playbooks/push-user-registry-artifacts.yml", Optional: true,
-		Note: "이미지·차트 아카이브를 사용자 레지스트리에"}
-	if o.ArchivePath == "" {
+		Note: "이미지·차트 아카이브 (" + ArchiveName + ") 를 사용자 레지스트리에"}
+	switch {
+	case o.ArchivePath == "" && NeedsArchive(s.AipubEnabled, o):
+		// the registry K2 makes is empty: nothing "was pushed already"
+		push.Skip, push.SkipWhy = true, "아카이브 경로 없음: 새 사이트의 사용자 레지스트리는 비어 있어 A1 부터 이미지를 받지 못합니다"
+	case o.ArchivePath == "":
 		push.Skip, push.SkipWhy = true, "아카이브 경로 없음 (이미 넣었으면 건너뜀)"
-	} else {
+	default:
 		push.Args = []string{"-e", "archive=" + o.ArchivePath}
 	}
 	steps = append(steps, push)

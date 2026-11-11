@@ -1,0 +1,6 @@
+# The part of aipub-installer.yml the catalog check of the wizard reads
+catalog_modules:
+  - "cilium -> network"
+  - "goharbor -> base"
+  - "aipub -> aipub"
+  - "aipub/monitoring -> monitoring"

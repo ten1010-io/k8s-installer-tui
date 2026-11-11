@@ -1,0 +1,141 @@
+# Site values of aipub. Copy this file to
+# /opt/k8s-installer/ansible/files/aipub/vars.yml and fill it in.
+#
+# Only aipub_* variables belong here. The defaults are in
+# ansible/aipub_vars/defaults/*.yml; set here only what differs.
+# upgrade.sh keeps ansible/files as it is, so this file survives an upgrade.
+# ansible/files is copied in plain text to every ki cp node: no secrets here
+
+# Load balancers announced over L2. nodes are inventory names
+aipub_load_balancers:
+  - name: "lb1"
+    vip: "192.168.0.100"
+    nodes: ["node1", "node2"]
+
+# The default ingress class of cilium shares the VIP of this load balancer.
+# Set load_balancer to null to listen on host_network_port of every node instead
+aipub_default_ingress_class:
+  load_balancer: "lb1"
+  host_network_port: 443
+
+#aipub_cilium_envoy_idle_timeout_seconds: 300
+#aipub_cilium_hubble_relay_enabled: false
+#aipub_cilium_hubble_ui_enabled: false
+
+# ---- cert (setup-cert.yml) ----
+
+# self_signed: a CA is made and *.<aipub_ingress_zone> is issued by it
+# ca_provided: place ca.crt and ca.key in /etc/k8s-installer/certs of the first
+#              k8s control plane node first; the certificate is issued by it
+# tls_provided: place ca.crt there and tls.crt, tls.key in
+#              /etc/k8s-installer/certs/*.<aipub_ingress_zone>/; nothing is issued
+#aipub_cert_mode: "self_signed"
+
+# The node the files of ca_provided and tls_provided are placed on, and that the
+# aipub playbooks run on. Unset, it is the first reachable k8s control plane node
+# by name; the playbooks print which one as "aipub_runner_node"
+#aipub_preferred_runner_node: "node2"
+
+# ---- base (setup-base.yml) ----
+
+# Harbor is served at https://<aipub_harbor_ingress_subdomain>.<aipub_ingress_zone>
+aipub_ingress_zone: "example.com"
+#aipub_harbor_ingress_subdomain: "aipub-harbor"
+
+# The nodes harbor runs on carry node-role.aipub.ten1010.io/control-plane, given
+# in inventory.yml of k8s-installer rather than here:
+#   node1: { k8s_cp: true, k8s_node_labels: { node-role.aipub.ten1010.io/control-plane: "" } }
+
+# HA: the volumes are claims on a storage class the site provides, ReadWriteMany
+aipub_ha_mode: true
+aipub_ha_mode_storage_class: "nfs-client"
+#aipub_harbor_replica_count: 3
+
+# Without HA: the volumes are directories of one labelled node, by inventory name
+#aipub_ha_mode: false
+#aipub_harbor_local_pv_node: "node1"
+# Set it to offer a storage class in the frontend without HA; left unset, only
+# NFS is offered
+#aipub_app_storage_class_name: "local-path"
+
+#aipub_harbor_registry_storage_size: "512Gi"
+#aipub_harbor_postgresql_storage_size: "128Gi"
+#aipub_harbor_redis_storage_size: "32Gi"
+#aipub_harbor_trivy_storage_size: "5Gi"
+
+# Left unset, a password is generated into the secret aipub-harbor-admin of the
+# aipub namespace when harbor is first installed. Set it only to choose the
+# password of a new harbor: harbor takes it only when its database is first set up.
+# This file is copied in plain text to every ki cp node, so a password set here is
+# readable there; keep it in the vault file of the site
+#aipub_harbor_admin_password: ""
+
+# ---- aipub (setup-aipub.yml) ----
+
+# The variables of aipub are aipub_app_*. Their old names aipub_java_* still work
+# (a site file written with them needs no change); do not set both names of one
+# variable to different values (docs/variables.md)
+
+# aipub is served at https://<aipub_app_host_prefix>.<aipub_ingress_zone>
+#aipub_app_host_prefix: "aipub"
+# enterprise or lite: lite leaves aipub-nav out and gives the backend and the
+# frontend the features of lite only
+#aipub_app_edition: "enterprise"
+
+# The image tags are not set here: they are those of the catalog of the package
+# (ansible/aipub_vars/catalog.yml), which this file can not change
+
+# The shared data volume of the backend. dynamic takes a claim on a storage
+# class, by default aipub_ha_mode_storage_class: set one without HA
+#aipub_app_file_storage_storage_class_name: "nfs-client"
+#aipub_app_file_storage_size: "20Gi"
+# Or a directory of one node, by its kubernetes node name (kubectl get nodes); setup-aipub.yml makes the
+# directory on that node
+#aipub_app_file_storage_type: "static"
+#aipub_app_file_storage_static_type: "local"
+#aipub_app_file_storage_local_path: "/aipub/pv/aipub-backend-data"
+#aipub_app_file_storage_local_node_hostname: "node1"
+
+# Whether long inactive users are moved to INACTIVE, which cannot be undone
+#aipub_app_user_manage_enabled: false
+
+# Values files given to the installer after the site values, on aipub_runner_node. A variable of an
+# application goes under env/secretEnv of its chart by its own name (README.md, "Changing a value for one site")
+#aipub_app_extra_values: ["/etc/aipub/aipub-values-override.yaml"]
+
+# installer (default) or helmfile: the same releases and objects, deployed by helmfile sync
+#aipub_app_deploy_tool: "helmfile"
+# The package lays helmfile there; set only to use another one
+#aipub_app_helmfile_bin: "/opt/k8s-installer/aipub-bin/helmfile"
+
+# The back office admin. This file is copied in plain text to every ki cp node
+#aipub_app_backoffice_admin_password: ""
+
+# ---- monitoring (setup-monitoring.yml) ----
+
+# installer (default) or helmfile: the same releases and objects, deployed by helmfile sync around presync.sh and
+# postsync.sh. Binaries, dry-run, results and how to go back: helmfile/monitoring/README.md, "Field use"
+#aipub_monitoring_deploy_tool: "helmfile"
+#aipub_monitoring_helm_bin: "helm"
+#aipub_monitoring_helmfile_dry_run: true
+
+# The volumes of OpenSearch and VictoriaMetrics. With HA, claims on a storage
+# class, by default aipub_ha_mode_storage_class; empty takes the default one
+#aipub_monitoring_storage_class_name: "nfs-client"
+# Or directories of the k8s control plane nodes (the default without HA)
+#aipub_monitoring_storage_type: "static"
+#aipub_monitoring_storage_static_type: "local"
+# Or directories of an NFS export
+#aipub_monitoring_storage_static_type: "nfs"
+#aipub_monitoring_nfs_server: "nfs.example.com"
+
+#aipub_monitoring_opensearch_storage_size: "3Ti"
+#aipub_monitoring_opensearch_log_retention: "180d"
+#aipub_monitoring_metrics_storage_size: "1Ti"
+#aipub_monitoring_metrics_retention_period: "180d"
+
+# Disk watermarks of OpenSearch: a percentage of use, or the free space to keep
+# ("500gb") on a large disk shared with other data
+#aipub_monitoring_opensearch_disk_watermark_low: "85%"
+#aipub_monitoring_opensearch_disk_watermark_high: "90%"
+#aipub_monitoring_opensearch_disk_watermark_flood_stage: "95%"

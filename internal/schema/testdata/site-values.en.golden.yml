@@ -1,0 +1,210 @@
+# ============================================================
+#  Site settings — all the values in one file (a view made by k8s-installer-tui)
+#
+#  ✅ = a value that must be given   ○ = has a default. A commented-out line keeps its default
+#  This file is for reading; the installer does not read it. Where the values are really saved:
+#    [K8S]       → group_vars/all/vars.yml   (k8s-installer)
+#    [AIPUB]     → files/aipub/vars.yml      (aipub_* only, kept across upgrades, no secrets)
+#    nodes and groups are in [INVENTORY] → inventory.yml
+#  constant-vars.yml holds installer constants — never edit it
+#
+#  "# preflight:" lines say what to check before the run; they are collected at the bottom
+# ============================================================
+
+
+# ────────────────────────────────────────────────────────────
+#  [INVENTORY]  →  inventory.yml
+# ────────────────────────────────────────────────────────────
+
+### Nodes / access ──────────────────────────
+ansible_host: {node1: "192.168.0.11", node2: "192.168.0.12"} # ✅ Address to reach the node (IP)
+# preflight: The control node must be able to reach this address over ssh
+ansible_port: {node2: 2222}           # ○ (default 22) SSH port (22 if empty)
+# ansible_user: null                  # ○ Login user for this node only (if empty, ansible_user of vars.yml)
+ki_cp_node: ["node1"]                 # ○ (default []) ki cp nodes (they run DNS, NTP, the registry and the LB)
+k8s_node: ["node1", "node2"]          # ✅ All Kubernetes nodes
+k8s_cp: {node1: true}                 # ○ (default false) k8s control plane (master) node
+k8s_node_labels: {node1: {node-role.aipub.ten1010.io/control-plane: ""}} # ○ (default {}) Node labels (node-role.aipub.ten1010.io/control-plane on AIPub control plane nodes)
+# broken_node: []                     # ○ Nodes set aside from the work because they are broken
+control_node_ih: {localhost: "node1"} # ○ The ki cp node that becomes the control node (the first ki cp node)
+# ansible_connection: "local"         # ○ Reach the control node (localhost) locally
+
+
+# ────────────────────────────────────────────────────────────
+#  [K8S]  →  group_vars/all/vars.yml
+# ────────────────────────────────────────────────────────────
+
+### Nodes / access ──────────────────────────
+# ansible_user: "root"                # ○ User that logs in to every node (root by default)
+
+### Node disk / kernel ──────────────────────
+# ki_var_root_path: "/var/lib/k8s-installer" # ○ Installer state directory
+# docker_root_path: "/var/lib/docker" # ○ Docker data directory
+# ephemeral_storage_device: null      # ○ Empty block device for kubelet ephemeral storage (null = root filesystem)
+# kernel_cmdline_extra_args: []       # ○ Extra kernel boot arguments (per node, in inventory.yml)
+# kernel_modules_extra: []            # ○ Extra kernel modules to load
+# sysctl_extra: {}                    # ○ Extra sysctls
+
+### Internal network / ki-cp ────────────────
+internal_network_subnets: ["192.168.0.0/24"] # ✅ Range that holds the nodes and the ki cp VIP together (with the real netmask)
+# internal_network_extra_zone: null   # ○ Extra zones the internal DNS answers (aipub_ingress_zone is used as it is)
+# internal_network_extra_zone_a_records: [] # ○ A records of the extra zone (@, * → ingress VIP)
+# ki_cp_ha_mode: true                 # ○ ki cp HA (uses a VIP)
+ki_cp_ha_mode_vip: "192.168.0.10"     # ✅ (required when ki_cp_ha_mode=true) ki-cp VIP
+# preflight: Must be a free IP inside internal_network_subnets, so that arp can claim it
+# ki_cp_ha_mode_vip_carrier: "arp"    # ○ How the VIP is announced
+# ki_cp_service_timezone: null        # ○ Time zone of the ki cp service logs (null = node time zone)
+ki_cp_dns_dnssec_validation: false    # ○ (default true) DNSSEC validation
+ki_cp_dns_server_upstream_servers: ["8.8.8.8", "8.8.4.4"] # ✅ Upstream DNS servers of the ki cp DNS
+ki_cp_ntp_server_upstream_servers: ["time1.google.com", "time2.google.com"] # ✅ Upstream NTP servers of the ki cp NTP
+# ki_cp_ntp_server_local_fallback: true # ○ Serve the ki cp clock when the upstream NTP is unreachable
+
+### Kubernetes ──────────────────────────────
+k8s_pod_subnet: "10.244.0.0/16"       # ✅ Pod range (the same value for the CNI)
+# preflight: Must not overlap the networks the nodes and services use
+k8s_service_subnet: "10.96.0.0/12"    # ✅ Service range
+k8s_kube_proxy_enabled: false         # ○ (default true) Install kube-proxy (false with AIPub: cilium replaces it)
+# preflight: Cannot be changed once the cluster exists
+k8s_minor_version: "1.36"             # ✅ Kubernetes minor version (one the release supports)
+k8s_certificate_validity_period: "26280h" # ✅ Certificate validity (example: 26280h = 3 years)
+
+### Extra control plane arguments ───────────
+k8s_apiserver_extra_args: [{name: "audit-policy-file", value: "/etc/kubernetes/audit-policy.yaml"}, {name: "audit-log-path", value: "/var/log/aipub/usage/audit.log"}, {name: "audit-log-maxage", value: "30"}, {name: "audit-log-maxbackup", value: "30"}, {name: "audit-log-maxsize", value: "100"}, {name: "runtime-config", value: "admissionregistration.k8s.io/v1beta1=true"}, {name: "authentication-config", value: "/etc/kubernetes/authentication-config.yaml"}, {name: "authentication-token-webhook-config-file", value: "/etc/kubernetes/webhook-token-auth.yaml"}, {name: "authentication-token-webhook-cache-ttl", value: "2m"}] # ○ (default []) Extra kube-apiserver arguments
+# preflight: JWKS issuer "https://aipub.aipub.example.com" must be reachable from the control plane nodes (AIPub backend-gateway, which comes up after A5 setup-aipub; applied by A5.2 update-cluster)
+# preflight: CA /etc/k8s-installer/certs/ca.crt is put on the nodes (the control node included) by A2 setup-cert; authentication-config.yaml is written only when it exists (otherwise A5.1 --fill-auth-config makes it)
+# preflight: Running update-cluster or adding a node without the CA makes the installer refuse with 'source file missing' (validate-hostvars.py; the nodes are left as they are)
+# preflight: Check that the webhook URL "https://aipub.example.com/token-review" is reachable from the control plane nodes and verified with /etc/k8s-installer/certs/ca.crt (applied by A2.5 update-cluster)
+k8s_apiserver_extra_volumes: [{name: "audit-policy", hostPath: "/etc/kubernetes/audit-policy.yaml", mountPath: "/etc/kubernetes/audit-policy.yaml", readOnly: true, pathType: "File"}, {name: "audit-log", hostPath: "/var/log/aipub/usage", mountPath: "/var/log/aipub/usage", pathType: "DirectoryOrCreate"}, {name: "authentication-config", hostPath: "/etc/kubernetes/authentication-config.yaml", mountPath: "/etc/kubernetes/authentication-config.yaml", readOnly: true, pathType: "File"}, {name: "webhook-token-auth", hostPath: "/etc/kubernetes/webhook-token-auth.yaml", mountPath: "/etc/kubernetes/webhook-token-auth.yaml", readOnly: true, pathType: "File"}, {name: "k8s-installer-certs", hostPath: "/etc/k8s-installer/certs", mountPath: "/etc/k8s-installer/certs", readOnly: true}] # ○ (default []) Extra kube-apiserver host path volumes
+# k8s_controller_manager_extra_args: [] # ○ Extra kube-controller-manager arguments
+# k8s_controller_manager_extra_volumes: [] # ○ Extra kube-controller-manager host path volumes
+# k8s_scheduler_extra_args: []        # ○ Extra kube-scheduler arguments
+# k8s_scheduler_extra_volumes: []     # ○ Extra kube-scheduler host path volumes
+# k8s_etcd_extra_args: []             # ○ Extra etcd arguments
+k8s_cp_extra_files: [{src: "aipub/audit-policy.yaml", dest: "/etc/kubernetes/audit-policy.yaml", mode: "0644"}, {src: "aipub/authentication-config.yaml", dest: "/etc/kubernetes/authentication-config.yaml", mode: "0600"}, {src: "aipub/webhook-token-auth.yaml", dest: "/etc/kubernetes/webhook-token-auth.yaml", mode: "0644"}] # ○ (default []) Files to put on the control plane nodes (no secrets)
+# preflight: ansible/files/aipub/audit-policy.yaml must exist (if missing the wizard writes the default policy; a file that exists is left as it is)
+# preflight: ansible/files/aipub/authentication-config.yaml must exist (the wizard makes it from the issuer URL and the CA; while there is no CA yet, A5.1 --fill-auth-config makes it)
+# preflight: ansible/files/aipub/webhook-token-auth.yaml must exist (the wizard makes it from the webhook URL)
+
+### Checks before the run / etcd backup ─────
+# ki_preflight_disk_free_min: "10Gi"  # ○ Free disk space needed before the work (null = no check)
+# ki_preflight_disk_free_percent_min: 5 # ○ Free disk space % needed before the work (null = no check)
+# ki_preflight_clock_offset_max_seconds: 5 # ○ Allowed clock skew in seconds (null = no check)
+# ki_etcd_backup_retention_count: 5   # ○ etcd snapshots to keep per k8s cp node
+
+### kubelet ─────────────────────────────────
+# kubelet_system_reserved_cpu: null   # ○ kubelet system reserved cpu (null = computed from the node capacity)
+# kubelet_system_reserved_memory: null # ○ kubelet system reserved memory (null = computed from the node capacity)
+# kubelet_system_reserved_ephemeral_storage: null # ○ kubelet system reserved ephemeral storage (null = computed from the node capacity)
+# kubelet_system_reserved_pid: null   # ○ kubelet system reserved pid (null = computed from the node capacity)
+# kubelet_kube_reserved_cpu: null     # ○ kubelet kube reserved cpu (null = computed from the node capacity)
+# kubelet_kube_reserved_memory: null  # ○ kubelet kube reserved memory (null = computed from the node capacity)
+# kubelet_kube_reserved_ephemeral_storage: null # ○ kubelet kube reserved ephemeral storage (null = computed from the node capacity)
+# kubelet_kube_reserved_pid: null     # ○ kubelet kube reserved pid (null = computed from the node capacity)
+# kubelet_eviction_hard_memory_available: null # ○ kubelet eviction hard memory available (null = computed from the node capacity)
+# kubelet_eviction_hard_nodefs_available: null # ○ kubelet eviction hard nodefs available (null = computed from the node capacity)
+# kubelet_eviction_hard_imagefs_available: null # ○ kubelet eviction hard imagefs available (null = computed from the node capacity)
+# kubelet_eviction_hard_nodefs_inodes_free: "5%" # ○ kubelet eviction hard nodefs inodes free (null = computed from the node capacity)
+# kubelet_auto_memory_available_min: "500Mi" # ○ Lower bound of the computed reserve (memory available)
+# kubelet_auto_memory_available_max: "4Gi" # ○ Upper bound of the computed reserve (memory available)
+# kubelet_auto_nodefs_available_min: "15Gi" # ○ Lower bound of the computed reserve (nodefs available)
+# kubelet_auto_nodefs_available_max: "50Gi" # ○ Upper bound of the computed reserve (nodefs available)
+# kubelet_auto_ephemeral_storage_min: "5Gi" # ○ Lower bound of the computed reserve (ephemeral storage)
+# kubelet_auto_ephemeral_storage_max: "30Gi" # ○ Upper bound of the computed reserve (ephemeral storage)
+# kubelet_cpu_manager_policy: "none"  # ○ CPU allocation policy (static = dedicated cores)
+# kubelet_cpu_manager_full_pcpus_only: false # ○ Allocate dedicated CPUs by physical core (when static)
+# kubelet_topology_manager_policy: "none" # ○ NUMA alignment policy
+# kubelet_topology_manager_scope: "container" # ○ NUMA alignment scope
+# kubelet_memory_manager_policy: "none" # ○ Memory/hugepage NUMA allocation policy
+# kubelet_reserved_system_cpus: null  # ○ CPUs to set aside for the system (null = reserve by count only)
+# kubelet_server_tls_bootstrap: false # ○ Request the kubelet serving certificate from the cluster (after approval is ready)
+# kubelet_max_pods: null              # ○ Maximum pods per node (null = 110)
+# kubelet_ki_cp_extra_cpu: "500m"     # ○ Extra CPU to reserve on ki cp nodes
+# kubelet_ki_cp_extra_memory: "1Gi"   # ○ Extra memory to reserve on ki cp nodes
+
+
+# ────────────────────────────────────────────────────────────
+#  [AIPUB]  →  files/aipub/vars.yml
+# ────────────────────────────────────────────────────────────
+
+### Domain / ingress / load balancer ────────
+aipub_load_balancers: [{name: "lb1", vip: "192.168.0.100", nodes: ["node1"]}] # ✅ VIPs announced over L2 (nodes are inventory names)
+# preflight: The names in nodes must be in inventory.yml
+# aipub_default_ingress_class: {load_balancer: "lb1", host_network_port: 443} # ○ LB / host port the default ingress class uses
+# aipub_cilium_envoy_idle_timeout_seconds: 300 # ○ cilium envoy idle timeout in seconds
+# aipub_cilium_hubble_relay_enabled: false # ○ Install hubble relay
+# aipub_cilium_hubble_ui_enabled: false # ○ Install hubble ui
+aipub_ingress_zone: "aipub.example.com" # ✅ AIPub domain (example: aipub.example.com)
+# preflight: DNS for `*.<this domain>` must point to the ingress VIP for access from outside
+
+### Certificates ────────────────────────────
+# aipub_cert_mode: "self_signed"      # ○ Certificate mode
+# aipub_preferred_runner_node: null   # ○ Node that runs the aipub playbooks (the first k8s cp node if empty)
+
+### Harbor / HA storage ─────────────────────
+# aipub_harbor_ingress_subdomain: "aipub-harbor" # ○ Harbor subdomain (https://<here>.<domain>)
+aipub_ha_mode: false                  # ○ (default true) true = storage class (RWX) / false = local directory on the node
+# aipub_ha_mode_storage_class: "nfs-client" # ○ (required when aipub_ha_mode=true) StorageClass of the HA volumes (ReadWriteMany)
+aipub_harbor_replica_count: 1         # ○ (default 3) Harbor replicas
+aipub_harbor_local_pv_node: "node1"   # ✅ (required when aipub_ha_mode=false) Node that holds the Harbor data without HA (inventory name)
+# aipub_harbor_registry_storage_size: "512Gi" # ○ Harbor registry volume size
+# aipub_harbor_postgresql_storage_size: "128Gi" # ○ Harbor postgresql volume size
+# aipub_harbor_redis_storage_size: "32Gi" # ○ Harbor redis volume size
+# aipub_harbor_trivy_storage_size: "5Gi" # ○ Harbor trivy volume size
+# aipub_harbor_admin_password: null   # ○ Harbor admin password (put it in the vault, not here)
+
+### AIPub app ───────────────────────────────
+# aipub_app_storage_class_name: null  # ○ StorageClass the frontend shows without HA (default aipub_ha_mode_storage_class)
+# aipub_app_host_prefix: "aipub"      # ○ AIPub subdomain (https://<here>.<domain>)
+# aipub_app_edition: "enterprise"     # ○ Edition
+# aipub_app_file_storage_storage_class_name: null # ○ Backend shared volume StorageClass (default aipub_app_storage_class_name)
+# aipub_app_file_storage_size: "20Gi" # ○ Backend shared volume size
+# aipub_app_file_storage_type: "dynamic" # ○ Backend shared volume mode
+# aipub_app_file_storage_static_type: null # ○ Kind (when static: local)
+# aipub_app_file_storage_local_path: null # ○ Directory on the node (static local)
+# aipub_app_file_storage_local_node_hostname: null # ○ Node (static local; name from kubectl get nodes)
+# aipub_app_user_manage_enabled: false # ○ Set users who have not been active for long to INACTIVE (cannot be undone)
+# aipub_app_extra_values: []          # ○ Values file to pass after the site values (path on aipub_runner_node)
+# aipub_app_backoffice_admin_password: null # ○ Back office admin password (copied in plain text)
+
+### Deploy tools ────────────────────────────
+# aipub_app_deploy_tool: "installer"  # ○ AIPub deploy tool
+# aipub_app_helmfile_bin: null        # ○ Only to use another helmfile (default: the one in the package)
+# aipub_monitoring_deploy_tool: "installer" # ○ Monitoring deploy tool
+# aipub_monitoring_helm_bin: "helm"   # ○ helm the monitoring uses
+# aipub_monitoring_helmfile_bin: null # ○ helmfile the monitoring uses (default: the same as aipub_app_helmfile_bin)
+# aipub_monitoring_kustomize_bin: null # ○ kustomize the monitoring uses (default: the kustomize next to helmfile)
+# aipub_monitoring_helmfile_dry_run: false # ○ Run helmfile as a dry run only
+
+### Monitoring ──────────────────────────────
+# aipub_monitoring_storage_class_name: null # ○ Monitoring volume StorageClass (default aipub_ha_mode_storage_class)
+# aipub_monitoring_storage_type: null # ○ Monitoring volume mode (default: dynamic with HA, otherwise static)
+# aipub_monitoring_storage_static_type: "local" # ○ Kind (when static)
+# aipub_monitoring_nfs_server: null   # ○ NFS server (static nfs)
+# aipub_monitoring_opensearch_storage_size: "3Ti" # ○ OpenSearch volume size (fit it to the site)
+# aipub_monitoring_opensearch_log_retention: "180d" # ○ OpenSearch log retention (in days, 180d)
+# aipub_monitoring_metrics_storage_size: "1Ti" # ○ VictoriaMetrics volume size (fit it to the site)
+# aipub_monitoring_metrics_retention_period: "180d" # ○ VictoriaMetrics metrics retention (in days, 180d)
+# aipub_monitoring_rightsizing_enabled: true # ○ Resource rightsizing scan (false turns it off: there is no CronJob)
+# aipub_monitoring_api_replicas: 2    # ○ monitoring-api replicas
+# aipub_monitoring_cp_nodes: []       # ○ Nodes the OpenSearch and Alertmanager replicas run on (all k8s control plane nodes if empty)
+# aipub_monitoring_opensearch_disk_watermark_low: "85%" # ○ OpenSearch disk watermark low
+# aipub_monitoring_opensearch_disk_watermark_high: "90%" # ○ OpenSearch disk watermark high
+# aipub_monitoring_opensearch_disk_watermark_flood_stage: "95%" # ○ OpenSearch disk watermark flood_stage
+
+
+# ============================================================
+#  Preflight checklist (the "# preflight:" lines above, collected)
+#    [ ] ansible_host: The control node must be able to reach this address over ssh
+#    [ ] ki_cp_ha_mode_vip: Must be a free IP inside internal_network_subnets, so that arp can claim it
+#    [ ] k8s_pod_subnet: Must not overlap the networks the nodes and services use
+#    [ ] k8s_kube_proxy_enabled: Cannot be changed once the cluster exists
+#    [ ] k8s_apiserver_extra_args: JWKS issuer "https://aipub.aipub.example.com" must be reachable from the control plane nodes (AIPub backend-gateway, which comes up after A5 setup-aipub; applied by A5.2 update-cluster)
+#    [ ] k8s_apiserver_extra_args: CA /etc/k8s-installer/certs/ca.crt is put on the nodes (the control node included) by A2 setup-cert; authentication-config.yaml is written only when it exists (otherwise A5.1 --fill-auth-config makes it)
+#    [ ] k8s_apiserver_extra_args: Running update-cluster or adding a node without the CA makes the installer refuse with 'source file missing' (validate-hostvars.py; the nodes are left as they are)
+#    [ ] k8s_apiserver_extra_args: Check that the webhook URL "https://aipub.example.com/token-review" is reachable from the control plane nodes and verified with /etc/k8s-installer/certs/ca.crt (applied by A2.5 update-cluster)
+#    [ ] k8s_cp_extra_files: ansible/files/aipub/audit-policy.yaml must exist (if missing the wizard writes the default policy; a file that exists is left as it is)
+#    [ ] k8s_cp_extra_files: ansible/files/aipub/authentication-config.yaml must exist (the wizard makes it from the issuer URL and the CA; while there is no CA yet, A5.1 --fill-auth-config makes it)
+#    [ ] k8s_cp_extra_files: ansible/files/aipub/webhook-token-auth.yaml must exist (the wizard makes it from the webhook URL)
+#    [ ] aipub_load_balancers: The names in nodes must be in inventory.yml
+#    [ ] aipub_ingress_zone: DNS for `*.<this domain>` must point to the ingress VIP for access from outside
+# ============================================================

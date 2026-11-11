@@ -1,0 +1,61 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - "RequestReceived"
+  - "ResponseStarted"
+  - "Panic"
+omitManagedFields: true
+rules:
+  # ── Existing policy ──
+  - level: RequestResponse
+    verbs: ["create", "patch", "update", "delete"]
+    resources:
+    - group: ""
+      resources: ["pods", "pods/status"]
+  - level: RequestResponse
+    verbs: ["create", "delete"]
+    resources:
+    - group: "project.aipub.ten1010.io"
+      resources: ["projects"]
+
+  # ── Noise exclusion ──
+  # Placed below the existing policy: the rules above match only pods/projects,
+  # so the rules below that trim jobs and secrets cannot intercept the existing behavior.
+  # They must still be above the 'added' rules that follow (first-match-wins).
+
+  # Job reconcile update by project-controller.
+  # Normal reconcile across its own objects — create/delete are kept.
+  - level: None
+    users: ["system:serviceaccount:aipub:project-controller"]
+    verbs: ["update"]
+    resources:
+    - group: "batch"
+      resources: ["jobs"]
+
+  # Secret GET by the operators reading their own configuration.
+  # Lookups by people (kubernetes-admin) are still kept.
+  - level: None
+    users:
+    - "system:serviceaccount:aipub-monitoring:vmstack-operator-victoria-metrics-operator"
+    - "system:serviceaccount:trident:trident-operator"
+    verbs: ["get"]
+    resources:
+    - group: ""
+      resources: ["secrets"]
+
+  # ── Added: main resources of aipub CRs + k8s native Job (main resources only, no /status) ──
+  - level: RequestResponse
+    verbs: ["create", "update", "patch", "delete"]
+    resources:
+    - group: "aipub.ten1010.io"
+      resources: ["operations", "workspaces", "chainjobs"]
+    - group: "batch"
+      resources: ["jobs"]
+
+  # ── Added: tracking of Secret lookups ──
+  - level: Metadata
+    verbs: ["get"]
+    resources:
+    - group: ""
+      resources: ["secrets"]
+

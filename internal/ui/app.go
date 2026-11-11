@@ -5,63 +5,140 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ten1010-io/k8s-installer-tui/internal/fileio"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
+	"github.com/ten1010-io/k8s-installer-tui/internal/plan"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/screens"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
 type App struct {
-	appState      *state.AppState
-	screenList    []screens.Screen
-	current       int
-	width         int
-	height        int
-	screenErrors  []string
-	inventoryPath string
-	varsPath      string
-	version       string
+	appState     *state.AppState
+	screenList   []screens.Screen
+	current      int
+	width        int
+	height       int
+	screenErrors []string
+	heldBusy     bool // screenErrors is the message of busy: a sub-edit held the move
+	version      string
+	// quitting: Ctrl+C was pressed and what the screen runs is being stopped
+	quitting bool
 }
 
-func NewApp(s *state.AppState, inventoryPath, varsPath, version string) *App {
+func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version string) *App {
+	// Whether the cluster is there (and AIPub) is what main decided (plan.DetectSite:
+	// --existing, or the record k8s-installer leaves on this control node), not
+	// whether the files of the site are: setup.sh lays a template vars.yml, and a
+	// site saved and opened again before it was installed has them all. On an
+	// existing site the control plane screen offers to read what its apiserver was
+	// given by hand, and the plan does not build the cluster again
+	s.Existing = opts.Existing // the default audit policy waits for the nodes' to be read
+	opts.AuditPolicy = paths.AuditPolicy()
 	s1 := screens.NewS1Nodes()
 	s2 := screens.NewS2Groups()
 	s3 := screens.NewS3Network()
 	s4 := screens.NewS4Kubernetes()
+	s4b := screens.NewS4bControlPlane()
+	s4b.SetSite(opts)
 	s5 := screens.NewS5Aipub()
-	s6 := screens.NewS6CertMode()
-	s7 := screens.NewS7Preview(s, inventoryPath, varsPath)
+	s5b := screens.NewS5bMonitoring()
+	s6 := screens.NewS6AipubLB()
+	s7 := screens.NewS6CertMode()
+	s8 := screens.NewS7Preview(s, paths, opts.AnsibleDir()+"/files")
+	s8.SetInstaller(opts)
+	s9 := screens.NewS9Install(s, paths, opts)
 	s1.SyncFromState(s)
 	return &App{
-		appState:      s,
-		screenList:    []screens.Screen{s1, s2, s3, s4, s5, s6, s7},
-		inventoryPath: inventoryPath,
-		varsPath:      varsPath,
-		version:       version,
+		appState:   s,
+		screenList: []screens.Screen{s1, s2, s3, s4, s4b, s5, s5b, s6, s7, s8, s9},
+		version:    version,
 	}
 }
 
+// The steps of the header, in the order of screenList; in English here, said
+// through i18n.T where they are drawn.
+var stepTitles = []string{"1.Nodes", "2.Groups", "3.Network", "4.K8s", "4b.Control plane", "5.AIPub", "5b.Monitoring", "6.AIPub LB", "7.Certs", "8.Save", "9.Install"}
+
+// aipubOnlyScreens are skipped when AIPub is not installed: what they ask goes to
+// files/aipub/vars.yml, which is then not written.
+var aipubOnlyScreens = map[int]bool{6: true, 7: true, 8: true}
+
 func (a *App) Init() tea.Cmd { return nil }
 
+// quitMsg: what the screen ran has stopped, the program can end.
+type quitMsg struct{}
+
+// Stop ends what any screen still runs (a key send), in a bounded time: main
+// calls it after the program ends for whatever reason, a signal included.
+func (a *App) Stop() {
+	for _, sc := range a.screenList {
+		if st, ok := sc.(interface{ Stop() }); ok {
+			st.Stop()
+		}
+	}
+}
+
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := a.update(msg)
+	a.resize()
+	return m, cmd
+}
+
+// resize gives the screens the room of the panel, after any message: the
+// header wraps by the step the wizard is on, and errors may be shown under the
+// screen.
+func (a *App) resize() {
+	if a.width == 0 {
+		return
+	}
+	_, contentW, contentH := a.dims()
+	for _, sc := range a.screenList {
+		sc.SetSize(contentW, contentH)
+	}
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
-		_, contentW, contentH := a.dims()
-		for _, sc := range a.screenList {
-			sc.SetSize(contentW, contentH)
-		}
 		return a, nil
 
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			if a.quitting {
+				return a, tea.Quit // a third one: Run returns, main stops the rest
+			}
+			// a screen that runs something stops it instead (sending the key)
+			if in, ok := a.screenList[a.current].(interface{ Interrupt() bool }); ok && in.Interrupt() {
+				return a, nil
+			}
+			// and what it still runs ends before the program does, off the
+			// update loop: the screen keeps drawing meanwhile
+			if st, ok := a.screenList[a.current].(interface{ Stop() }); ok {
+				a.quitting = true
+				return a, func() tea.Msg {
+					st.Stop()
+					return quitMsg{}
+				}
+			}
 			return a, tea.Quit
-		case "pgup":
+		// control keys, so no text input takes them as text: they work on every screen
+		case "pgup", "ctrl+p":
 			return a.goPrev()
-		case "pgdown":
+		case "pgdown", "ctrl+n":
 			return a.goNext()
+		case "ctrl+s":
+			// only the preview saves; elsewhere the key does nothing
+			if !a.onPreview() {
+				return a, nil
+			}
 		}
+
+	case quitMsg:
+		return a, tea.Quit
 
 	case screens.NavigateNextMsg:
 		return a.goNext()
@@ -72,19 +149,88 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	newModel, cmd := a.screenList[a.current].Update(msg)
 	a.screenList[a.current] = newModel.(screens.Screen)
+	a.dropSettledErrors()
 	return a, cmd
 }
 
+// dropSettledErrors clears the errors a refused move left under the screen once
+// the screen would let the move through, e.g. after the preview is saved.
+func (a *App) dropSettledErrors() {
+	if len(a.screenErrors) == 0 {
+		return
+	}
+	sc := a.screenList[a.current]
+	if b, ok := sc.(screens.Busy); ok && b.Busy() {
+		return
+	}
+	// the sub-edit that held the move is closed: what the screen would still
+	// refuse is said on the next move
+	if a.heldBusy {
+		a.screenErrors, a.heldBusy = nil, false
+		return
+	}
+	if len(sc.Validate()) == 0 {
+		a.screenErrors = nil
+	}
+}
+
+func (a *App) onPreview() bool {
+	_, ok := a.screenList[a.current].(*screens.S7Preview)
+	return ok
+}
+
+// keyHints is the footer line of every screen, at most width wide: the hints in
+// order of importance (the preview leads with its save key), as many as fit.
+func (a *App) keyHints(width int) string {
+	hints := []string{i18n.T("Ctrl+N next"), i18n.T("Ctrl+P back"), i18n.T("↑↓ move"), i18n.T("Enter select"), i18n.T("Ctrl+C quit")}
+	if a.quitting {
+		return "  " + i18n.T("Cleaning up… (stopping sending the key, Ctrl+C quits now)")
+	}
+	if a.onPreview() {
+		hints = append([]string{i18n.T("Ctrl+S save")}, hints...)
+	}
+	// what the screen has going on leads (the install screen sending the key)
+	if h, ok := a.screenList[a.current].(interface{ KeyHints() []string }); ok {
+		hints = append(h.KeyHints(), hints...)
+	}
+	for n := len(hints); n > 1; n-- {
+		if line := "  " + strings.Join(hints[:n], " · "); lipgloss.Width(line) <= width {
+			return line
+		}
+	}
+	return "  " + hints[0]
+}
+
 // skipScreen returns true for screens that should be skipped in navigation.
-// S6 (index 5, 인증서) is skipped when AIPub is not being installed.
 func (a *App) skipScreen(idx int) bool {
-	return idx == 5 && !a.appState.AipubEnabled
+	return aipubOnlyScreens[idx] && !a.appState.AipubEnabled
+}
+
+// busy holds the wizard on a screen with a sub-edit open, and says why.
+func (a *App) busy() bool {
+	if b, ok := a.screenList[a.current].(screens.Busy); ok && b.Busy() {
+		a.screenErrors = []string{i18n.T("Save or cancel the item being edited before moving on")}
+		a.heldBusy = true
+		if r, ok := b.(interface{ BusyReason() string }); ok {
+			a.screenErrors = []string{r.BusyReason()}
+		}
+		return true
+	}
+	return false
 }
 
 func (a *App) goNext() (tea.Model, tea.Cmd) {
+	if a.busy() {
+		return a, nil
+	}
+	a.heldBusy = false
 	errs := a.screenList[a.current].Validate()
 	if len(errs) > 0 {
 		a.screenErrors = errs
+		// refused: the screen shows what the errors name
+		if r, ok := a.screenList[a.current].(screens.Revealer); ok {
+			r.RevealErrors()
+		}
 		return a, nil
 	}
 	a.screenErrors = nil
@@ -101,7 +247,10 @@ func (a *App) goNext() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) goPrev() (tea.Model, tea.Cmd) {
-	a.screenErrors = nil
+	if a.busy() {
+		return a, nil
+	}
+	a.screenErrors, a.heldBusy = nil, false
 	if a.current > 0 {
 		a.screenList[a.current].SyncToState(a.appState)
 		prev := a.current - 1
@@ -116,38 +265,36 @@ func (a *App) goPrev() (tea.Model, tea.Cmd) {
 
 func (a *App) View() string {
 	if a.width == 0 {
-		return "로딩 중..."
+		return i18n.T("Loading...")
 	}
 
 	outerBoxW, contentW, _ := a.dims()
 	outerContentW := outerBoxW - 4 // border(2) + padding(2)
 
 	// Screen body
-	body := a.screenList[a.current].View()
-	if len(a.screenErrors) > 0 {
-		msgs := make([]string, len(a.screenErrors))
-		for i, e := range a.screenErrors {
-			msgs[i] = "✗ " + e
-		}
-		body += "\n" + styles.StyleError.Render(strings.Join(msgs, "\n"))
-	}
+	body := a.screenList[a.current].View() + a.errorLines()
 
-	// Inner panel (thick blue border — the actual screen content box)
+	// Inner panel (thick blue border — the actual screen content box); its
+	// Width takes in its padding. The body is wrapped at its spaces first
+	// (screens.Wrap): the panel's own wrap would break words
 	innerPanel := lipgloss.NewStyle().
 		Border(lipgloss.ThickBorder()).
 		BorderForeground(styles.ColorPrimary).
 		Padding(0, 1).
-		Width(contentW).
-		Render(body)
+		Width(contentW + 2).
+		Render(screens.Wrap(body, contentW))
 
 	// Outer box content: top space + header + step bar + inner panel + label
 	var ob strings.Builder
 	ob.WriteString("\n") // breathing room above header
-	ob.WriteString(a.renderHeader(outerContentW))
+	// at the text width of the outer box, as the footer
+	ob.WriteString(a.renderHeader(outerContentW - 2))
 	ob.WriteString("\n\n")
 	ob.WriteString(innerPanel)
 	ob.WriteString("\n\n")
-	ob.WriteString(styles.StyleMuted.Render("  ↑/↓: 이동   Enter: 선택   PgUp/PgDn: 페이지   Ctrl+C: 종료"))
+	// one line, as dims counts it: the text width of the outer box is its Width less its padding
+	footerW := outerContentW - 2
+	ob.WriteString(styles.StyleMuted.Copy().MaxWidth(footerW).Render(a.keyHints(footerW)))
 	ob.WriteString("\n")
 
 	// Outer box (thin rounded border — wraps everything)
@@ -190,11 +337,11 @@ func (a *App) View() string {
 }
 
 func (a *App) renderHeader(width int) string {
-	title := styles.StyleHeader.Width(width).Render("  k8s-installer-tui " + a.version + "  ")
+	title := styles.StyleHeader.Copy().Width(width).Render("  k8s-installer-tui " + a.version + "  ")
 
-	stepTitles := []string{"1.노드", "2.그룹", "3.네트워크", "4.K8s", "5.AIPub", "6.인증서", "7.저장"}
 	parts := make([]string, len(a.screenList))
 	for i, t := range stepTitles {
+		t = i18n.T(t)
 		switch {
 		case a.skipScreen(i):
 			parts[i] = styles.StyleMuted.Render("(" + t + ")")
@@ -210,6 +357,18 @@ func (a *App) renderHeader(width int) string {
 	return title + "\n" + stepBar
 }
 
+// errorLines are the errors of the screen, under it in the panel.
+func (a *App) errorLines() string {
+	if len(a.screenErrors) == 0 {
+		return ""
+	}
+	msgs := make([]string, len(a.screenErrors))
+	for i, e := range a.screenErrors {
+		msgs[i] = "✗ " + e
+	}
+	return "\n" + styles.StyleError.Render(strings.Join(msgs, "\n"))
+}
+
 // dims returns (outerBoxTotalWidth, screenContentWidth, screenContentHeight).
 func (a *App) dims() (int, int, int) {
 	outerBoxW := a.width - 4 // 2-char dark-blue margin each side
@@ -219,15 +378,27 @@ func (a *App) dims() (int, int, int) {
 	if outerBoxW < 52 {
 		outerBoxW = 52
 	}
-	// outerContentW = outerBoxW - border(2) - padding(2) = outerBoxW - 4
-	// innerPanelContentW = outerContentW - innerBorder(2) - innerPadding(2) = outerBoxW - 8
-	contentW := outerBoxW - 8
+	// outerContentW = outerBoxW - border(2) - padding(2) = outerBoxW - 4, the
+	// Width of the outer box, which takes in its padding: its text is outerBoxW - 6
+	// wide, the inner panel with its border. The text of the inner panel, what a
+	// screen has, is that less innerBorder(2) and innerPadding(2) = outerBoxW - 10
+	outerContentW := outerBoxW - 4
+	contentW := outerBoxW - 10
 	if contentW < 32 {
 		contentW = 32
 	}
-	contentH := a.height - 12 // outer border+padding + header(2) + spacing(4) + footer(1) + margins(3)
-	if contentH < 5 {
-		contentH = 5
+	// the header as the outer box shows it: the title, and the step bar, which
+	// wraps at its width
+	headerH := lipgloss.Height(lipgloss.NewStyle().Padding(0, 1).Width(outerContentW).Render(a.renderHeader(outerContentW - 2)))
+	errorsH := 0
+	if e := a.errorLines(); e != "" {
+		errorsH = lipgloss.Height(screens.Wrap(e, contentW))
+	}
+	// outer border(2) + top space(1) + header + spacing(2) + inner border(2) +
+	// footer(1) + the line under it(1) + margin above the box(1)
+	contentH := a.height - 10 - headerH - errorsH
+	if contentH < 1 { // a screen fits what it can in the room there is
+		contentH = 1
 	}
 	return outerBoxW, contentW, contentH
 }

@@ -1,0 +1,23 @@
+aipub_load_balancers:
+  - name: "lb1"
+    vip: "10.10.0.100"
+    nodes: ["master1"]
+aipub_default_ingress_class:
+  load_balancer: "lb1"
+  host_network_port: 443
+aipub_ingress_zone: "aipub.univ.ac.kr"
+aipub_ha_mode: false
+aipub_harbor_local_pv_node: "master1"
+aipub_harbor_replica_count: 1
+aipub_cert_mode: "ca_provided"
+aipub_app_edition: "lite"
+aipub_app_deploy_tool: "helmfile"
+aipub_monitoring_deploy_tool: "helmfile"
+aipub_monitoring_helmfile_dry_run: true
+aipub_monitoring_opensearch_storage_size: "500Gi"
+aipub_monitoring_opensearch_log_retention: "30d"
+aipub_monitoring_metrics_storage_size: "200Gi"
+aipub_monitoring_metrics_retention_period: "90d"
+aipub_monitoring_rightsizing_enabled: false
+aipub_monitoring_api_replicas: 1
+aipub_monitoring_cp_nodes: ["master1"]

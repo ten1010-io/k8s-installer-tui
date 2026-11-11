@@ -1,0 +1,17 @@
+# The token review server is read back from here (clusters[0].cluster.server)
+apiVersion: v1
+kind: Config
+clusters:
+  - name: aipub-token-review
+    cluster:
+      server: "https://aipub.univ.ac.kr/token-review"
+      certificate-authority: /etc/k8s-installer/certs/ca.crt
+users:
+  - name: kube-apiserver
+    user: {}
+contexts:
+  - name: aipub-token-review
+    context:
+      cluster: aipub-token-review
+      user: kube-apiserver
+current-context: aipub-token-review

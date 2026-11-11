@@ -1,0 +1,33 @@
+# kube-apiserver Structured Authentication Config
+# kube-apiserver verifies the user tokens of aipub-backend-gateway (RS256) locally against its JWKS.
+# - issuer.url and certificateAuthority are filled in by install.sh k8s-jwks.
+# - certificateAuthority takes inline PEM only; the schema has no file path option. It is the public CA
+#   certificate, /etc/k8s-installer/certs/ca.crt, copied: after the CA is replaced, run install.sh k8s-jwks
+#   again (kube-apiserver reloads this file, no restart).
+# - The "oidc:" prefix keeps the RBAC bindings project-controller makes (oidc:aipub-admin, ...) working, as the
+#   old webhook did (K8sTokenController.addOidcPrefix).
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+jwt:
+  - issuer:
+      url: https://REPLACE_ME
+      audiences:
+        - kubernetes
+      certificateAuthority: |
+        REPLACE_ME_CA
+    # Access tokens only. A refresh token has the same iss, aud, sub and kid and lives far longer (3000 days
+    # measured), so taken as it is it would be a long-lived kubectl credential, and local JWKS verification has
+    # no revocation. claimValidationRules are evaluated before claimMappings, so this does not depend on the uid
+    # mapping happening to fail for a refresh token.
+    claimValidationRules:
+      - claim: type
+        requiredValue: access
+    claimMappings:
+      username:
+        claim: sub
+        prefix: "oidc:"
+      groups:
+        claim: groups
+        prefix: "oidc:"
+      uid:
+        expression: "claims.uid"

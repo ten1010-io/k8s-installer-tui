@@ -1,0 +1,2 @@
+# One ki cp node: no keepalived VIP
+ki_cp_ha_mode: false

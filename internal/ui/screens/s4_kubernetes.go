@@ -1,46 +1,44 @@
 package screens
 
 import (
-	"strconv"
+	"net"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ten1010-io/k8s-installer-tui/internal/i18n"
 	"github.com/ten1010-io/k8s-installer-tui/internal/state"
 	"github.com/ten1010-io/k8s-installer-tui/internal/ui/styles"
 )
 
+// The cluster as k8s-installer builds it (group_vars/all/vars.yml). The load
+// balancers that were here belong to AIPub now (S6AipubLB).
+//
 // Focus layout:
-//   0  : 인증서 유효기간
-//   1  : 인그레스 모드 (1=별도IP / 2=공유IP)
-//   2  : Ingress LB명
-//   3  : Ingress VIP
-//   4  : Gateway LB명 — mode 1 전용
-//   5  : Gateway VIP  — mode 1 전용
-//   6  : Host Network Port
-//   7  : nav slot (←/→: 이전/다음)
+//   0  : k8s minor version
+//   1  : pod subnet
+//   2  : service subnet
+//   3  : certificate validity
+//   4  : nav slot (←/→: back/next)
 
 const (
-	s4FocusCert = iota
-	s4FocusMode
-	s4FocusIngressLBName
-	s4FocusIngressVIP
-	s4FocusGatewayLBName
-	s4FocusGatewayVIP
-	s4FocusHostPort
+	s4FocusMinor = iota
+	s4FocusPodSubnet
+	s4FocusServiceSubnet
+	s4FocusCert
 	s4FocusNav
 	s4FocusMax = s4FocusNav
 )
 
-type S4Kubernetes struct {
-	certValidity  textinput.Model
-	ingressLBName textinput.Model
-	ingressVIP    textinput.Model
-	gatewayLBName textinput.Model
-	gatewayVIP    textinput.Model
-	hostPort      textinput.Model
+var reMinorVersion = regexp.MustCompile(`^1\.[0-9]+$`)
 
-	mode     int // 1 or 2
+type S4Kubernetes struct {
+	minorVersion  textinput.Model
+	podSubnet     textinput.Model
+	serviceSubnet textinput.Model
+	certValidity  textinput.Model
+
 	focusIdx int
 	navIdx   int
 	width    int
@@ -55,85 +53,54 @@ func NewS4Kubernetes() *S4Kubernetes {
 		return t
 	}
 	return &S4Kubernetes{
+		minorVersion:  newInput("1.36", 8),
+		podSubnet:     newInput("10.244.0.0/16", 32),
+		serviceSubnet: newInput("10.96.0.0/12", 32),
 		certValidity:  newInput("26280h", 16),
-		ingressLBName: newInput("예: lb1", 64),
-		ingressVIP:    newInput("x.x.x.x", 64),
-		gatewayLBName: newInput("예: lb2", 64),
-		gatewayVIP:    newInput("x.x.x.x", 64),
-		hostPort:      newInput("443", 8),
-		mode:          2,
 	}
 }
 
-func (s *S4Kubernetes) Title() string { return "Kubernetes 설정" }
+func (s *S4Kubernetes) Title() string { return i18n.T("Kubernetes settings") }
 func (s *S4Kubernetes) SetSize(w, h int) {
 	s.width = w
 	s.height = h
 }
 
+func (s *S4Kubernetes) inputs() []*textinput.Model {
+	return []*textinput.Model{&s.minorVersion, &s.podSubnet, &s.serviceSubnet, &s.certValidity}
+}
+
 func (s *S4Kubernetes) SyncFromState(st *state.AppState) {
+	s.minorVersion.SetValue(st.K8sMinorVersion)
+	s.podSubnet.SetValue(st.K8sPodSubnet)
+	s.serviceSubnet.SetValue(st.K8sServiceSubnet)
 	s.certValidity.SetValue(st.K8sCertificateValidityPeriod)
-	s.mode = st.K8sIngressMode
-	if s.mode != 1 && s.mode != 2 {
-		s.mode = 2
-	}
-	s.ingressLBName.SetValue(st.K8sIngressLBName)
-	s.ingressVIP.SetValue(st.K8sIngressVIP)
-	s.gatewayLBName.SetValue(st.K8sGatewayLBName)
-	s.gatewayVIP.SetValue(st.K8sGatewayVIP)
-	if st.K8sIngressHostNetworkPort > 0 {
-		s.hostPort.SetValue(strconv.Itoa(st.K8sIngressHostNetworkPort))
-	}
 	s.focusIdx = 0
 	s.navIdx = 0
 	s.syncFocus()
 }
 
 func (s *S4Kubernetes) SyncToState(st *state.AppState) {
-	st.K8sCertificateValidityPeriod = s.certValidity.Value()
-	st.K8sIngressMode = s.mode
-	st.K8sIngressLBName = strings.TrimSpace(s.ingressLBName.Value())
-	st.K8sIngressVIP = strings.TrimSpace(s.ingressVIP.Value())
-	if s.mode == 1 {
-		st.K8sGatewayLBName = strings.TrimSpace(s.gatewayLBName.Value())
-		st.K8sGatewayVIP = strings.TrimSpace(s.gatewayVIP.Value())
-	} else {
-		st.K8sGatewayLBName = ""
-		st.K8sGatewayVIP = ""
-	}
-	if p, err := strconv.Atoi(s.hostPort.Value()); err == nil {
-		st.K8sIngressHostNetworkPort = p
-	}
+	st.K8sMinorVersion = strings.TrimSpace(s.minorVersion.Value())
+	st.K8sPodSubnet = strings.TrimSpace(s.podSubnet.Value())
+	st.K8sServiceSubnet = strings.TrimSpace(s.serviceSubnet.Value())
+	st.K8sCertificateValidityPeriod = strings.TrimSpace(s.certValidity.Value())
 }
 
 func (s *S4Kubernetes) Validate() []string {
-	if s.certValidity.Value() == "" {
-		return []string{"인증서 유효기간을 입력해주세요 (예: 26280h)"}
+	if !reMinorVersion.MatchString(strings.TrimSpace(s.minorVersion.Value())) {
+		return []string{i18n.T("Kubernetes minor version is not valid (e.g. 1.36)")}
 	}
-	if strings.TrimSpace(s.ingressLBName.Value()) == "" {
-		return []string{"Ingress LB명을 입력해주세요"}
-	}
-	if strings.TrimSpace(s.ingressVIP.Value()) == "" {
-		return []string{"Ingress VIP를 입력해주세요"}
-	}
-	if s.mode == 1 {
-		if strings.TrimSpace(s.gatewayLBName.Value()) == "" {
-			return []string{"별도 IP 모드에서는 Gateway LB명을 입력해주세요"}
-		}
-		if strings.TrimSpace(s.gatewayLBName.Value()) == strings.TrimSpace(s.ingressLBName.Value()) {
-			return []string{"별도 IP 모드에서는 Ingress LB명과 Gateway LB명이 달라야 합니다"}
-		}
-		gw := strings.TrimSpace(s.gatewayVIP.Value())
-		if gw == "" {
-			return []string{"별도 IP 모드에서는 Gateway VIP를 입력해주세요"}
-		}
-		if gw == strings.TrimSpace(s.ingressVIP.Value()) {
-			return []string{"별도 IP 모드에서는 Ingress VIP와 Gateway VIP가 달라야 합니다"}
+	for _, f := range []struct{ name, val string }{
+		{"Pod subnet", s.podSubnet.Value()},
+		{"Service subnet", s.serviceSubnet.Value()},
+	} {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(f.val)); err != nil {
+			return []string{i18n.T("%s is not in CIDR form (e.g. 10.244.0.0/16)", i18n.T(f.name))}
 		}
 	}
-	p, err := strconv.Atoi(s.hostPort.Value())
-	if err != nil || p < 1 || p > 65535 {
-		return []string{"Host Network Port는 1-65535 범위여야 합니다"}
+	if strings.TrimSpace(s.certValidity.Value()) == "" {
+		return []string{i18n.T("Enter the certificate validity (e.g. 26280h)")}
 	}
 	return nil
 }
@@ -141,172 +108,89 @@ func (s *S4Kubernetes) Validate() []string {
 func (s *S4Kubernetes) Init() tea.Cmd { return nil }
 
 func (s *S4Kubernetes) syncFocus() {
-	s.certValidity.Blur()
-	s.ingressLBName.Blur()
-	s.ingressVIP.Blur()
-	s.gatewayLBName.Blur()
-	s.gatewayVIP.Blur()
-	s.hostPort.Blur()
-	switch s.focusIdx {
-	case s4FocusCert:
-		s.certValidity.Focus()
-	case s4FocusIngressLBName:
-		s.ingressLBName.Focus()
-	case s4FocusIngressVIP:
-		s.ingressVIP.Focus()
-	case s4FocusGatewayLBName:
-		s.gatewayLBName.Focus()
-	case s4FocusGatewayVIP:
-		s.gatewayVIP.Focus()
-	case s4FocusHostPort:
-		s.hostPort.Focus()
+	for i, inp := range s.inputs() {
+		if i == s.focusIdx {
+			inp.Focus()
+		} else {
+			inp.Blur()
+		}
 	}
-}
-
-func (s *S4Kubernetes) nextFocus() int {
-	next := s.focusIdx + 1
-	if s.mode == 2 && (next == s4FocusGatewayLBName || next == s4FocusGatewayVIP) {
-		next = s4FocusHostPort
-	}
-	return next
-}
-
-func (s *S4Kubernetes) prevFocus() int {
-	prev := s.focusIdx - 1
-	if s.mode == 2 && (prev == s4FocusGatewayVIP || prev == s4FocusGatewayLBName) {
-		prev = s4FocusIngressVIP
-	}
-	return prev
 }
 
 func (s *S4Kubernetes) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "up", "k":
-			if prev := s.prevFocus(); prev >= 0 {
-				s.focusIdx = prev
+		case "up":
+			if s.focusIdx > 0 {
+				s.focusIdx--
 				s.syncFocus()
 			}
-		case "down", "j":
-			if next := s.nextFocus(); next <= s4FocusMax {
-				s.focusIdx = next
+		case "down":
+			if s.focusIdx < s4FocusMax {
+				s.focusIdx++
+				if s.focusIdx == s4FocusNav {
+					s.navIdx = 1 // next
+				}
 				s.syncFocus()
 			}
-		case "left", "h":
-			switch s.focusIdx {
-			case s4FocusMode:
-				if s.mode > 1 {
-					s.mode--
-				}
-			case s4FocusNav:
-				if s.navIdx > 0 {
-					s.navIdx--
-				}
+		case "left":
+			if s.focusIdx == s4FocusNav && s.navIdx > 0 {
+				s.navIdx--
 			}
-		case "right", "l":
-			switch s.focusIdx {
-			case s4FocusMode:
-				if s.mode < 2 {
-					s.mode++
-				}
-			case s4FocusNav:
-				if s.navIdx < 1 {
-					s.navIdx++
-				}
+		case "right":
+			if s.focusIdx == s4FocusNav && s.navIdx < 1 {
+				s.navIdx++
 			}
-		case "enter", " ":
-			switch s.focusIdx {
-			case s4FocusNav:
+		case "enter":
+			if s.focusIdx == s4FocusNav {
 				if s.navIdx == 0 {
 					return s, Prev()
 				}
 				return s, Next()
-			case s4FocusMode:
-				if s.mode == 1 {
-					s.mode = 2
-				} else {
-					s.mode = 1
-				}
 			}
-		case "ctrl+n":
-			return s, Next()
-		case "ctrl+p":
-			return s, Prev()
+			if s.focusIdx < s4FocusNav {
+				s.focusIdx++
+				s.syncFocus()
+			}
+			return s, nil
 		}
 	}
 	var cmd tea.Cmd
-	switch s.focusIdx {
-	case s4FocusCert:
-		s.certValidity, cmd = s.certValidity.Update(msg)
-	case s4FocusIngressLBName:
-		s.ingressLBName, cmd = s.ingressLBName.Update(msg)
-	case s4FocusIngressVIP:
-		s.ingressVIP, cmd = s.ingressVIP.Update(msg)
-	case s4FocusGatewayLBName:
-		s.gatewayLBName, cmd = s.gatewayLBName.Update(msg)
-	case s4FocusGatewayVIP:
-		s.gatewayVIP, cmd = s.gatewayVIP.Update(msg)
-	case s4FocusHostPort:
-		s.hostPort, cmd = s.hostPort.Update(msg)
+	if s.focusIdx < len(s.inputs()) {
+		inp := s.inputs()[s.focusIdx]
+		*inp, cmd = inp.Update(msg)
 	}
 	return s, cmd
 }
 
 func (s *S4Kubernetes) View() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleTitle.Render("Kubernetes 설정") + "\n\n")
+	b.WriteString(styles.StyleTitle.Render(i18n.T("Kubernetes settings")) + "\n")
+	b.WriteString(styles.StyleMuted.Render(i18n.T("Values k8s-installer uses to build the cluster (group_vars/all/vars.yml).")) + "\n\n")
 
 	f := s.focusIdx
+	// the focused part stays in sight on a low screen
+	fs := focusSpan{b: &b}
+	fs.mark(f == s4FocusMinor)
+	b.WriteString(RenderSectionHeader(i18n.T("Minor version"), f == s4FocusMinor) + "  " + s.minorVersion.View() +
+		styles.StyleMuted.Render("  "+short("k8s_minor_version")) + "\n\n")
+	fs.mark(f == s4FocusPodSubnet)
+	b.WriteString(RenderSectionHeader(i18n.T("Pod subnet"), f == s4FocusPodSubnet) + "  " + s.podSubnet.View() + "\n")
+	fs.mark(f == s4FocusServiceSubnet)
+	b.WriteString(RenderSectionHeader(i18n.T("Service subnet"), f == s4FocusServiceSubnet) + "  " + s.serviceSubnet.View() + "\n")
+	b.WriteString(styles.StyleMuted.Render("    "+i18n.T("Must not overlap the networks used by nodes and services. Cannot be changed once the cluster is created")) + "\n\n")
+	fs.mark(f == s4FocusCert)
+	b.WriteString(RenderSectionHeader(i18n.T("Certificate validity"), f == s4FocusCert) + "  " + s.certValidity.View() +
+		styles.StyleMuted.Render("  "+i18n.T("(e.g. 26280h = 3 years)")) + "\n\n")
 
-	// 인증서 유효기간
-	b.WriteString(RenderSectionHeader("인증서 유효기간", f == s4FocusCert) +
-		"  " + s.certValidity.View() + styles.StyleMuted.Render("  (예: 26280h = 3년)") + "\n\n")
-
-	// 인그레스 모드 선택
-	mode1Radio := styles.RadioOff() + " 1. 별도 IP"
-	mode2Radio := styles.RadioOff() + " 2. 공유 IP"
-	if s.mode == 1 {
-		mode1Radio = styles.RadioOn() + " 1. 별도 IP"
-	} else {
-		mode2Radio = styles.RadioOn() + " 2. 공유 IP"
-	}
-	modeHint := ""
-	if f == s4FocusMode {
-		modeHint = styles.StyleMuted.Render("  ← → 또는 Enter")
-	}
-	b.WriteString(RenderSectionHeader("인그레스 모드", f == s4FocusMode) + modeHint + "\n")
-	b.WriteString("    " + mode1Radio + styles.StyleMuted.Render("  — Ingress/Gateway 개별 VIP") + "\n")
-	b.WriteString("    " + mode2Radio + styles.StyleMuted.Render("  — Ingress/Gateway 동일 VIP") + "\n\n")
-
-	// Ingress LB명
-	b.WriteString(RenderSectionHeader("Ingress LB명", f == s4FocusIngressLBName) + "\n")
-	b.WriteString("    " + s.ingressLBName.View() + "\n\n")
-
-	// Ingress VIP
-	if s.mode == 2 {
-		b.WriteString(RenderSectionHeader("Ingress/Gateway 공유 VIP", f == s4FocusIngressVIP) + "\n")
-	} else {
-		b.WriteString(RenderSectionHeader("Ingress VIP", f == s4FocusIngressVIP) + "\n")
-	}
-	b.WriteString("    " + s.ingressVIP.View() + "\n\n")
-
-	// Gateway LB명 / VIP — mode 1 전용
-	if s.mode == 1 {
-		b.WriteString(RenderSectionHeader("Gateway LB명", f == s4FocusGatewayLBName) + "\n")
-		b.WriteString("    " + s.gatewayLBName.View() + "\n\n")
-
-		b.WriteString(RenderSectionHeader("Gateway VIP", f == s4FocusGatewayVIP) + "\n")
-		b.WriteString("    " + s.gatewayVIP.View() + "\n\n")
-	}
-
-	// Host Network Port
-	b.WriteString(RenderSectionHeader("Host Network Port", f == s4FocusHostPort) +
-		"  " + s.hostPort.View() + "\n\n")
+	fs.mark(false)
+	b.WriteString(styles.StyleMuted.Render(i18n.T("%s. Set in step 5", short("k8s_kube_proxy_enabled"))) + "\n")
 
 	prevFocused := f == s4FocusNav && s.navIdx == 0
 	nextFocused := f == s4FocusNav && s.navIdx == 1
-	b.WriteString("\n" + RenderNavButtons("이전", "다음", prevFocused, nextFocused, s.width))
-
-	return b.String()
+	b.WriteString("\n")
+	fs.mark(f == s4FocusNav)
+	b.WriteString(RenderNavButtons(i18n.T("Back"), i18n.T("Next"), prevFocused, nextFocused, s.width))
+	return fs.fit(s.width, s.height)
 }

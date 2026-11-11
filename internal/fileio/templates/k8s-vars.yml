@@ -1,0 +1,497 @@
+# The user ansible logs in to every node as, the control node included. root
+# works as it always has. Any other user has to exist on every node under this
+# one name, hold the public key configure-control-node-ssh.sh prints, and be
+# allowed sudo without a password - the playbooks run every script through sudo
+# and nothing is there to type one. The user ends up with what root has, so this
+# is for sites whose policy forbids logging in as root rather than for giving the
+# installer less. To log in to one node as someone else, set it on that node in
+# inventory.yml
+ansible_user: root
+
+ki_var_root_path: "/var/lib/k8s-installer"
+docker_root_path: "/var/lib/docker"
+
+# Block device holding everything kubelet accounts as ephemeral storage, so that
+# an image or a pod log can not fill the filesystem the operating system runs on.
+# Leave it null to keep those paths on the root filesystem
+# To give a single node a device, set this variable for that node in inventory.yml
+#
+# The device is formatted, so it must be one with nothing on it, and it is only
+# applied while a node is being provisioned. An existing node is taken out with
+# remove-node and added back with add-node
+#
+# Do not point this at a disk whose contents do not survive a reboot. The name
+# says ephemeral, but /var/lib/kubelet also holds state kubelet expects to find
+# again after a restart. See docs/impl-notes.adoc
+ephemeral_storage_device: null
+
+# Kernel command line arguments this node boots with, on top of what the
+# distribution puts there. Set per node in inventory.yml, since what a node has
+# to boot with follows from what it holds.
+#
+#   kernel_cmdline_extra_args:
+#     - "default_hugepagesz=1G"
+#     - "hugepagesz=1G"
+#     - "hugepages=64"
+#     - "isolcpus=8-63"
+#
+# Hugepages reserved at boot, cpus isolated from the scheduler, a driver
+# parameter: everything a node has to be told before userspace starts. The iommu
+# arguments are not here - the vfio-pci component derives those from the devices
+# named for it and owns them, and naming one here is refused.
+#
+# Empty leaves the node alone, and emptying a list that had something in it takes
+# what it had away. Either way the command line changes at the next boot:
+# setup-boot-config.yml is what reboots a node while it is being built, and a
+# node that was not rebooted is reported at the end of every run until it is
+kernel_cmdline_extra_args: []
+
+# Kernel modules this node loads, and sysctls it is set to. Set per node in
+# inventory.yml, since what a node needs follows from what runs on it.
+#
+#   kernel_modules_extra:
+#     - "openvswitch"
+#     - "geneve"
+#   sysctl_extra:
+#     net.ipv4.conf.all.rp_filter: 0
+#
+# What this is for is what a cni asks of a node. This installer brings kubernetes
+# up and not the network on top of it, so what kubernetes itself needs is already
+# written by the node setup and what the layer above needs had nowhere to be
+# declared. Left to be run by hand, those are what a node quietly lacks after it
+# has been rebuilt.
+#
+# In force as soon as the playbook has run - the module is loaded and the sysctl
+# is set now, and the files are what bring them back at the next boot. So no
+# reboot is asked for, unlike the kernel command line.
+#
+# The five sysctls and the two modules this installer sets for kubernetes are
+# refused here. /etc/sysctl.d is read in the order its file names sort in and the
+# last value read is the one that holds, and the k8s.conf the node setup writes
+# sorts after the 99-ki-sysctl.conf these go into - "9" before "k" - so a key
+# claimed by both is one where what is written here loses without saying so.
+#
+# Emptying a list takes the file away, and with it what the node would have
+# loaded or set at its next boot. What is already loaded stays loaded and what is
+# already set stays set: a module in use can not be removed, and the value a
+# sysctl held before it was set is written down nowhere
+kernel_modules_extra: []
+sysctl_extra: {}
+
+internal_network_subnets:
+  - "192.168.0.0/24"
+
+#internal_network_extra_zone: "example.com"
+#internal_network_extra_zone_a_records:
+#  - name: "@"
+#    ip: "172.16.0.254"
+#  - name: "*"
+#    ip: "172.16.0.254"
+
+ki_cp_ha_mode: true
+ki_cp_ha_mode_vip: null
+# Who tells the network where the vip is.
+#
+# arp is a node announcing the address itself, with gratuitous arp, as soon as
+# keepalived puts it on an interface. That is what a switch listens to and what
+# a cloud ignores: a vpc delivers to the addresses it has on record for a
+# network interface and to nothing else, so on ec2 the vip goes up on a node and
+# no packet ever arrives.
+#
+# aws-eni is for ec2. The node keepalived makes MASTER takes the vip onto its
+# own network interface as a secondary private address, through the ec2 api,
+# and the node it was on loses it in the same call. Everything else - who is
+# elected, when the address moves, that a node which came back does not take
+# it back - is the keepalived above either way. What it needs from the site is
+# in README.adoc: an instance profile allowing ec2:AssignPrivateIpAddresses on
+# every ki cp node, a way to reach the ec2 api, and the vip kept free in the
+# subnet of the ki cp nodes
+ki_cp_ha_mode_vip_carrier: "arp"
+# The time zone the ki cp services render their timestamps in. Null takes the
+# zone of the node each one runs on, which is what makes the log of a container
+# read like the journal of the machine it is on.
+#
+# Set it to an iana name to override that for every ki cp node at once, which is
+# what a site wants when its machines are on local time and its operators read
+# everything in UTC.
+#
+# Only the dns server and the load balancer render in it. The registries and
+# keepalived carry no tzdata, and chrony writes its own log in utc whatever it
+# is told, so those four are in utc either way. See README.adoc
+ki_cp_service_timezone: null
+ki_cp_dns_dnssec_validation: true
+ki_cp_dns_server_upstream_servers:
+  - "8.8.8.8"
+  - "8.8.4.4"
+ki_cp_ntp_server_upstream_servers:
+  - "time1.google.com"
+  - "time2.google.com"
+# Whether the ntp server of a ki cp node hands out its own clock when none of
+# the upstream servers above can be reached. On, the nodes keep following the
+# ki cp through an outage of its upstream, agreeing with one another on a time
+# that is only as right as its clock, and go back to the upstream when it
+# returns. Off, a ki cp whose upstream is gone hands out nothing, the nodes
+# stop synchronising and the clock check of check-node-state.sh refuses every
+# playbook, which is the choice of a site that would rather stop than run on a
+# clock nothing checks. An empty list above is the ki cp clock as the only time
+# there is, whatever this says. See README.adoc
+ki_cp_ntp_server_local_fallback: true
+
+# The addresses kubernetes hands out inside the cluster. Fixed while a cluster
+# exists: the service subnet decides the address of every service, including the
+# one kubelet is told is the cluster dns, and the pod subnet is what the cni was
+# installed around. Moving either is a cluster rebuilt rather than a value
+# changed, and update-cluster.yml refuses it.
+#
+# They are here because they can collide with a network that was there first.
+# Every node, every service the workloads reach and every address the cluster
+# routes to has to sit outside both, so a site already using 10.244 or 10.96 for
+# something needs them somewhere else, and there is nothing this installer could
+# pick that is right everywhere.
+#
+# Nothing installs a cni here, so whatever does has to be given these same two
+# values. A cni brought up around a different pod subnet leaves nodes that never
+# reach Ready, and the reason does not show up where the symptom does
+k8s_pod_subnet: "10.244.0.0/16"
+k8s_service_subnet: "10.96.0.0/12"
+
+# Whether kubeadm installs kube-proxy. Set to false for a cni that routes the
+# services itself - cilium with kubeProxyReplacement, calico in ebpf mode - and
+# kubeadm makes no kube-proxy DaemonSet, now or at any upgrade after. Nothing
+# else here changes: the cni is still what brings the pod network up, and until
+# it does no service address is reachable, kube-proxy or not.
+#
+# A cni that replaces kube-proxy has to be told where the apiserver is, since
+# the kubernetes service address it would otherwise use is one of the addresses
+# it is now in charge of routing. The address to give it is the one every
+# kubelet already uses, ki-cp.<internal_network_zone>:<ki_cp_k8s_cp_lb_port>,
+# which is ki-cp.ki.local:16443 unless constant-vars.yml says otherwise.
+#
+# Fixed while a cluster exists, like the subnets: taking kube-proxy out of a
+# running cluster is a DaemonSet deleted and the rules it wrote cleaned off
+# every node, and putting it back is an addon phase run again, and neither is
+# what update-cluster.yml does. It refuses the change instead
+k8s_kube_proxy_enabled: true
+
+# The kubernetes minor this cluster runs. It has to be one the release carries:
+# release.yml lists them under k8s_versions, and the patch of that minor is the
+# release to pin rather than this file to choose.
+#
+# Left where it is, a release upgrade keeps the cluster on this minor and moves
+# it only to the patch the new release pins. Raised by one, upgrade-cluster.yml
+# takes the cluster up a minor, which is as far as kubeadm goes at a time
+k8s_minor_version: "1.36"
+
+# Flags and host paths added to the kube-apiserver of every control plane node.
+# Empty leaves it exactly as kubeadm builds it.
+#
+# What this is for is the apiserver options a cluster is required to run with and
+# the installer has no opinion about: an audit policy, an oidc issuer, a feature
+# gate, a runtime-config. Without it the only way to set one is to edit the static
+# pod manifest by hand on each node, which the next kubeadm upgrade overwrites.
+#
+# They go into the ClusterConfiguration of the cluster, so kubeadm applies them to
+# a node that joins later and to every node an upgrade passes through, rather than
+# to the nodes that happened to exist when they were set.
+#
+#   k8s_apiserver_extra_args:
+#     - name: audit-policy-file
+#       value: /etc/kubernetes/audit/policy.yaml
+#     - name: audit-log-path
+#       value: /var/log/kubernetes/audit/audit.log
+#   k8s_apiserver_extra_volumes:
+#     - name: audit
+#       hostPath: /etc/kubernetes/audit
+#       mountPath: /etc/kubernetes/audit
+#       readOnly: true
+#     - name: audit-log
+#       hostPath: /var/log/kubernetes/audit
+#       mountPath: /var/log/kubernetes/audit
+#       pathType: DirectoryOrCreate
+#
+# The name of an argument carries no dashes. A flag that can be given more than
+# once is listed more than once.
+#
+# A volume is a host path of the control plane node, and nothing here puts a file
+# there. An argument naming a file that is not on the node is an apiserver that
+# does not start, and it is a control plane node that does not come back, so put
+# the file on every control plane node first and change these after
+k8s_apiserver_extra_args: []
+k8s_apiserver_extra_volumes: []
+
+# The same for the rest of the control plane, which is configured the same way
+# and was not reachable at all.
+#
+# What each one is for, in the order below: the controller manager decides how
+# large a slice of the pod subnet a node is given (--node-cidr-mask-size), which
+# is how many pods a node can hold and is not a thing to discover after the
+# cluster is built. The scheduler carries the feature gates a workload may
+# require. And etcd holds the quota its database is refused writes at
+# (--quota-backend-bytes), which defaults to 2GiB and is the wall a long running
+# cluster meets. Defragmenting gives back the space already deleted; this raises
+# the wall itself.
+#
+#   k8s_controller_manager_extra_args:
+#     - name: node-cidr-mask-size
+#       value: 22
+#   k8s_etcd_extra_args:
+#     - name: quota-backend-bytes
+#       value: 8589934592
+#
+# etcd takes arguments and no volumes. A volume there would be a path mounted
+# into the member holding the state of the cluster, and the one path it reads is
+# its data directory, which is not a value this installer lets a node move.
+#
+# Everything the apiserver block above says applies here too: the name of an
+# argument carries no dashes, a file a volume mounts is not put there by this
+# installer, and a component that will not start is a control plane node that
+# does not come back
+k8s_controller_manager_extra_args: []
+k8s_controller_manager_extra_volumes: []
+k8s_scheduler_extra_args: []
+k8s_scheduler_extra_volumes: []
+k8s_etcd_extra_args: []
+
+# Files this installer puts on every control plane node, for the volumes above to
+# carry into the component that declared them. Empty puts nothing anywhere.
+#
+# A volume declares a path of the node and an argument names a file inside it,
+# and until now nothing put the file there. That leaves the two halves of one
+# decision in different places: the argument is cluster wide, so a control plane
+# node joining later is told to read a file nobody has given it, and a component
+# that can not read what it was pointed at does not start.
+#
+#   k8s_cp_extra_files:
+#     - src: audit/policy.yaml
+#       dest: /etc/kubernetes/audit/policy.yaml
+#       mode: "0644"
+#
+# src is a path under ansible/files of this installer, and that is where the file
+# itself goes. Relative on purpose: what sits in that directory is carried to
+# every ki cp node with the rest of the ansible directory and kept across a
+# release upgrade, while a file somewhere else on the control node is known to
+# nothing and survives neither.
+#
+# dest is an absolute path on the node. Owned by root, with the mode given here
+# or 0644. The directory it sits in is created, and is left behind when the file
+# is removed.
+#
+# Taking an entry out removes the file it placed the next time a playbook runs.
+# Only paths this installer placed are ever removed - what was put on a node by
+# other means is left alone.
+#
+# *** not for secrets ***
+#
+# What goes in ansible/files is copied to every ki cp node in the clear, so that
+# any of them can take over as the control node. That is the right home for an
+# audit policy and the wrong one for a key
+k8s_cp_extra_files: []
+
+k8s_certificate_validity_period: "26280h" # 26280h = 3 year
+
+# What a node has to have before a playbook starts working on it.
+#
+# The disk is checked on every filesystem this installer and kubernetes put
+# things on, and both thresholds have to be met. The absolute one is what an
+# upgrade actually needs, since it pushes a whole release of images into the
+# registry of every ki cp node; the percentage is for small disks, where a
+# filesystem can be over the absolute and still be close enough to the eviction
+# thresholds of kubelet for pods to start moving.
+#
+# The clock is checked because certificates are issued against it and etcd
+# measures its peers by it, so a node that is wrong about the time fails in ways
+# that name neither. Nothing here sets the clock - the time daemon does - and
+# what this asks is whether it worked.
+#
+# A playbook that is taking a cluster apart or rescuing a node that has already
+# failed only reports these. The operator came to fix or remove, and a full disk
+# is a reason they came rather than a reason to turn them away.
+#
+# null is not asking at all. It is here for the site the question does not fit -
+# an air-gapped one with no time source to synchronise to answers the clock at no
+# threshold, and there is nothing it could set instead. Setting the clock one to
+# null drops the synchronised flag with it, since that is the same question
+ki_preflight_disk_free_min: "10Gi"
+ki_preflight_disk_free_percent_min: 5
+ki_preflight_clock_offset_max_seconds: 5
+
+# How many etcd snapshots each k8s cp node keeps. The oldest over this are
+# removed as each new one is taken, because nothing else removes them and they
+# sit on the root filesystem of a control plane node
+ki_etcd_backup_retention_count: 5
+
+# Kubelet resource reservations
+# Leave a value null to calculate it from the actual cpu, memory and disk capacity of the node.
+# See scripts/preflight/create-kubelet-reservations.py for the calculation
+# To give a single node different values, override only that variable in inventory.yml
+kubelet_system_reserved_cpu: null
+kubelet_system_reserved_memory: null
+kubelet_system_reserved_ephemeral_storage: null
+kubelet_system_reserved_pid: null
+kubelet_kube_reserved_cpu: null
+kubelet_kube_reserved_memory: null
+kubelet_kube_reserved_ephemeral_storage: null
+kubelet_kube_reserved_pid: null
+kubelet_eviction_hard_memory_available: null
+kubelet_eviction_hard_nodefs_available: null
+kubelet_eviction_hard_imagefs_available: null
+kubelet_eviction_hard_nodefs_inodes_free: "5%"
+
+# Bounds applied to the calculated values.
+# A lower bound is ignored when it would take an excessive share of a small node
+kubelet_auto_memory_available_min: "500Mi"
+kubelet_auto_memory_available_max: "4Gi"
+kubelet_auto_nodefs_available_min: "15Gi"
+kubelet_auto_nodefs_available_max: "50Gi"
+kubelet_auto_ephemeral_storage_min: "5Gi"
+kubelet_auto_ephemeral_storage_max: "30Gi"
+
+# How kubelet hands out the cpus of a node. Set per node in inventory.yml:
+# whether a node is pinned follows from what it holds, and a node running gpu
+# virtual machines wants it while the one running the control plane does not.
+#
+# none, the default, means what it has always meant - a container is given cpu
+# time and the kernel moves its threads between cores. A workload that needs a
+# core to itself, a virtual machine with pinned vcpus or a latency sensitive
+# server, can not be given one that way, and neither can it be lined up with the
+# numa node its gpu sits on.
+#
+# static gives whole cpus to containers that ask for whole cpus in a Guaranteed
+# pod, and is what kubevirt requires for dedicatedCpuPlacement. It costs density:
+# a cpu given out is a cpu nothing else runs on, idle or not.
+#
+# Changing it is not a value being rewritten. kubelet checkpoints the policy it
+# last ran and refuses to start when the new configuration disagrees, saying to
+# drain the node and delete the file, so update-cluster.yml drains the node,
+# takes the checkpoint away and brings kubelet back, one node at a time
+kubelet_cpu_manager_policy: "none"
+
+# Whether an exclusive allocation is a whole physical core rather than one
+# hardware thread. Read only while the policy above is static.
+#
+# Left false, a node hands out logical cpus, so the two threads of one core can
+# go to two different containers - the model a public cloud sells as a vcpu.
+# Turned on, the threads of a core go together, which halves how many exclusive
+# cpus a node has and takes the neighbour off the other thread of every core.
+#
+# A pod asking for an odd number of cpus is then refused rather than given a
+# thread too many, so turning this on can leave Pending what used to run
+kubelet_cpu_manager_full_pcpus_only: false
+
+# Whether kubelet lines the cpus, the memory and the devices of a workload up on
+# one numa node, and how strictly.
+#
+# What this is for is a device that sits on a numa node - a gpu that was passed
+# through, a fabric nic. A container given cpus on the other side of the machine
+# reaches its own device across the interconnect, and nothing reports that as
+# anything but a workload that runs slower than it should.
+#
+# single-numa-node refuses to admit what it can not line up, which is the point:
+# the alternative is a pod that runs and quietly performs worse. The cpu part of
+# it needs the policy above to be static to have anything to line up
+kubelet_topology_manager_policy: "none"
+
+# Whether the alignment above is decided per container or for the pod as a whole.
+# pod is what a virtual machine wants, since its vcpus and its device are one
+# workload rather than several
+kubelet_topology_manager_scope: "container"
+
+# Whether kubelet counts the memory and the hugepages of a node per numa node
+# and hands them out that way, so that the topology manager above has a memory
+# hint to line up with the cpus and the devices.
+#
+# none, the default, leaves memory where it has always been - one pool, placed by
+# the kernel. static counts the memory and the hugepages of every numa node,
+# gives a Guaranteed container memory from the numa node its cpus and its device
+# were lined up with, and refuses what it can not place. It is what kubevirt
+# needs for a guest to see the numa topology of the host (guestMappingPassthrough),
+# which in turn is what a virtual machine with a passed through gpu wants: the
+# guest memory on hugepages of the numa node the gpu sits on.
+#
+# Only the memory the node keeps for itself is decided here. kubelet asks that the
+# memory named per numa node add up to exactly what systemReserved, kubeReserved
+# and the memory.available eviction threshold reserve, so
+# create-kubelet-reservations.py takes the three it already calculated and
+# spreads their sum over the numa nodes of the machine. The hugepages themselves
+# are the kernel's to allocate and the site's to size: declared in
+# kernel_cmdline_extra_args, in force at a boot, and counted by
+# check-kernel-args.sh against what the kernel actually took.
+#
+# Read with the topology manager. With kubelet_topology_manager_policy at none
+# there is nothing for the memory hint to be lined up with, so the pair is refused.
+# And it costs what the cpu policy costs: kubelet checkpoints this too, in
+# /var/lib/kubelet/memory_manager_state, and refuses to start when the
+# configuration disagrees with the checkpoint - so changing it is the same drain,
+# the same checkpoint taken away and the same restart, one node at a time. A
+# memory reservation changed on a node that runs static goes the same way, since
+# the checkpoint records what was reserved
+kubelet_memory_manager_policy: "none"
+
+# The cpus kept for the system and for kubelet, named rather than counted.
+#
+# Left null, kubelet reserves as much cpu as the reservations below ask for and
+# picks which cpus itself. Naming them pins the system to a known set - typically
+# the cpus of one numa node - and leaves the rest whole for exclusive allocation.
+#
+# kubelet overwrites the cpu it keeps for the system with the count of the set
+# named here, so setting this and kubelet_system_reserved_cpu on one node means
+# one of the two does nothing and the playbooks refuse it. The reservation this
+# installer calculates is overwritten the same way and is left where it is
+kubelet_reserved_system_cpus: null
+
+# Whether kubelet asks the cluster for the certificate it serves on, rather than
+# signing one itself.
+#
+# Left off, every kubelet serves a certificate it made up, so everything that
+# connects to one either skips verification or fails. That is what
+# --kubelet-insecure-tls is for in metrics-server, and it is the same hole for
+# "kubectl top", "kubectl logs" and anything else that reaches a node.
+#
+# Turned on, kubelet requests one through a certificate signing request at
+# startup and at every rotation.
+#
+# *** nothing approves those requests, and the node is down until something does ***
+#
+# kube-controller-manager signs kubelet-serving requests and deliberately does
+# not approve them: a node asks for the names and addresses it will be reached
+# at, and believing that without checking is how one node gets a certificate for
+# another.
+#
+# While it waits kubelet does not fall back to one it signed itself. It has
+# nothing to serve and refuses every handshake on 10250 - "no serving
+# certificate available for the kubelet" - so kubectl logs, kubectl exec,
+# kubectl top and metrics-server all stop for that node, and
+# --kubelet-insecure-tls buys nothing because there is no certificate to skip
+# verifying. So applying this stops at the first node the cluster does not
+# answer for, rather than walking the rest of them down behind it: one node is
+# waiting, the others are untouched, and the run says so.
+#
+# So this is turned on with the approval already arranged, not ahead of it -
+# an approver that checks the request against what the cluster knows about the
+# node, or a person standing by with "kubectl certificate approve". The requests
+# come back at every rotation, so approving by hand is a standing chore rather
+# than a step. check-kubelet-serving-cert.yml reports the nodes that are not
+# serving an issued certificate.
+#
+# For the apiserver to gain anything from it, it has to be told which ca to
+# trust: k8s_apiserver_extra_args with kubelet-certificate-authority pointing at
+# /etc/kubernetes/pki/ca.crt. Without that the apiserver goes on not verifying,
+# and what this buys is only what other clients verify, which
+# check-kubelet-serving-cert.yml says when the argument is not there.
+#
+# Cluster wide on purpose, in this file rather than per node, and the preflight
+# refuses it on a node rather than leaving that to be read here. A cluster where
+# some kubelets are verifiable and others are not is one where every client has
+# to know which is which, and no client is written that way
+kubelet_server_tls_bootstrap: false
+
+# The most pods kubelet accepts on a node. Left null, kubernetes decides (110).
+# A node running many small pods reaches it; a node whose pods are virtual
+# machines with large cpu and memory never gets near it
+kubelet_max_pods: null
+
+# Added to systemReserved on nodes of the ki_cp_node group.
+# Those nodes run keepalived, dns server, ntp server, k8s cp lb and k8s registry
+# with docker, outside of kubernetes, so kubelet does not account for them
+kubelet_ki_cp_extra_cpu: "500m"
+kubelet_ki_cp_extra_memory: "1Gi"

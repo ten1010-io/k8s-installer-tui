@@ -1,0 +1,54 @@
+ki_var_root_path: "/var/lib/k8s-installer"
+containerd_root_path: "/var/lib/containerd"
+docker_root_path: "/var/lib/docker"
+
+internal_network_subnets:
+  - "192.168.0.0/24"
+
+#internal_network_extra_zone: "example.com"
+
+ki_cp_ha_mode: true
+ki_cp_ha_mode_vip: "192.168.0.10"
+ki_cp_dns_dnssec_validation: false
+ki_cp_dns_server_upstream_servers:
+  - "8.8.8.8"
+  - "8.8.4.4"
+ki_cp_ntp_server_upstream_servers:
+  - "time1.google.com"
+  - "time2.google.com"
+
+k8s_certificate_validity_period: "26280h" # 26280h = 3 year
+k8s_load_balancers:
+  - name: "lb1"
+    vip: "192.168.0.100"
+    nodes:
+      - "node1"
+      - "node2"
+k8s_gateways:
+  - name: "lb2"
+    vip: "192.168.0.101"
+    nodes:
+      - "node1"
+      - "node2"
+k8s_default_ingress_class:
+  load_balancer: "lb1"
+  host_network_port: 443
+
+
+aipub_ingress_zone: "aipub.customer.local"
+aipub_ha_mode: true
+aipub_ha_mode_storage_class: "nfs-client"
+aipub_cp_nodes:
+  - "node1"
+  - "node2"
+  - "node3"
+
+aipub_harbor_ingress_subdomain: "aipub-harbor"
+aipub_harbor_replica_count: 3
+aipub_harbor_registry_storage_size: 512Gi
+aipub_harbor_postgresql_storage_size: 128Gi
+aipub_harbor_redis_storage_size: 32Gi
+aipub_harbor_trivy_storage_size: 5Gi
+
+# ki_cert_mode options:
+ki_cert_mode: "self_signed"

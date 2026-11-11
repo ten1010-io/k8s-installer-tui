@@ -275,7 +275,7 @@ func build(s *state.AppState, o Options) []Step {
 		// them (cp_extra_files, then control_plane), one control plane node at a time
 		a25 := Step{ID: "A2.5", Title: "update-cluster (apiserver 인증 웹훅 적용)", Kind: Playbook,
 			Playbook: "playbooks/update-cluster.yml",
-			Note:     "K3 에서 뺀 인증 웹훅 항목을 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다",
+			Note:     "K3 에서 뺀 인증 웹훅 항목을 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다. " + updateClusterTime,
 			applies:  true, stage: state.StageAll}
 		if jwks {
 			// the JWKS entries wait for the issuer, after setup-aipub
@@ -297,6 +297,25 @@ func build(s *state.AppState, o Options) []Step {
 	return steps
 }
 
+// updateClusterTime is what an update-cluster.yml takes, for the notes of the
+// steps that run it, so that a step minutes long is not taken for one that
+// hangs. Per control plane node, one after another: `kubeadm upgrade node phase
+// control-plane` (update-k8s-cp-config.sh) backs up and checks etcd on every node,
+// --etcd-upgrade being on by default, even when only apiserver flags change; a
+// flag and a file changed together restart the apiserver twice (the manifest
+// kubeadm writes again, then restart-k8s-cp-components.sh), each followed by 30
+// seconds of /readyz. Measured on three control plane nodes: 3 to 6 minutes a
+// node, about 15 in all, one task of a healthy node close to 5 minutes. Every
+// wait has its limit - kubeadm's own for each component (UpgradeManifests, 5
+// minutes by default), then 300 seconds each for the apiserver and for the LB
+// (wait-ready) - and a failure has the rescue put the node back in the LB and
+// stop. A kill (Ctrl+C twice) runs no rescue: the node is left drained in the LB
+// until `lb-admin.sh ready <node>` on every ki cp node.
+const updateClusterTime = "컨트롤 플레인 노드 한 대에 3~6분 (세 대면 15분 안팎): kubeadm 이 노드마다 etcd 를 백업·검사하고, " +
+	"플래그와 파일이 함께 바뀌면 apiserver 를 두 번 재시작합니다 (하나만 바뀌면 한 번). 한 태스크가 5분 가까이 걸리기도 합니다. " +
+	"기다림마다 시한이 있어 넘기면 그 노드를 LB 에 되돌리고 멈춥니다. 멈추려면 Ctrl+C 한 번 (이 단계가 끝난 뒤 멈춤): " +
+	"두 번 (바로 멈춤) 이면 노드가 LB 에서 빠진 채 남아, ki cp 노드마다 lb-admin.sh ready <노드> 로 되돌려야 합니다"
+
 // applyAll is the update-cluster.yml of an existing site: every entry of the
 // control plane as vars.yml holds it, no -e. Where the apiserver was edited by
 // hand (P3 says so), kubeadm writes the manifest again from the cluster
@@ -305,7 +324,7 @@ func applyAll(id string) Step {
 	return Step{ID: id, Title: "update-cluster (컨트롤 플레인 항목 적용)", Kind: Playbook,
 		Playbook: "playbooks/update-cluster.yml", applies: true, stage: state.StageAll,
 		Note: "기존 사이트: 컨트롤 플레인 항목을 한 번에 적용 (-e 없음). 손으로 고친 kube-apiserver.yaml 은 설치기가 관리하는 같은 " +
-			"플래그로 바뀜 (P3 로 먼저 확인). 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"}
+			"플래그로 바뀜 (P3 로 먼저 확인). 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다. " + updateClusterTime}
 }
 
 // jwksSteps apply the JWKS preset where aipub-installer applies JWKS: its k8s-jwks
@@ -343,7 +362,7 @@ func jwksSteps(s *state.AppState, o Options) []Step {
 	apply := Step{ID: "A5.2", Title: "update-cluster (apiserver JWKS 인증 적용)", Kind: Playbook,
 		Playbook: "playbooks/update-cluster.yml", applies: true, stage: state.StageAll,
 		Note: "K3 에서 뺀 JWKS 항목 (authentication-config) 을 적용. setup-aipub 의 k8s-jwks 가 손으로 넣은 것을 " +
-			"kubeadm 이 보관하게 함. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"}
+			"kubeadm 이 보관하게 함. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다. " + updateClusterTime}
 	return []Step{fill, apply}
 }
 
@@ -440,7 +459,7 @@ func clusterStep(s *state.AppState, o Options) Step {
 	if o.Existing {
 		st.Title, st.Playbook = "update-cluster (클러스터 단계 컨트롤 플레인 항목)", "playbooks/update-cluster.yml"
 		st.Note = "기존 클러스터: setup-cluster 대신 update-cluster.yml 로 클러스터 단계의 컨트롤 플레인 항목 (감사 로그, runtime-config 등) 을 " +
-			"AIPub 단계 전에 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다"
+			"AIPub 단계 전에 적용. 컨트롤 플레인 노드를 한 대씩 LB 에서 빼고 apiserver 를 재시작합니다. " + updateClusterTime
 		switch {
 		case !s.AipubEnabled && !cp.Empty():
 			st.Skip, st.SkipWhy = true, "기존 클러스터: K5 가 컨트롤 플레인 항목을 한 번에 적용"

@@ -672,18 +672,76 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	return err == nil
 }
 
-// knownFailure is what the installers' README says about a failure the log
-// shows, empty when it is none of them.
+// knownFailure returns a human diagnosis for known failure patterns, or extracts
+// the raw failure message as a fallback so unexpected errors are still explained.
 func knownFailure(st Step, logPath string) string {
-	if st.Playbook != "aipub-playbooks/setup-aipub.yml" {
-		return ""
-	}
-	if strings.Contains(strings.Join(TailLines(logPath, 200), "\n"), "workspaces.aipub.ten1010.io") {
+	lines := TailLines(logPath, 200)
+	full := strings.Join(lines, "\n")
+
+	// 1. Check known specific patterns
+	if st.Playbook == "aipub-playbooks/setup-aipub.yml" && strings.Contains(full, "workspaces.aipub.ten1010.io") {
 		// deterministic until then, so no retry: aipub-installer README "What to expect on a new cluster"
 		return "알려진 일: backend-informer 는 Python 서비스가 만드는 Workspace CRD 를 기다립니다. 그 앞의 서비스는 설치됐습니다. " +
 			"Python 서비스를 설치한 뒤 이어서 실행하세요 (aipub-installer README)"
 	}
+	if strings.Contains(full, "error syncing endpoints with etcd") || (strings.Contains(full, "check-etcd") && strings.Contains(full, "context deadline exceeded")) {
+		return "진단: 컨트롤 플레인 간 etcd 통신(포트 2379/2380)이 방화벽에 차단되었습니다. 복구: 각 노드에서 방화벽 포트(2379, 2380/tcp)를 개방하거나 방화벽 상태를 확인하세요."
+	}
+	if strings.Contains(full, "package[\"containerd\"] already installed") || (strings.Contains(full, "already installed") && strings.Contains(full, "containerd")) {
+		return "진단: 노드에 이전 설치 잔재(containerd)가 남아있습니다. 복구: TUI에서 'x' 키로 클러스터를 초기화(reset)한 뒤 'r' 키로 재시도하세요."
+	}
+	if strings.Contains(full, "Failed dependencies") && strings.Contains(full, "libcrypto.so") {
+		return "진단: openssl-devel 패키지로 인해 python3.12-libs 의존성 충돌이 발생했습니다. 복구: 노드에서 'sudo dnf remove -y openssl-devel' 이 필요합니다."
+	}
+	if strings.Contains(full, "Kubelet already enabled") {
+		return "진단: kubelet 서비스가 이미 활성화되어 있습니다. 복구: 해당 노드에서 'sudo kubeadm reset -f' 를 실행하거나 TUI에서 'x' 로 초기화하세요."
+	}
+	if (strings.Contains(full, "k8s_cp_extra_files") || strings.Contains(full, "authentication-config.yaml")) && strings.Contains(full, "not there") {
+		return "진단: JWKS 인증 설정 파일이 아직 없습니다 (A5.1 단계에서 생성 예정). 복구: 'sudo mkdir -p /opt/k8s-installer/ansible/files/aipub && sudo touch /opt/k8s-installer/ansible/files/aipub/authentication-config.yaml' 로 빈 파일을 생성하세요."
+	}
+
+	// 2. Fallback: extract the raw failure summary from the Ansible log
+	if raw := extractRawError(lines); raw != "" {
+		return "실패 원문: " + raw
+	}
 	return ""
+}
+
+func extractRawError(lines []string) string {
+	var candidate string
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" || strings.HasPrefix(l, "TASK [") || strings.HasPrefix(l, "PLAY [") || strings.HasPrefix(l, "PLAY RECAP") ||
+			strings.HasPrefix(l, "── ") || strings.HasPrefix(l, "changed:") || strings.HasPrefix(l, "skipping:") || strings.HasPrefix(l, "ok:") {
+			continue
+		}
+		if strings.HasPrefix(l, "[ERROR]") || strings.HasPrefix(l, "error:") || strings.HasPrefix(l, "Error:") {
+			return cleanErrorLine(l)
+		}
+		if strings.HasPrefix(l, "msg: ") && candidate == "" {
+			candidate = strings.TrimPrefix(l, "msg: ")
+		}
+		if strings.HasPrefix(l, "fatal: ") && candidate == "" {
+			candidate = l
+		}
+	}
+	if candidate != "" {
+		return cleanErrorLine(candidate)
+	}
+	return ""
+}
+
+func cleanErrorLine(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "|-")
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, "'\"")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	if len(s) > 140 {
+		return s[:137] + "..."
+	}
+	return s
 }
 
 // manual is a Manual step: it checks first (a class may be there already),

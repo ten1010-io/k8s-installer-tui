@@ -124,6 +124,7 @@ type S9Install struct {
 	last           *plan.RunState
 	inputHash      string // of the site files when the screen was entered (viewPrev)
 	confirm        string
+	resetCmd       func() tea.Cmd
 	runAfterChecks bool // 실행 (or f) waits for the checks, then goes on (gate)
 	fresh          bool // the run that waits is from the first step (f)
 	showLog        bool
@@ -153,6 +154,9 @@ func NewS9Install(s *state.AppState, paths fileio.Paths, opts plan.Options) *S9I
 
 // SetRunner replaces how the checks run commands (tests).
 func (s *S9Install) SetRunner(r plan.RunFunc) { s.run = r }
+
+// SetResetCmd replaces how reset-cluster is run (tests).
+func (s *S9Install) SetResetCmd(f func() tea.Cmd) { s.resetCmd = f }
 
 func (s *S9Install) Title() string { return "설치" }
 func (s *S9Install) SetSize(w, h int) {
@@ -285,7 +289,7 @@ func (s *S9Install) runChecks() tea.Cmd {
 	if s.appState.AipubEnabled {
 		s.checks["P8"] = plan.CheckResult{Lines: []string{"확인 중... (kubectl get storageclass " + s.appState.AipubHaModeStorageClass + ")"}}
 	}
-	s.checks["P6"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n /bin/sh -c true')"}}
+	s.checks["P6"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m raw -a 'sudo -n /bin/sh -c true')"}}
 	opts, run, st := s.opts, s.run, s.appState
 	if opts.Existing {
 		// read only: the apiserver manifest of the first control plane node
@@ -312,7 +316,7 @@ func (s *S9Install) runChecks() tea.Cmd {
 
 // runP2 is P2 alone, which sending the key ends with.
 func (s *S9Install) runP2() tea.Cmd {
-	s.checks["P2"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m command -a 'sudo -n true')"}}
+	s.checks["P2"] = plan.CheckResult{Lines: []string{"확인 중... (ansible all -m raw -a 'sudo -n true')"}}
 	s.checking = true
 	opts, run := s.opts, s.run
 	return func() tea.Msg {
@@ -578,6 +582,14 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return s, s.runP2()
 
+	case resetDoneMsg:
+		if msg.err != nil {
+			s.message = "✗ 클러스터 초기화 실패: " + msg.err.Error()
+		} else {
+			s.message = "✓ 클러스터 초기화(reset-cluster.yml) 완료. 'r'을 눌러 실패 단계를 다시 진행하세요."
+		}
+		return s, nil
+
 	case tea.KeyMsg:
 		if s.confirm != "" {
 			switch msg.String() {
@@ -637,6 +649,11 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return s, nil
 			case "f":
 				return s, s.pressFresh()
+			case "x":
+				if s.last != nil && s.last.Outcome == plan.OutcomeFailed {
+					s.confirm = "reset-cluster"
+					return s, nil
+				}
 			case "k":
 				if nodes := s.refusing(); len(nodes) > 0 {
 					return s, s.prepareKey(nodes)
@@ -927,6 +944,9 @@ func (s *S9Install) bottom() string {
 	keys := "  c 사전 확인   d 명령 보기   w 스크립트 저장 (install-plan.sh)"
 	if s.last != nil {
 		keys += "   f 처음부터"
+	}
+	if s.last != nil && s.last.Outcome == plan.OutcomeFailed {
+		keys += "   x 클러스터 초기화(reset)"
 	}
 	if len(s.refusing()) > 0 {
 		keys += "   k·p 키 보내기"

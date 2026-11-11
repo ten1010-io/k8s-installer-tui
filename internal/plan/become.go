@@ -27,8 +27,8 @@ const sudoShellProbe = `p=$(command -v dash) || { echo missing; exit 3; }; ` +
 func CheckBecomeShell(ctx context.Context, o Options, run RunFunc) (CheckResult, string) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	plain, _, _ := adhoc(ctx, o, run, "all", false, "command", "sudo -n true")
-	viaSh, out, err := adhoc(ctx, o, run, "all", false, "command", "sudo -n /bin/sh -c true")
+	plain, _, _ := adhoc(ctx, o, run, "all", false, "raw", "sudo -n true")
+	viaSh, out, err := adhoc(ctx, o, run, "all", false, "raw", "sudo -n /bin/sh -c true")
 	if len(viaSh) == 0 {
 		return CheckResult{Lines: []string{couldNotRun(out, err)}}, ""
 	}
@@ -57,7 +57,7 @@ func CheckBecomeShell(ctx context.Context, o Options, run RunFunc) (CheckResult,
 
 	head := "sudo 가 /bin/sh 를 거부하는 노드: " + strings.Join(refused, " ") +
 		" (sudoers 의 !/bin/sh 로 보임). 그대로 두면 Ansible become 이 'Shared connection closed' 로 실패합니다"
-	probe, _, _ := adhoc(ctx, o, run, strings.Join(refused, ","), false, "shell", sudoShellProbe)
+	probe, _, _ := adhoc(ctx, o, run, strings.Join(refused, ","), false, "raw", sudoShellProbe)
 	paths := map[string][]string{} // dash path -> nodes
 	var problems []string
 	for _, n := range refused {

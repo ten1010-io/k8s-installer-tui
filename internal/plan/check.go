@@ -81,7 +81,7 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	script := fmt.Sprintf("source %s && ansible all -i inventory.yml -o -m command -a 'sudo -n true'",
+	script := fmt.Sprintf("source %s && ansible all -i inventory.yml -o -m raw -a 'sudo -n true'",
 		shellQuote(o.Root+"/venv/bin/activate"))
 	out, err := run(ctx, o.AnsibleDir(), "bash", "-c", script)
 
@@ -138,6 +138,21 @@ func CheckSSHNodes(ctx context.Context, o Options, run RunFunc) (CheckResult, []
 	}
 	if len(good) > 0 {
 		r.Lines = append([]string{"정상: " + strings.Join(good, " ")}, r.Lines...)
+		// Probe firewall on reachable nodes: k8s needs ports like 6443, 2379, 10250 open
+		fwScript := fmt.Sprintf("source %s && ansible all -i inventory.yml -o -m raw -a 'systemctl is-active firewalld 2>/dev/null || systemctl is-active ufw 2>/dev/null || echo inactive'",
+			shellQuote(o.Root+"/venv/bin/activate"))
+		fwOut, _ := run(ctx, o.AnsibleDir(), "bash", "-c", fwScript)
+		var fwActive []string
+		for node, a := range parseAdhoc(fwOut) {
+			if strings.TrimSpace(a.Stdout) == "active" {
+				fwActive = append(fwActive, node)
+			}
+		}
+		if len(fwActive) > 0 {
+			sort.Strings(fwActive)
+			r.Warn = true
+			r.Lines = append(r.Lines, "방화벽(firewalld/ufw) 활성 노드: "+strings.Join(fwActive, " ")+" (포트 차단 방지를 위해 비활성화 권장)")
+		}
 	}
 	r.Lines = append(r.Lines, warnings...)
 	return r, probed

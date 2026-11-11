@@ -3,6 +3,9 @@ package screens
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -157,6 +160,9 @@ func (s *S9Install) offerRun() tea.Cmd {
 
 // confirmQuestion is asked after the checks passed (gate): y starts the run.
 func (s *S9Install) confirmQuestion() string {
+	if s.confirm == "reset-cluster" {
+		return "모든 노드의 클러스터를 초기화(reset-cluster.yml)하시겠습니까? (containerd 및 k8s 잔재 삭제) (y 예, n 아니오)"
+	}
 	if s.confirm == "resume" {
 		return "지난 실행 뒤에 사이트 파일이 바뀌었습니다. 끝난 단계는 다시 실행하지 않고 이어서 실행할까요? (y 예, n 아니오)"
 	}
@@ -166,12 +172,42 @@ func (s *S9Install) confirmQuestion() string {
 	return "끝난 단계도 모두 처음부터 다시 실행할까요? (y 예, n 아니오)"
 }
 
+type resetDoneMsg struct {
+	err error
+}
+
+func (s *S9Install) runResetCluster() tea.Cmd {
+	if s.resetCmd != nil {
+		return s.resetCmd()
+	}
+	ansible := filepath.Join(s.opts.Root, "venv", "bin", "ansible-playbook")
+	if _, err := os.Stat(ansible); err != nil {
+		ansible = "ansible-playbook"
+	}
+	cmd := exec.Command("sudo", ansible,
+		"-i", "inventory.yml",
+		"playbooks/reset-cluster.yml",
+		"-e", "sdfc=",
+		"-e", `{"k8s_cp_extra_files":[]}`)
+	cmd.Dir = s.opts.AnsibleDir()
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return resetDoneMsg{err: err}
+	})
+}
+
 func (s *S9Install) answer(yes bool) tea.Cmd {
 	c := s.confirm
 	s.confirm = ""
 	if !yes {
-		s.message = "실행하지 않았습니다"
+		if c == "reset-cluster" {
+			s.message = "클러스터 초기화를 취소했습니다"
+		} else {
+			s.message = "실행하지 않았습니다"
+		}
 		return nil
+	}
+	if c == "reset-cluster" {
+		return s.runResetCluster()
 	}
 	return s.startRun(c == "resume")
 }
@@ -324,6 +360,15 @@ func (s *S9Install) runKey(msg tea.KeyMsg) tea.Cmd {
 			s.ex.runner.Continue()
 			s.message = recheckMessage
 		}
+	case "r":
+		if s.ex.done && s.ex.outcome == plan.OutcomeFailed && s.confirm == "" {
+			return s.pressRun()
+		}
+	case "x":
+		if s.ex.done && s.confirm == "" {
+			s.confirm = "reset-cluster"
+			return nil
+		}
 	case "esc":
 		if s.ex.done {
 			s.ex, s.selMoved, s.message = nil, false, ""
@@ -439,6 +484,8 @@ func (s *S9Install) viewRun() string {
 			b.WriteString(styles.StyleMuted.Render("        "+step.Note) + "\n")
 			b.WriteString(styles.StyleWarning.Render("        "+st.Note) + "\n")
 			b.WriteString(styles.StylePrimary.Render("        설치했으면 Enter (설치함, 계속) — 다시 확인합니다") + "\n")
+		case st.Status == plan.StatusFailed && st.Note != "":
+			b.WriteString(styles.StyleWarning.Render("        "+st.Note) + "\n")
 		case st.Note != "" && st.Status != plan.StatusOK:
 			b.WriteString(styles.StyleMuted.Render("        "+st.Note) + "\n")
 		}
@@ -454,12 +501,18 @@ func (s *S9Install) viewRun() string {
 	if ex.done {
 		b.WriteString("\n" + s.summary())
 	}
+	if s.confirm != "" {
+		b.WriteString("\n" + styles.StyleWarning.Render("! "+s.confirmQuestion()) + "\n")
+	}
 	if s.message != "" {
 		b.WriteString("\n" + styles.StylePrimary.Render(s.message) + "\n")
 	}
 	keys := "  ↑/↓ 단계   l 로그"
 	switch {
 	case ex.done:
+		if ex.outcome == plan.OutcomeFailed {
+			keys += "   r 실패 단계 재시도   x 클러스터 초기화(reset)"
+		}
 		keys += "   Esc 계획 화면으로 (실행을 누르면 이어서)"
 	default:
 		if _, ok := s.waitingStep(); ok {
@@ -502,6 +555,9 @@ func (s *S9Install) summary() string {
 			code = fmt.Sprintf(" (종료 코드 %d)", *st.ExitCode)
 		}
 		b.WriteString(styles.StyleError.Render("✗ "+st.ID+" "+st.Title+code+"  로그: "+st.Log) + "\n")
+		if st.Note != "" {
+			b.WriteString(styles.StyleWarning.Render("  │ "+st.Note) + "\n")
+		}
 		for _, l := range plan.TailLines(st.Log, 5) {
 			b.WriteString(styles.StyleMuted.Render("  │ "+l) + "\n")
 		}

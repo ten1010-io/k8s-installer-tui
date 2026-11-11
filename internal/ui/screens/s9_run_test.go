@@ -320,6 +320,54 @@ func TestRunResumesFromTheFailedStep(t *testing.T) {
 	}
 }
 
+func TestFailureRecoveryKeysRAndX(t *testing.T) {
+	s9, f := newRunScreen(t)
+	f.classReady = true
+	f.fail["setup-base"] = 2
+	p := newPump(s9)
+	p.pressRun()
+	p.until(t, "the run ends", func() bool { return s9.ex != nil && s9.ex.done })
+
+	v := plainView(s9)
+	if !strings.Contains(v, "r 실패 단계 재시도") || !strings.Contains(v, "x 클러스터 초기화(reset)") {
+		t.Fatalf("expected recovery keys in view:\n%s", v)
+	}
+
+	// 1. Press x to trigger cluster reset
+	p.key(runeKey("x"))
+	if s9.confirm != "reset-cluster" {
+		t.Fatalf("expected confirm reset-cluster, got %q", s9.confirm)
+	}
+	if v := plainView(s9); !strings.Contains(v, "모든 노드의 클러스터를 초기화(reset-cluster.yml)하시겠습니까?") {
+		t.Fatalf("expected reset confirm question:\n%s", v)
+	}
+
+	// Mock resetCmd
+	resetRan := false
+	s9.SetResetCmd(func() tea.Cmd {
+		resetRan = true
+		return func() tea.Msg { return resetDoneMsg{err: nil} }
+	})
+
+	// 2. Answer y to execute reset
+	p.key(runeKey("y"))
+	p.until(t, "reset to finish", func() bool { return strings.Contains(s9.message, "클러스터 초기화") })
+	if !resetRan {
+		t.Fatal("resetCmd was not executed")
+	}
+
+	// 3. Clear failure and press r to retry directly from the run screen
+	f.mu.Lock()
+	f.fail["setup-base"] = 0
+	f.mu.Unlock()
+
+	p.key(runeKey("r"))
+	p.until(t, "the retry ends", func() bool { return s9.ex != nil && s9.ex.done })
+	if s9.ex.outcome != plan.OutcomeOK {
+		t.Fatalf("expected OK after retry, got %s", s9.ex.outcome)
+	}
+}
+
 func (f *runSite) checksRun() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

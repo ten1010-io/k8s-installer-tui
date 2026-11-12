@@ -129,6 +129,10 @@ func TestScreensFitTerminalInEnglish(t *testing.T) {
 			d.frameFits(h)
 			d.english(false)
 			d.keys("ctrl+n")
+			d.at("5c.Python")
+			d.frameFits(h)
+			d.english(true)
+			d.keys("ctrl+n")
 			d.at("6.AIPub LB")
 			d.english(true)
 			d.keys("down", "ctrl+u", "lb-hjkl", "down", "192.168.0.100")
@@ -194,7 +198,7 @@ func TestFrameSaysEnglish(t *testing.T) {
 			frameNoHangul(t, "the footer", d.app.keyHints(w))
 		}
 	}
-	d.app.current = 9 // the preview (8.Save) leads with its save key
+	d.app.current = 10 // the preview (8.Save) leads with its save key
 	if h := d.app.keyHints(200); h != "  Ctrl+S save · Ctrl+N next · Ctrl+P back · ↑↓ move · Enter select · Ctrl+C quit" {
 		t.Errorf("footer of the preview: %q", h)
 	}

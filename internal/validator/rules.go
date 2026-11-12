@@ -453,6 +453,7 @@ func validateAipub(s *state.AppState) []Error {
 	}
 
 	errs = append(errs, monitoringCpNodes(s)...)
+	errs = append(errs, pythonChecks(s)...)
 	return errs
 }
 
@@ -680,4 +681,38 @@ func checkWebhookURL(cp *state.ControlPlane) []Error {
 		errs = append(errs, Error{field, i18n.T("'%s': must be https://host[:port]/path (no credentials)", raw)})
 	}
 	return errs
+}
+
+// pythonChecks are the two rules of the python variables the schema does not
+// carry: the cluster name coaster checks its license keys against is set
+// (check-python.yml of aipub-installer refuses an empty one), and the GPU nodes
+// are nodes of the cluster, since coaster labels them by kubernetes node name.
+func pythonChecks(s *state.AppState) []Error {
+	var errs []Error
+	if strings.TrimSpace(s.PythonCoasterClusterName) == "" {
+		errs = append(errs, Error{"aipub_python_coaster_cluster_name",
+			i18n.T("Enter the cluster name the coaster license keys were issued for")})
+	}
+	for _, n := range s.PythonCoasterGpuNodes {
+		if !s.IsK8sNode(n) {
+			errs = append(errs, Error{"aipub_python_coaster_gpu_nodes",
+				i18n.T("'%s' is not in the k8s node group", n)})
+		}
+	}
+	return errs
+}
+
+// Python checks what the python screen edits on its own: its variables and the
+// nodes it picks, for the screen to stop on before the preview.
+func Python(s *state.AppState) []Error {
+	var errs []Error
+	for _, v := range schema.ByFile(schema.FileAipub) {
+		if v.Screen != schema.PythonScreen {
+			continue
+		}
+		if val, ok := schema.Value(s, v); ok {
+			errs = append(errs, checkVar(v, v.Key, val, false)...)
+		}
+	}
+	return append(errs, pythonChecks(s)...)
 }

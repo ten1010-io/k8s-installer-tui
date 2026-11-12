@@ -13,6 +13,7 @@ func init() {
 		"4b.Control plane": "4b.컨트롤플레인",
 		"5.AIPub":          "5.AIPub",
 		"5b.Monitoring":    "5b.모니터링",
+		"5c.Python":        "5c.Python",
 		"6.AIPub LB":       "6.AIPub LB",
 		"7.Certs":          "7.인증서",
 		"8.Save":           "8.저장",

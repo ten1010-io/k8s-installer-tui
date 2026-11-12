@@ -103,7 +103,7 @@ func TestWizardLegacySite(t *testing.T) {
 	opts.Existing, opts.AipubInstalled, opts.SiteWhy = true, true, "기존 사이트: --existing 으로 지정. AIPub: --aipub-installed 로 지정"
 	d := &driver{t: t, app: NewApp(s, paths, opts, "test")}
 	d.app.screenList[4].(*screens.S4bControlPlane).SetRunner(legacyNode(&calls))
-	d.app.screenList[10].(*screens.S9Install).SetRunner(legacyNode(&calls))
+	d.app.screenList[11].(*screens.S9Install).SetRunner(legacyNode(&calls))
 	d.send(tea.WindowSizeMsg{Width: 110, Height: 80})
 
 	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
@@ -152,7 +152,7 @@ func TestWizardLegacySite(t *testing.T) {
 
 	d.keys("ctrl+n")
 	d.at("5.AIPub")
-	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
+	d.keys("ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n", "ctrl+n")
 	d.at("8.저장")
 	if strings.Contains(d.screen(), "검증 오류") || strings.Contains(d.screen(), "CA 대기") {
 		t.Fatalf("preview:\n%s", d.screen())
@@ -254,7 +254,7 @@ func TestWizardSavedSiteIsNew(t *testing.T) {
 	if strings.Contains(d.screen(), "c 로 첫 컨트롤 플레인") {
 		t.Errorf("the apiserver check is offered on a saved site:\n%s", d.screen())
 	}
-	for i := 0; i < 9 && d.app.current < 9; i++ {
+	for i := 0; i < 10 && d.app.current < 10; i++ {
 		d.keys("ctrl+n")
 	}
 	d.at("8.저장")

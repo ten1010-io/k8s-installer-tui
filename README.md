@@ -183,6 +183,7 @@ AIPub을 설치하지 않으면 AIPub 전용 화면(6·7단계)은 건너뜁니�
 | 3 | 네트워크 (`s3_network.go`) | `vars.yml` | 내부 서브넷, ki cp HA 모드와 VIP, DNS·NTP upstream, DNSSEC, 내부 DNS 서버(AIPub 도메인을 인그레스 VIP로 해석) |
 | 4 | Kubernetes (`s4_kubernetes.go`) | `vars.yml` | 마이너 버전, 파드·서비스 서브넷, 인증서 유효기간 |
 | 5 | AIPub (`s5_aipub.go`) | `files/aipub/vars.yml`, `inventory.yml` | 설치 여부, 인그레스 도메인, HA 모드와 StorageClass(HA 아니면 Harbor 데이터 노드), AIPub 서비스가 실행될 노드(노드 레이블), Harbor 서브도메인·레플리카·스토리지 크기 |
+| 5c | Python 서비스 (`s5c_python.go`) | `files/aipub/vars.yml` | `setup-python`의 값: coaster 라이선스 키를 발급받은 클러스터 이름(필수), GPU 노드, 배포 도구(installer/dag/helmfile), 네트워크 오퍼레이터(InfiniBand 사이트). 라이선스 키와 InfiniBand 노드·포트는 파일에 직접 적으며 위저드가 그대로 둠. 설치 여부는 9단계에서 고름 |
 | 6 | AIPub 로드밸런서 (`s6_aipub_lb.go`) | `files/aipub/vars.yml` | 인그레스 모드(별도 IP / 공유 IP), Ingress·Gateway LB 이름과 VIP, 호스트 네트워크 포트 |
 | 7 | 인증서 모드 (`s6_cert_mode.go`) | `files/aipub/vars.yml` | `aipub_cert_mode`: `self_signed`(기본, CA 자동 생성), `ca_provided`(CA 제공), `tls_provided`(TLS 인증서 제공) |
 | 8 | 미리보기 (`s7_preview.go`) | 3개 모두 | 저장될 파일을 탭으로 보고 전체 검증 결과 확인. 오류가 있으면 저장 불가, `s`로 저장 |
@@ -223,7 +224,7 @@ AIPub을 설치하지 않으면 AIPub 전용 화면(6·7단계)은 건너뜁니�
 | A4 | `setup-monitoring` (선택) | 플레이북 (AIPub) |
 | A5 | `setup-aipub` | 플레이북 (AIPub) |
 
-A1~A5는 AIPub을 설치할 때만 나옵니다. 화면에서 K4의 아카이브 경로와 모니터링 설치 여부를 정합니다.
+A1~A5는 AIPub을 설치할 때만 나옵니다. 화면에서 K4의 아카이브 경로와 모니터링 설치 여부를 정합니다. 설치기에 python 모듈이 있으면 A6·A7(python 서비스)이 붙고, 같은 화면에서 설치 여부를 정합니다.
 
 K4의 아카이브(`ki-cp-user-registry-artifacts.tgz`, 패키지에 들어 있음)는 새 사이트에서 빼면 안 됩니다. 사용자 레지스트리는 K2가 만들므로 비어 있고, 아카이브를 넣지 않으면 A1 `setup-network`부터 이미지를 받지 못합니다(Cilium 파드가 `ImagePullBackOff`, helm이 15분 기다리다 실패). 그래서 AIPub을 설치하는 새 사이트에서 아카이브 경로가 비어 있으면 `실행`·`f`는 바로 시작하지 않고 묻습니다(기본은 아니오, `Enter`도 아니오). 넣은 경로가 읽을 수 있는 일반 파일이 아니면 시작하지 않습니다. 아카이브 경로가 비어 있으면 화면이 이 프로그램의 디렉터리, 작업 디렉터리, 홈 디렉터리 한 단계 아래(`~/<패키지>/`)에서 그 파일을 찾아, 하나면 채우고 어디서 찾았는지 말하고, 여럿이면 목록만 보입니다. 기존 사이트와 AIPub을 설치하지 않는 사이트는 지금처럼 비워 두면 K4를 건너뜁니다. 이어서 실행하는데 지난 실행의 K4가 이미 성공했으면 아무것도 묻지 않습니다.
 

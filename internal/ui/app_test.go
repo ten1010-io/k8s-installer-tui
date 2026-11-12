@@ -185,6 +185,15 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	d.keys("ctrl+u", "5Ti")
 	d.keys("ctrl+n")
 
+	// S5c: the cluster name of the coaster license keys is required; a name with h/j/k/l is typed as text
+	d.at("5c.Python")
+	d.keys("ctrl+u", "ctrl+n")
+	d.at("5c.Python")
+	if !strings.Contains(strings.Join(d.app.screenErrors, ""), "aipub_python_coaster_cluster_name") {
+		t.Errorf("no error naming the cluster name: %v", d.app.screenErrors)
+	}
+	d.keys("seoul-hjkl", "ctrl+n")
+
 	// S6: a load balancer name with h/j/k/l in it, and the ingress VIP
 	d.at("6.AIPub LB")
 	d.keys("ctrl+n")
@@ -255,7 +264,7 @@ func TestWizardAipubWithoutHA(t *testing.T) {
 	d.keys("enter")
 	d.at("9.설치")
 	d.send(tea.WindowSizeMsg{Width: 110, Height: 200}) // the whole plan in sight, not scrolled
-	s9 := d.app.screenList[10].(*screens.S9Install)
+	s9 := d.app.screenList[11].(*screens.S9Install)
 	s9.SetRunner(func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		return []byte("node1 | CHANGED | rc=0 | (stdout) \nnode2 | CHANGED | rc=0 | (stdout) \n" +
 			"node3 | UNREACHABLE! => {\"msg\": \"No route to host\"}\n"), fmt.Errorf("exit status 4")

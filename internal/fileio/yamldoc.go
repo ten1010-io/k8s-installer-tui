@@ -27,7 +27,24 @@ func parseDoc(data []byte) (*yaml.Node, error) {
 	if top.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("top level is not a mapping")
 	}
+	// yaml.v3 hangs a comment block that follows the last key on the document and
+	// not on the mapping, and so one that is set apart above the first key. The
+	// document is dropped here, so they are moved onto the mapping, or the end of
+	// a file that closes with commented out options - the python section of the
+	// aipub example is one key and sixty lines of them - is lost on the first save
+	top.HeadComment = joinComments(d.HeadComment, top.HeadComment)
+	top.FootComment = joinComments(top.FootComment, d.FootComment)
 	return top, nil
+}
+
+func joinComments(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "\n\n" + b
 }
 
 func encodeDoc(top *yaml.Node) ([]byte, error) {

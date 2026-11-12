@@ -310,6 +310,21 @@ func TestCatalogNamesMatchInstaller(t *testing.T) {
 		t.Errorf("catalogAipubNames drifted from charts/aipub/services.yaml:\n  table:    %v\n  services: %v", sorted(catalogAipubNames), sorted(fromServices))
 	}
 
+	// An installer that keeps the list of what each module needs in one file
+	// (ansible/aipub_vars/defaults/aipub-catalog.yml, which its playbooks read their
+	// catalog_names from) is compared through that file: the tables here are what
+	// is used beside an installer from before it, and have to say the same
+	if req := readRequiredCatalog(filepath.Join(dir, "ansible/aipub_vars/defaults/aipub-catalog.yml")); req != nil {
+		for module, table := range map[string][]string{
+			"network": catalogNetworkNames, "base": catalogBaseNames, "monitoring": catalogMonitoringNames,
+		} {
+			if names := baseNames(req.Required[module]); !sameSet(names, table) {
+				t.Errorf("the table of %s drifted from aipub-catalog.yml:\n  table: %v\n  file:  %v", module, sorted(table), sorted(names))
+			}
+		}
+		return
+	}
+
 	// base, monitoring: catalog_names of their playbooks; network's is a template
 	// that adds the hubble images, of which the three it always has are checked
 	for module, table := range map[string][]string{"base": catalogBaseNames, "monitoring": catalogMonitoringNames} {

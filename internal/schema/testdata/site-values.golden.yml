@@ -133,6 +133,7 @@ aipub_load_balancers: [{name: "lb1", vip: "192.168.0.100", nodes: ["node1"]}] # 
 # aipub_cilium_envoy_idle_timeout_seconds: 300 # ○ cilium envoy 유휴 타임아웃(초)
 # aipub_cilium_hubble_relay_enabled: false # ○ hubble relay 설치
 # aipub_cilium_hubble_ui_enabled: false # ○ hubble ui 설치
+# aipub_multus_enabled: null          # ○ multus 설치 (비우면 aipub_python_network_operator_enabled 를 따름)
 aipub_ingress_zone: "aipub.example.com" # ✅ AIPub 도메인 (예: aipub.example.com)
 # preflight: `*.<이 도메인>` DNS 가 인그레스 VIP 를 가리켜야 외부에서 접속됨
 
@@ -174,6 +175,7 @@ aipub_harbor_local_pv_node: "node1"   # ✅ (aipub_ha_mode=false 일 때 필수)
 # aipub_monitoring_helmfile_bin: null # ○ 모니터링이 쓰는 helmfile (기본 aipub_app_helmfile_bin 과 같음)
 # aipub_monitoring_kustomize_bin: null # ○ 모니터링이 쓰는 kustomize (기본 helmfile 옆의 kustomize)
 # aipub_monitoring_helmfile_dry_run: false # ○ helmfile 을 dry-run 으로만
+# aipub_python_deploy_tool: "installer" # ○ python 배포 도구
 
 ### 모니터링 ────────────────────────────────
 # aipub_monitoring_storage_class_name: null # ○ 모니터링 볼륨 StorageClass (기본 aipub_ha_mode_storage_class)
@@ -190,6 +192,24 @@ aipub_harbor_local_pv_node: "node1"   # ✅ (aipub_ha_mode=false 일 때 필수)
 # aipub_monitoring_opensearch_disk_watermark_low: "85%" # ○ OpenSearch 디스크 워터마크 low
 # aipub_monitoring_opensearch_disk_watermark_high: "90%" # ○ OpenSearch 디스크 워터마크 high
 # aipub_monitoring_opensearch_disk_watermark_flood_stage: "95%" # ○ OpenSearch 디스크 워터마크 flood_stage
+
+### Python 서비스 ───────────────────────────
+# aipub_python_coaster_cluster_name: "cluster1" # ○ coaster 라이선스 키를 발급받은 클러스터 이름
+# aipub_python_coaster_gpu_nodes: []  # ○ GPU 노드 (쿠버네티스 노드 이름, coaster 가 라벨을 붙임)
+# aipub_python_coaster_license_keys: null # ○ 노드별 coaster 라이선스 키 (비우면 설치 뒤 손으로 넣음)
+# aipub_python_workload_gateway_load_balancer: null # ○ 워크로드 Gateway 의 로드밸런서 (비우면 인그레스 것을 8080/8443 으로 같이 씀)
+# aipub_python_cluster_volume_storage_classes: null # ○ wcm 이 ClusterVolume 을 만드는 StorageClass (RWX, Immediate)
+# aipub_python_wcm_tcp_visibility_enabled: true # ○ 워크로드의 TCP 서비스를 프로젝트에 보여 줌
+# aipub_python_wcm_llm_label_propagation_enabled: true # ○ LLM 라벨을 워크로드에 전달
+# aipub_python_extra_values: null     # ○ python 차트에 더할 values 파일 (설치기가 도는 노드에 있는 경로)
+# aipub_python_project_controller_replicas: 1 # ○ python 서비스 설치 뒤 project-controller 복제 수 (0: 손으로 조정)
+# aipub_python_network_operator_enabled: false # ○ aipub-network-operator 설치 (InfiniBand 사이트), setup-network 가 multus 도 설치
+# aipub_python_network_operator_ib_nodes: null # ○ InfiniBand 노드와 fabric 이름 (네트워크 오퍼레이터를 켜면 필수)
+# aipub_python_network_operator_ib_pfs: null # ○ 파드에 줄 InfiniBand 포트, 노드별 (네트워크 오퍼레이터를 켜면 필수)
+# aipub_python_network_operator_default_ipoib_cidr: "10.250.0.0/16" # ○ InfiniBand 위 파드 IP 대역 (비우면 RDMA 만)
+# aipub_python_network_operator_mode: "pf" # ○ 네트워크 오퍼레이터 모드 (pf, SR-IOV 면 vf)
+# aipub_python_network_operator_num_vfs_per_pf: 8 # ○ PF 하나당 VF 수, 펌웨어에 설정한 값 (vf 모드)
+# aipub_python_network_operator_sm_nodes: null # ○ opensm 을 돌릴 노드와 우선순위 (vf 모드)
 
 
 # ============================================================

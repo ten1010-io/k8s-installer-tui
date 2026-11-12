@@ -119,7 +119,9 @@ type RunState struct {
 	AipubInstalled bool `json:"aipub_installed"`
 	// Monitoring and ArchivePath are what the operator chose for the run; a
 	// resume keeps them too, so that it runs the plan it went on from
-	Monitoring  bool        `json:"monitoring"`
+	Monitoring bool `json:"monitoring"`
+	// Python: the python services were part of the run (setup-python.yml)
+	Python      bool        `json:"python,omitempty"`
 	ArchivePath string      `json:"archive_path,omitempty"`
 	Started     time.Time   `json:"started"`
 	Updated     time.Time   `json:"updated"`
@@ -509,7 +511,7 @@ func (r *Runner) sudoReady(ctx context.Context) error {
 func (r *Runner) init(prev *RunState) {
 	now := time.Now()
 	r.st = RunState{InputHash: InputHash(r.Inputs), Existing: r.Opts.Existing, AipubInstalled: r.Opts.AipubInstalled,
-		Monitoring: r.Opts.Monitoring, ArchivePath: r.Opts.ArchivePath, Started: now, Updated: now}
+		Monitoring: r.Opts.Monitoring, Python: r.Opts.Python, ArchivePath: r.Opts.ArchivePath, Started: now, Updated: now}
 	// again: a step the last run went on past (Continued) runs again now, and
 	// so do the steps after it, though they were ok. They ran after it for a
 	// reason: setup-aipub's k8s-jwks writes the authentication config on the
@@ -628,7 +630,9 @@ func (r *Runner) stages(ctx context.Context) Outcome {
 			return OutcomeStopped
 		}
 	}
-	if left {
+	// a step the run went on past and a later step made good (clearInformer) is
+	// no longer one
+	if left && r.anyContinued() {
 		return OutcomeFailed
 	}
 	return OutcomeOK
@@ -724,8 +728,16 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 	goesOn := false
 	if err != nil && ctx.Err() == nil {
 		note = knownFailure(st, logPath, r.failureContext(st))
-		if goesOn = informerOnly(st, attemptLines(logPath, st)); goesOn {
-			note += ". " + i18n.T("Only backend-informer failed, and the steps after this one do not depend on it: this step stays failed and the run goes on")
+		// A7 is setup-aipub after the python services: the Workspace CRD is there
+		// by then, so the informer failing there is a failure like any other
+		if goesOn = st.ID != aipubAgainStepID && informerOnly(st, attemptLines(logPath, st)); goesOn {
+			if r.pythonPlanned() {
+				// the plan itself installs what the informer waits for
+				note = i18n.T("Expected on a new cluster: backend-informer waits for the Workspace CRD the python services make. " +
+					"The services before it are installed. The run goes on: A6 installs the python services and A7 runs setup-aipub again, which clears this")
+			} else {
+				note += ". " + i18n.T("Only backend-informer failed, and the steps after this one do not depend on it: this step stays failed and the run goes on")
+			}
 		}
 	}
 	r.set(st.ID, func(s *StepState) {
@@ -739,6 +751,9 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 			s.Status, s.Note, s.Continued = StatusFailed, note, goesOn
 		}
 	})
+	if err == nil && st.ID == aipubAgainStepID {
+		r.clearInformer()
+	}
 	// to the stage, a failure the run goes on past is no failure: the steps
 	// beside it are not told to stop
 	return err == nil || goesOn
@@ -748,7 +763,48 @@ func (r *Runner) command(ctx context.Context, st Step) bool {
 const (
 	setupAipubPlaybook = "aipub-playbooks/setup-aipub.yml"
 	workspaceCRDGone   = "CRD 'workspaces.aipub.ten1010.io' does not exist"
+	// The steps of pythonSteps and the setup-aipub they run again for
+	aipubStepID      = "A5"
+	pythonStepID     = "A6"
+	aipubAgainStepID = "A7"
 )
+
+// pythonPlanned reports whether this run installs the python services: the
+// installer has them and the operator did not leave them out.
+func (r *Runner) pythonPlanned() bool {
+	return r.Opts.Python && r.Opts.HasPython()
+}
+
+// clearInformer is called when A7, setup-aipub after the python services, has
+// succeeded: the A5 the run went on past because only backend-informer failed
+// (Continued) is good now, as the same playbook has just brought every service
+// up, the informer among them. Without this the run would end failed with
+// nothing left to do, and a resume would run A5 and everything after it again.
+func (r *Runner) clearInformer() {
+	r.mu.Lock()
+	s := r.st.Step(aipubStepID)
+	cleared := s != nil && s.Status == StatusFailed && s.Continued
+	r.mu.Unlock()
+	if !cleared {
+		return
+	}
+	r.set(aipubStepID, func(s *StepState) {
+		s.Status, s.Continued = StatusOK, false
+		s.Note = i18n.T("backend-informer came up in A7, setup-aipub run again after the python services")
+	})
+}
+
+// anyContinued reports whether a step the run went on past is still failed.
+func (r *Runner) anyContinued() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.st.Steps {
+		if s := &r.st.Steps[i]; s.Status == StatusFailed && s.Continued {
+			return true
+		}
+	}
+	return false
+}
 
 // componentFailed is the result line install.sh of aipub-installer prints for
 // a component that failed.

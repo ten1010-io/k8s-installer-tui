@@ -21,6 +21,9 @@ aipub_default_ingress_class:
 #aipub_cilium_envoy_idle_timeout_seconds: 300
 #aipub_cilium_hubble_relay_enabled: false
 #aipub_cilium_hubble_ui_enabled: false
+# multus, for aipub-network-operator on an InfiniBand site. Unset, it follows
+# aipub_python_network_operator_enabled; false only where another multus is installed
+#aipub_multus_enabled: false
 
 # ---- cert (setup-cert.yml) ----
 
@@ -139,3 +142,81 @@ aipub_ha_mode_storage_class: "nfs-client"
 #aipub_monitoring_opensearch_disk_watermark_low: "85%"
 #aipub_monitoring_opensearch_disk_watermark_high: "90%"
 #aipub_monitoring_opensearch_disk_watermark_flood_stage: "95%"
+
+# ---- python (setup-python.yml) ----
+
+# -- python: coaster --
+
+# Checked against the license keys: the cluster name they were issued for
+aipub_python_coaster_cluster_name: "cluster1"
+
+# GPU nodes, by kubernetes node name: coaster labels them as GPU nodes
+#aipub_python_coaster_gpu_nodes: ["gpu-node1", "gpu-node2"]
+
+# License keys by kubernetes node name, every node: patched into the NodeLicenses after the install.
+# Unset: patched by hand (/opt/k8s-installer/scripts/aipub/python/installer/tools/patch-license-key.sh)
+#aipub_python_coaster_license_keys:
+#  gpu-node1: "v2.eyJjbHVzdGVyX25hbWUiOiJjbHVzdGVyMSIsInNsb3QiOjF9.Qx4…"
+#  gpu-node2: "v2.eyJjbHVzdGVyX25hbWUiOiJjbHVzdGVyMSIsInNsb3QiOjJ9.b2A…"
+
+# -- python: workload-controller-manager and the workload Gateway --
+
+# Where the workload Gateway takes its VIP from: a name of aipub_load_balancers. Unset: the one of the ingress,
+# shared on 8080/8443
+#aipub_python_workload_gateway_load_balancer: "lb2"
+
+# Labeled for ClusterVolumes: wcm makes ClusterVolumes only on these storage classes (RWX, Immediate)
+#aipub_python_cluster_volume_storage_classes: ["nas-nfs"]
+
+# TCP services shown to the project. On by default
+#aipub_python_wcm_tcp_visibility_enabled: true
+
+# LLM labels passed on to the workloads. On by default
+#aipub_python_wcm_llm_label_propagation_enabled: true
+
+# -- python: chart values no variable covers --
+
+# Values files of the python chart given after the site values (resources and the like), on the node the installer
+# runs on (aipub_runner_node). Keys are subchart names
+#aipub_python_extra_values: ["/opt/k8s-installer/ansible/files/aipub/python-values.yaml"]
+
+# -- python: how the components are installed --
+
+# dag: the components that do not need each other at the same time (charts/python/services.yaml); helmfile: the
+# releases deployed by helmfile, by the same needs (helmfile/python). Default installer,
+# one at a time
+#aipub_python_deploy_tool: "dag"
+
+# -- python: project-controller --
+
+# setup-python.yml scales project-controller to 0 before the python services and to this many replicas after them
+# (a larger count it had before is kept). 0: left as it is, to scale by hand
+#aipub_python_project_controller_replicas: 1
+
+# -- python: aipub-network-operator (InfiniBand sites only) --
+
+# Installs aipub-network-operator (InfiniBand ports for the pods), and multus with setup-network
+#aipub_python_network_operator_enabled: true
+
+# Required. The IB nodes and their fabric name, for the node label aipub.ten1010.io/ib-subnet=<fabric name>: multus
+# and the operator run only on these nodes. One name per subnet manager: the ib_nodes block at the end of
+# /opt/k8s-installer/scripts/aipub/python/installer/tools/search-ib-pfs.sh --all, fabrics renamed as the site does.
+# Left empty, setup-python.yml stops with a value to paste
+#aipub_python_network_operator_ib_nodes: {"gpu-node1": "ib-1", "gpu-node2": "ib-1"}
+
+# Required. The ports given to the pods, by node: comma separated BDFs, the rail ports of
+# /opt/k8s-installer/scripts/aipub/python/installer/tools/search-ib-pfs.sh --all. Left empty, setup-python.yml stops with a value to paste
+#aipub_python_network_operator_ib_pfs: {"gpu-node1": "0000:3b:00.0", "gpu-node2": "0000:3b:00.0"}
+
+# IP range of the pods on IB (IPoIB), one address per PF or VF. Unset: 10.250.0.0/16. Set another range when it
+# overlaps the pod, service, node or storage ranges of the site; "" for RDMA only, no IP over IB
+#aipub_python_network_operator_default_ipoib_cidr: "10.250.0.0/16"
+
+# vf mode only: SR-IOV, VFs per PF as set in the firmware
+#aipub_python_network_operator_mode: "vf"
+#aipub_python_network_operator_num_vfs_per_pf: 8
+
+# vf mode only: per fabric of ib_nodes, two of its nodes, chosen (not looked up), run opensm at priority 15 (master)
+# and 14 (standby). The highest priority is the master: lower or stop the SM there now (sudo sminfo shows it).
+# opensm takes the first port of the node in ib_pfs
+#aipub_python_network_operator_sm_nodes: {"gpu-node1": 15, "gpu-node2": 14}

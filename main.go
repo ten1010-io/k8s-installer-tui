@@ -69,6 +69,7 @@ func main() {
 		"Needed for a new site that installs AIPub (it does not start without it, --no-archive). On an existing site, leaving it empty skips K4", plan.ArchiveName))
 	noArchive := flag.Bool("no-archive", false, i18n.T("--install: start a new site that installs AIPub without --archive (skips K4: the registry is empty and the steps from A1 on may fail)"))
 	noMonitoring := flag.Bool("no-monitoring", false, i18n.T("--install: do not install monitoring (A4)"))
+	noPython := flag.Bool("no-python", false, i18n.T("--install: do not install the python services (A6, A7)"))
 	showVersion := flag.Bool("version", false, i18n.T("print the version"))
 	flag.Parse()
 
@@ -125,6 +126,7 @@ func main() {
 		}
 		opts := plan.DefaultOptions()
 		opts.Root, opts.ArchivePath, opts.Monitoring = *installerRoot, plan.AbsArchive(*archive), !*noMonitoring
+		opts.Python = !*noPython
 		opts.Existing, opts.AipubInstalled, opts.SiteWhy = site.Existing, site.AipubInstalled, site.Why
 		// as the wizard does: P3 of an existing site keeps its nodes' audit policy
 		// under files/aipub where none is, so that C1 copies it to the installer

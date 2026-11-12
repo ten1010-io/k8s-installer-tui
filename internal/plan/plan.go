@@ -85,6 +85,16 @@ type Options struct {
 	ArchivePath string
 	// Whether the monitoring module is installed with AIPub
 	Monitoring bool
+	// Python: the python module (setup-python.yml: coaster, usage-manager, wcm,
+	// the Gateways) is installed after AIPub, and setup-aipub.yml run again after
+	// it. Only an installer that has the playbook can (HasPython)
+	Python bool
+	// NetworkOperator: aipub_python_network_operator_enabled of the site, which
+	// adds the operator and multus to the images python needs
+	NetworkOperator bool
+	// ReloaderOff: the site file sets aipub_reloader_enabled false, so setup-base.yml
+	// does not ask the catalog for the reloader image (ReadSiteFlags)
+	ReloaderOff bool
 
 	// Self is this program on the control node, which the plan runs for
 	// --fill-auth-config
@@ -127,7 +137,7 @@ func DefaultOptions() Options {
 	if err != nil {
 		self = "k8s-installer-tui"
 	}
-	return Options{Root: "/opt/k8s-installer", Monitoring: true, Self: filepath.ToSlash(self)}
+	return Options{Root: "/opt/k8s-installer", Monitoring: true, Python: true, Self: filepath.ToSlash(self)}
 }
 
 func (o Options) AnsibleDir() string { return o.Root + "/ansible" }
@@ -289,13 +299,60 @@ func build(s *state.AppState, o Options) []Step {
 		Step{ID: "A3", Title: "setup-base", Kind: Playbook, Playbook: "aipub-playbooks/setup-base.yml",
 			Note: "Harbor (" + haNote(s) + ")"},
 		monitoring,
-		Step{ID: "A5", Title: "setup-aipub", Kind: Playbook, Playbook: "aipub-playbooks/setup-aipub.yml",
-			Note: i18n.T("AIPub services. The Python components are not in aipub-installer yet, so they are not included")},
 	)
+	aipub := Step{ID: "A5", Title: "setup-aipub", Kind: Playbook, Playbook: "aipub-playbooks/setup-aipub.yml",
+		Note: i18n.T("AIPub services. The Python components are not in aipub-installer yet, so they are not included")}
+	if o.HasPython() {
+		aipub.Note = i18n.T("AIPub services. The python services follow in A6")
+	}
+	steps = append(steps, aipub)
 	if jwks {
 		steps = append(steps, jwksSteps(s, o)...)
 	}
+	if o.HasPython() {
+		steps = append(steps, pythonSteps(s, o)...)
+	}
 	return steps
+}
+
+// PythonPlaybook is the playbook of the python module, relative to the ansible
+// directory. An installer from before the module does not have it.
+const PythonPlaybook = "aipub-playbooks/setup-python.yml"
+
+// HasPython reports whether the installer in Root has the python module
+// (setup-python.yml: coaster, usage-manager, wcm, the Gateways).
+func (o Options) HasPython() bool {
+	_, err := os.Stat(filepath.Join(o.AnsibleDir(), filepath.FromSlash(PythonPlaybook)))
+	return err == nil
+}
+
+// pythonSteps are the last two steps of a plan whose installer has the python
+// module: setup-python.yml, and setup-aipub.yml once more.
+//
+// They come after everything that runs update-cluster.yml (A2.5, A5.2). Unless
+// the audit preset is on, setup-python.yml puts the audit log usage-manager
+// reads into kube-apiserver.yaml by hand, and an update-cluster.yml that writes
+// the manifests again takes it out; after them, it stays until the next one.
+// With the preset on the same settings are in the kubeadm configuration and
+// setup-python.yml leaves the manifest alone, which is what the note says.
+func pythonSteps(s *state.AppState, o Options) []Step {
+	python := Step{ID: "A6", Title: "setup-python", Kind: Playbook, Playbook: PythonPlaybook, Optional: true,
+		Note: i18n.T("The python services: coaster, usage-manager, workload-controller-manager, the inference and workload Gateways. " +
+			"After setup-aipub, which makes the usages database")}
+	again := Step{ID: "A7", Title: i18n.T("setup-aipub (again)"), Kind: Playbook, Playbook: "aipub-playbooks/setup-aipub.yml", Optional: true,
+		Note: i18n.T("Once more after the python services: backend-informer needs the Workspace CRD of workload-controller-manager")}
+	if !o.Python {
+		why := i18n.T("Python services not installed")
+		python.Skip, python.SkipWhy = true, why
+		again.Skip, again.SkipWhy = true, why
+		return []Step{python, again}
+	}
+	if !s.AppliedControlPlane().On(state.PresetAudit) {
+		python.Note += ". " + i18n.T("The audit log preset (4b) is off: setup-python puts the audit log usage-manager reads into "+
+			"kube-apiserver.yaml by hand, and the next update-cluster or upgrade takes it out again (run setup-python after one). "+
+			"With the preset on, kubeadm keeps it")
+	}
+	return []Step{python, again}
 }
 
 // updateClusterTime is what an update-cluster.yml takes, for the notes of the

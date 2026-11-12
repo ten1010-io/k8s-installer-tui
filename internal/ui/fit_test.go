@@ -76,6 +76,9 @@ func TestScreensFitTerminal(t *testing.T) {
 			d.at("5b.모니터링")
 			d.fits(h, "다음")
 			d.keys("ctrl+n")
+			d.at("5c.Python")
+			d.fits(h, "다음")
+			d.keys("ctrl+n")
 			d.at("6.AIPub LB")
 			d.keys("down", "ctrl+u", "lb-hjkl", "down", "192.168.0.100")
 			d.fits(h, "다음")
@@ -131,7 +134,7 @@ func TestPreviewManyWarningsFits(t *testing.T) {
 			existing.Existing = true
 			d := &driver{t: t, app: NewApp(s, paths, existing, "test")}
 			d.send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-			for i := 0; i < 9 && d.app.current < 9; i++ {
+			for i := 0; i < 10 && d.app.current < 10; i++ {
 				d.keys("ctrl+n")
 			}
 			d.at("8.저장")

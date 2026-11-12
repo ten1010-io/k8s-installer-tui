@@ -7,7 +7,7 @@ match what the installers accept now.
 | File | Copy of | Branch |
 |------|---------|--------|
 | `k8s-vars.yml` | `ansible/group_vars/all/vars.yml` of k8s-installer | `main` |
-| `aipub-vars.yml` | `ansible/aipub_vars/examples/vars.yml` of aipub-installer (defaults: `ansible/aipub_vars/defaults/*.yml`) | the branch carrying the IN-70 layout (`feat/IN-70-staged-packager`, then `main` once merged) |
+| `aipub-vars.yml` | `ansible/aipub_vars/examples/vars.yml` of aipub-installer (defaults: `ansible/aipub_vars/defaults/*.yml`) | the branch carrying the IN-70 layout with the python module (`feat/IN-70-installer-refactor` 26601b5, then `main` once merged) |
 | `authentication-config.yaml` | `scripts/aipub/installer/manifests/authentication-config.yaml` of aipub-installer, the config `k8s-jwks` fills in; the JWKS preset fills in the same two places (issuer URL, CA) | as above |
 | `audit-policy.yaml` | `scripts/ki-cp-node/services/python/5_1_x/stages/04-cluster-config/audit-policy.yaml` of aipub-installer-archive, the same rules (the sample counts left out of two comments); the wizard writes it under a marker line naming the template version (`audit.go`, bump `auditPolicyVersion` on a re-sync) | commit `0bb076d8` (AIP-2611) |
 

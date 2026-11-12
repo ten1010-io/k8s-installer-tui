@@ -1470,6 +1470,15 @@ Set load_balancer to null to listen on host_network_port of every node instead`,
 		Short:   "Install hubble ui",
 	},
 	{
+		Key:   "aipub_multus_enabled",
+		File:  FileAipub,
+		Group: "ingress",
+		Type:  TypeBool,
+		Short: "Install multus (unset: follows aipub_python_network_operator_enabled)",
+		Long: `multus, for aipub-network-operator on an InfiniBand site. Unset, it follows
+aipub_python_network_operator_enabled; false only where another multus is installed`,
+	},
+	{
 		Key:       "aipub_cert_mode",
 		File:      FileAipub,
 		Group:     "cert",

@@ -207,3 +207,19 @@ func checkDefaultClass(ctx context.Context, o Options, run RunFunc, node string)
 	}
 	return i18n.T("Could not check the default StorageClass: %s", couldNotRun(out, err)), false
 }
+
+// ReadReloaderOff reports whether the AIPub site file turns reloader off
+// (aipub_reloader_enabled: false), a variable the wizard does not manage:
+// setup-base.yml asks the catalog for the reloader image unless it is.
+func ReadReloaderOff(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var all map[string]any
+	if yaml.Unmarshal(data, &all) != nil {
+		return false
+	}
+	on, set := all["aipub_reloader_enabled"].(bool)
+	return set && !on
+}

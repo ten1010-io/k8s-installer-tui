@@ -1,0 +1,99 @@
+# The images each module needs from the catalog, as <path>/<name> of the user registry
+# (no tag: the tag is the catalog's). Read by load-site-vars.yml with the other defaults.
+#
+# Two readers, so that a release short of an image fails when the package is made and not
+# on site:
+#   - check-catalog.yml of the setup playbook of each module (catalog_names: the last part
+#     of each entry), which refuses a catalog that lacks one
+#   - aipub-packager (step 35-catalog, through catalog_required_file of aipub-installer.yml),
+#     which refuses an image list that lacks one
+#
+# The aipub module is not here: its images are images: of the releases of
+# charts/aipub/services.yaml (catalog_services of aipub-installer.yml), the one list of them.
+#
+# Read with awk by the packager: keep this shape, a module a key at two spaces, a quoted
+# "<path>/<name>" per line. The path is one of catalog_modules of aipub-installer.yml.
+# busybox of monitoring is aipub/busybox: the packager puts it under images.aipub and
+# monitoring reads it from there (aipub_monitoring_catalog_images)
+aipub_catalog_required:
+  network:
+    - "cilium/cilium"
+    - "cilium/operator-generic"
+    - "cilium/cilium-envoy"
+  base:
+    - "goharbor/harbor-portal"
+    - "goharbor/harbor-core"
+    - "goharbor/harbor-jobservice"
+    - "goharbor/registry-photon"
+    - "goharbor/harbor-registryctl"
+    - "goharbor/trivy-adapter-photon"
+    - "goharbor/harbor-db"
+    - "goharbor/redis-photon"
+  # setup-base.yml checks it when aipub_reloader_enabled (the default)
+  reloader:
+    - "stakater/reloader"
+  monitoring:
+    - "aipub/monitoring/opensearch"
+    - "aipub/monitoring/opensearch-dashboards"
+    - "aipub/monitoring/opensearch-postinstall-job"
+    - "aipub/monitoring/fluent-bit"
+    - "aipub/monitoring/alertmanager"
+    - "aipub/monitoring/victoriametrics-operator"
+    - "aipub/monitoring/vmo-config-reloader"
+    - "aipub/monitoring/victoria-metrics"
+    - "aipub/monitoring/vmagent"
+    - "aipub/monitoring/vmalert"
+    - "aipub/monitoring/vmauth"
+    - "aipub/monitoring/vm-replica-sync"
+    - "aipub/monitoring/kube-state-metrics"
+    - "aipub/monitoring/node-exporter"
+    - "aipub/monitoring/prometheus-adapter"
+    - "aipub/monitoring/metrics-server"
+    - "aipub/monitoring/k8s-ephemeral-storage-metrics"
+    - "aipub/monitoring/dcgm-exporter"
+    - "aipub/monitoring/ipmi-exporter"
+    - "aipub/monitoring/node-info-exporter"
+    - "aipub/monitoring/node-problem-detector"
+    - "aipub/monitoring/gpu-pod-exporter"
+    - "aipub/monitoring/aipub-crd-exporter"
+    - "aipub/monitoring/aipub-disk-exporter"
+    - "aipub/monitoring/postgres-exporter"
+    - "aipub/monitoring/aipub-monitoring-alerter"
+    - "aipub/monitoring/aipub-monitoring-api"
+    - "aipub/monitoring/report-dispatcher"
+    - "aipub/busybox"
+  # setup-python.yml checks them. busybox, which the python services pull too, is aipub/busybox above (no image
+  # twice here): check-catalog.yml of the python module adds its name. The paths are those the release lists the
+  # images at: openssh-server and epp under a path of their own in aipub/, those of the agentgateway project
+  # under agentgateway/
+  python:
+    - "aipub/gateway-api-inference-extension/epp"
+    - "agentgateway/controller"
+    - "agentgateway/agentgateway"
+    - "aipub/coaster-agent"
+    - "aipub/coaster-block-server"
+    - "aipub/coaster-controller-manager"
+    - "aipub/coaster-scheduler"
+    - "aipub/usage-manager"
+    - "aipub/aipub-workload-controller-manager"
+    - "aipub/workspace-init"
+    - "aipub/jupyter-install"
+    - "aipub/vscode-install"
+    - "aipub/commit-agent"
+    - "aipub/fileserver"
+    - "aipub/linuxserver/openssh-server"
+
+# The images a module needs only when a site turns a feature on: hubble of cilium
+# (aipub_cilium_hubble_relay_enabled, aipub_cilium_hubble_ui_enabled, off by default), which
+# setup-network.yml adds to catalog_names, and the network operator of the python module (below). The packager warns when the list lacks one, since a
+# site that turns it on would be refused. Same shape as aipub_catalog_required
+aipub_catalog_optional:
+  network:
+    - "cilium/hubble-relay"
+    - "cilium/hubble-ui-backend"
+    - "cilium/hubble-ui"
+  # aipub-network-operator and the multus it needs (aipub_python_network_operator_enabled, aipub_multus_enabled,
+  # off by default): setup-python.yml and setup-network.yml add their names
+  python:
+    - "aipub/aipub-network-operator"
+    - "aipub/multus-cni"

@@ -43,6 +43,7 @@ func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version st
 	s4b.SetSite(opts)
 	s5 := screens.NewS5Aipub()
 	s5b := screens.NewS5bMonitoring()
+	s5c := screens.NewS5cPython()
 	s6 := screens.NewS6AipubLB()
 	s7 := screens.NewS6CertMode()
 	s8 := screens.NewS7Preview(s, paths, opts.AnsibleDir()+"/files")
@@ -51,18 +52,18 @@ func NewApp(s *state.AppState, paths fileio.Paths, opts plan.Options, version st
 	s1.SyncFromState(s)
 	return &App{
 		appState:   s,
-		screenList: []screens.Screen{s1, s2, s3, s4, s4b, s5, s5b, s6, s7, s8, s9},
+		screenList: []screens.Screen{s1, s2, s3, s4, s4b, s5, s5b, s5c, s6, s7, s8, s9},
 		version:    version,
 	}
 }
 
 // The steps of the header, in the order of screenList; in English here, said
 // through i18n.T where they are drawn.
-var stepTitles = []string{"1.Nodes", "2.Groups", "3.Network", "4.K8s", "4b.Control plane", "5.AIPub", "5b.Monitoring", "6.AIPub LB", "7.Certs", "8.Save", "9.Install"}
+var stepTitles = []string{"1.Nodes", "2.Groups", "3.Network", "4.K8s", "4b.Control plane", "5.AIPub", "5b.Monitoring", "5c.Python", "6.AIPub LB", "7.Certs", "8.Save", "9.Install"}
 
 // aipubOnlyScreens are skipped when AIPub is not installed: what they ask goes to
 // files/aipub/vars.yml, which is then not written.
-var aipubOnlyScreens = map[int]bool{6: true, 7: true, 8: true}
+var aipubOnlyScreens = map[int]bool{6: true, 7: true, 8: true, 9: true}
 
 func (a *App) Init() tea.Cmd { return nil }
 

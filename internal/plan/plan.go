@@ -85,6 +85,16 @@ type Options struct {
 	ArchivePath string
 	// Whether the monitoring module is installed with AIPub
 	Monitoring bool
+	// Python: the python module (setup-python.yml: coaster, usage-manager, wcm,
+	// the Gateways) is installed after AIPub, and setup-aipub.yml run again after
+	// it. Only an installer that has the playbook can (HasPython)
+	Python bool
+	// NetworkOperator: aipub_python_network_operator_enabled of the site, which
+	// adds the operator and multus to the images python needs
+	NetworkOperator bool
+	// ReloaderOff: the site file sets aipub_reloader_enabled false, so setup-base.yml
+	// does not ask the catalog for the reloader image (ReadSiteFlags)
+	ReloaderOff bool
 
 	// Self is this program on the control node, which the plan runs for
 	// --fill-auth-config

@@ -20,6 +20,9 @@
 # new-site runs give a small fake archive. The stub ansible-playbook refuses a
 # run whose k8s_cp_extra_files names a file that is not under files/, as
 # k8s-installer's validate-hostvars.py does.
+# Last, an installer with the python module (setup-python.yml): A6 and A7
+# after A5, the informer stop of A5 made good by A7, --no-python, and a failed
+# A6 resumed.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
@@ -63,6 +66,21 @@ sleep "${!var:-${FAKE_SLEEP:-0.3}}"
 if [ "${FAKE_FAIL:-}" = "${pb}" ]; then
     [ -n "${FAKE_SAY:-}" ] && echo "${FAKE_SAY}"
     echo "fatal: [master1]: FAILED! => {\"msg\": \"fake failure of ${pb}\"}"
+    echo "$(date +%s.%N) end ${pb} 2" >> "${FAKE_DIR}/calls.log"
+    exit 2
+fi
+# setup-aipub on a new cluster, once (FAKE_INFORMER): backend-informer alone
+# fails for want of the Workspace CRD the python services make
+if [ -n "${FAKE_INFORMER:-}" ] && [ "${pb}" = setup-aipub ] && [ ! -e "${FAKE_DIR}/informer-failed" ]; then
+    touch "${FAKE_DIR}/informer-failed"
+    echo "TASK [[aipub] install.sh aipub-nav backend-informer] ***"
+    echo "fatal: [master1]: FAILED! => "
+    echo "        [ERROR] CRD 'workspaces.aipub.ten1010.io' does not exist. The informers cannot sync and the pod would restart in a loop."
+    echo "        AIPUB_RESULT module=aipub action=install component=backend-informer result=FAIL exit=1"
+    echo "...ignoring"
+    echo "TASK [[aipub] Result of aipub-nav backend-informer] ****"
+    echo "fatal: [master1]: FAILED! => "
+    echo "    - AIPUB_RESULT module=aipub action=install component=backend-informer result=FAIL"
     echo "$(date +%s.%N) end ${pb} 2" >> "${FAKE_DIR}/calls.log"
     exit 2
 fi
@@ -390,6 +408,60 @@ run = json.load(open(sys.argv[1]))
 st = {s["id"]: s["status"] for s in run["steps"]}
 sys.exit(0 if st.get("K4") == "ok" and run.get("archive_path") == sys.argv[2] and run.get("outcome") == "ok" else 1)
 EOF
+fi
+
+echo "── 10) an installer with the python module: A6 setup-python, A7 setup-aipub again; the informer stop of A5 made good by A7; --no-python; a failed A6 resumed"
+statuses() {
+    python3 - "${STATE}/state.json" "$@" <<'EOF'
+import json, sys
+run = json.load(open(sys.argv[1]))
+st = {s["id"]: s["status"] for s in run["steps"]}
+want = dict(a.split("=") for a in sys.argv[2:])
+got = {k: (run.get("outcome") if k == "outcome" else st.get(k)) for k in want}
+print("    " + " ".join(f"{k}={v}" for k, v in got.items()))
+sys.exit(0 if got == want else 1)
+EOF
+}
+if [ -e /etc/k8s-installer/applied-release ]; then
+    bad "/etc/k8s-installer/applied-release is there: run this in the container"
+else
+    mkdir -p "${ROOT}/ansible/aipub-playbooks"
+    echo "# setup-python.yml" > "${ROOT}/ansible/aipub-playbooks/setup-python.yml"
+
+    : > "${CALLS}"; rm -f "${W}/informer-failed"
+    FAKE_INFORMER=1 ${new_cmd} --fresh < /dev/null > "${W}/out10a.txt" 2>&1
+    code=$?
+    sed 's/^/    /' "${W}/out10a.txt"
+    order=$(awk '$2=="start"{printf "%s ", $3}' "${CALLS}")
+    case "${order}" in
+    *"setup-aipub setup-python setup-aipub ") [ "${code}" = 0 ] && ok "A5 (informer stop), A6, A7; exit 0: ${order}" || bad "exit ${code}: ${order}" ;;
+    *) bad "exit ${code}, order: ${order}" ;;
+    esac
+    grep -q 'A6' "${W}/out10a.txt" && grep -q 'setup-aipub (다시)' "${W}/out10a.txt" && ok "the output names A6 and A7" || bad "A6 or A7 not in the output"
+    statuses A5=ok A6=ok A7=ok outcome=ok && ok "state.json: A5 made good by A7, the run ok" || bad "state.json"
+
+    : > "${CALLS}"
+    ${new_cmd} --fresh --no-python < /dev/null > "${W}/out10b.txt" 2>&1
+    code=$?
+    order=$(awk '$2=="start"{printf "%s ", $3}' "${CALLS}")
+    case "${order}" in
+    *setup-python*) bad "--no-python ran setup-python: ${order}" ;;
+    *"setup-monitoring setup-aipub ") [ "${code}" = 0 ] && ok "--no-python: setup-aipub once, no setup-python" || bad "exit ${code}" ;;
+    *) bad "exit ${code}, order: ${order}" ;;
+    esac
+    statuses A5=ok A6=skipped A7=skipped outcome=ok && ok "state.json: A6 A7 skipped" || bad "state.json"
+
+    : > "${CALLS}"
+    FAKE_FAIL=setup-python ${new_cmd} --fresh < /dev/null > "${W}/out10c.txt" 2>&1
+    code=$?
+    [ "${code}" = 1 ] && statuses A5=ok A6=failed A7=pending outcome=failed && ok "setup-python failed: exit 1, A7 not run" || { bad "exit ${code}"; tail -15 "${W}/out10c.txt"; }
+    : > "${CALLS}"
+    ${install_cmd} --resume < /dev/null > "${W}/out10d.txt" 2>&1
+    code=$?
+    order=$(awk '$2=="start"{printf "%s ", $3}' "${CALLS}")
+    [ "${code}" = 0 ] && [ "${order}" = "setup-python setup-aipub " ] && ok "--resume: ${order}" || { bad "exit ${code}, resumed: ${order}"; tail -15 "${W}/out10d.txt"; }
+    statuses A6=ok A7=ok outcome=ok && ok "state.json after the resume" || bad "state.json"
+    rm -f "${ROOT}/ansible/aipub-playbooks/setup-python.yml"
 fi
 
 echo

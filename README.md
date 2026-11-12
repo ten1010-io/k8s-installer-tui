@@ -112,6 +112,7 @@ Docker와 네트워크(패키지, PyPI의 ansible-core)가 필요합니다. 이�
 | `--archive <path>` | (없음) | `--install`과 함께: K4의 사용자 레지스트리 아카이브(`ki-cp-user-registry-artifacts.tgz`). AIPub을 설치하는 새 사이트에는 필요: 없으면 시작하지 않음(종료 코드 2). 읽을 수 있는 일반 파일이 아니면 시작하지 않음. 기존 사이트·AIPub 없음은 비우면 K4 건너뜀 |
 | `--no-archive` | | `--install`과 함께: AIPub을 설치하는 새 사이트를 `--archive` 없이 시작(K4 건너뜀. 레지스트리가 비어 A1부터 이미지를 받지 못할 수 있음을 알고 쓸 때) |
 | `--no-monitoring` | | `--install`과 함께: 모니터링(A4)을 설치하지 않음 |
+| `--no-python` | | `--install`과 함께: python 서비스(A6 `setup-python`, A7 `setup-aipub` 다시)를 설치하지 않음. 설치기에 `setup-python.yml`이 있을 때만 계획에 들어감 |
 | `--version` | | 버전 출력 |
 
 `--render`의 종료 코드: `0` 검증 통과, `2` 검증 오류 있음(파일은 렌더링됨), `1` 로드·렌더링·쓰기 오류. 렌더링 결과는 `<dir>` 아래에 k8s-installer의 `ansible` 디렉터리 배치(`inventory.yml`, `group_vars/all/vars.yml`, `files/aipub/vars.yml`)로 쓰며, AIPub을 설치하지 않으면 `files/aipub/vars.yml`은 만들지 않습니다.
@@ -275,7 +276,7 @@ k8s-installer-tui --send-ssh-key --ask-pass-once    # 비밀번호를 한 번만
 9단계의 `실행` 버튼(또는 `--install`)은 계획을 제어 노드에서 차례로 실행합니다. 플레이북은 설치 디렉터리에서 venv를 켜고 `ansible-playbook -i inventory.yml ...`로, `install-plan.sh`와 같은 명령으로 실행합니다(P6이 찾은 `-e ansible_shell_executable` 포함).
 
 1. **사전 확인**: P1~P8을 아직 실행하지 않았으면 먼저 실행합니다. ✗가 하나라도 있으면 시작하지 않습니다(경고 `!`는 계속). `f`(처음부터)도 같습니다. 사전 확인이 도는 중이면 끝난 뒤 이어 갑니다. 확인한 뒤에 사이트 파일이나 옵션(기존 클러스터 여부, 설치 디렉터리)이 바뀌었으면 그 결과는 버리고 다시 확인합니다(P3가 손으로 넣은 apiserver 설정을 지키고, P6이 become 셸을 정하므로).
-2. **단계(stage)**: 한 단계가 모두 성공해야 다음 단계로 갑니다. 순서는 `C1`(설정을 다른 곳에 저장했을 때 설치 디렉터리로 복사, sudo. 이어서 실행할 때도 매번 다시 복사해 다시 저장한 설정으로 플레이북이 돎) → K1 → K2 → K3 → K4 → A1 → **A2 + M1** → (A2.5) → A3 → A4 → A5 → (A5.1 → A5.2).
+2. **단계(stage)**: 한 단계가 모두 성공해야 다음 단계로 갑니다. 순서는 `C1`(설정을 다른 곳에 저장했을 때 설치 디렉터리로 복사, sudo. 이어서 실행할 때도 매번 다시 복사해 다시 저장한 설정으로 플레이북이 돎) → K1 → K2 → K3 → K4 → A1 → **A2 + M1** → (A2.5) → A3 → A4 → A5 → (A5.1 → A5.2) → (A6 → A7).
    - 플레이북은 언제나 하나씩 실행합니다. 두 설치 도구의 모든 플레이북이 `begin-playbook.yml`로 시작해 `sync-ansible.yml`(ansible 디렉터리를 tar로 묶어 다른 ki cp 노드의 것을 지우고 바꿈)과 `/tmp/k8s-installer`의 고정 파일(vars.yml, 아카이브)을 쓰기 때문에, 같은 제어 노드에서 둘을 동시에 돌리면 서로의 파일을 덮어씁니다. k8s-installer에는 자체 잠금도 없습니다.
    - 단계마다 명령은 자기 세션(setsid)에서 터미널 없이 돕니다. 러너가 이 제어 노드에서 실행하는 sudo(C1의 복사, A5.1의 `--fill-auth-config`)는 `sudo -n`이라 비밀번호를 물으면 기다리지 않고 실패합니다. 그런 단계가 남아 있으면 시작 전에 `sudo -n true`로 확인하고, 실패하면 시작하지 않습니다(NOPASSWD sudo가 필요). `install-plan.sh`는 사람이 돌리므로 그냥 `sudo`입니다.
    - 함께 실행하는 것은 **M1(StorageClass 드라이버 설치, 수동)과 A2 `setup-cert`** 뿐입니다. M1이 하는 일은 읽기만 하는 `ansible <첫 k8s 컨트롤 플레인 노드> -m command -a 'kubectl get storageclass ...'`이고 ansible 디렉터리나 `/tmp/k8s-installer`를 건드리지 않습니다. 드라이버 파드는 노드가 Ready여야 하므로(A1 Cilium 뒤) 그 자리이고, 운영자가 드라이버를 까는 동안 setup-cert가 돕니다.
@@ -284,6 +285,9 @@ k8s-installer-tui --send-ssh-key --ask-pass-once    # 비밀번호를 한 번만
 5. **멈추기**: `Ctrl+C` 한 번은 실행 중인 단계가 끝나면 멈춤(M1 기다림은 바로 끝냄), 두 번은 실행 중인 단계의 프로세스 그룹에 SIGINT, 10초 뒤에도 남으면 SIGKILL(상태 `cancelled`). setup 플레이북은 다시 실행해도 안전하므로 그 단계부터 다시 실행하면 됩니다. 프로그램을 끝내면 실행도 멈춥니다(아직 분리 실행은 없음).
 6. **실패**: 단계가 실패하면 같은 stage의 다른 단계는 끝까지 돌게 두고(플레이북을 중간에 끊지 않음, M1 기다림은 끝냄) 거기서 멈춥니다. 끝에 실패한 단계, 종료 코드, 로그 경로, 로그 마지막 줄을 보여 줍니다.
    - `setup-aipub`이 backend-informer에서 Workspace CRD가 없다고 실패하면, aipub-installer README대로 Python 서비스를 설치한 뒤 이어서 실행하라고 안내합니다. 다시 돌려도 같은 이유로 실패하므로 자동 재시도는 하지 않습니다. 실패한 컴포넌트가 backend-informer 하나뿐일 때는(설치 스크립트의 결과 줄로 확인) 이 단계를 실패로 남긴 채 뒤 단계(A5.1, A5.2)를 계속 실행합니다. 뒤 단계는 백엔드와 CA 만 필요하고 informer 에 기대지 않기 때문입니다. 실행 결과는 실패(종료 코드 1)로 남고, Python 서비스를 설치한 뒤 이어서 실행하면 이 단계만 다시 돕니다. 다른 컴포넌트가 함께 실패했거나 닿지 않는 노드가 있으면 여느 실패처럼 그 자리에서 멈춥니다.
+   - **python 서비스 (A6, A7)**: 설치기에 python 모듈(`aipub-playbooks/setup-python.yml`)이 있으면 계획 끝에 A6 `setup-python`(coaster, usage-manager, workload-controller-manager, Gateway)과 A7 `setup-aipub` 다시 실행이 붙습니다. 9.설치 화면의 "Python 서비스"나 `--no-python`으로 뺄 수 있습니다. 이때 위의 backend-informer 실패는 계획 안에서 풀립니다: A5 를 실패로 남긴 채 A6, A7 까지 가고, A7 이 성공하면 A5 도 성공으로 바뀌어 실행 결과가 성공이 됩니다. A7 에서도 informer 가 실패하면 여느 실패처럼 멈춥니다.
+   - **감사 로그 프리셋과 python**: `setup-python`은 usage-manager 가 읽는 감사 로그 설정(`/var/log/aipub/usage/audit.log`)을 kube-apiserver manifest 에 손으로 넣습니다. 4b 의 "AIPub audit log" 프리셋은 같은 설정을 kubeadm 구성으로 넣으므로, 켜 두면 `setup-python`이 manifest 를 건드리지 않고 업그레이드·노드 추가 뒤에도 남습니다. 꺼 두면 다음 `update-cluster`·업그레이드 때 사라져 `setup-python`을 다시 돌려야 합니다(A6 단계 설명에 표시).
+   - **카탈로그 점검(P5)**: 설치기에 필요 이미지 목록(`ansible/aipub_vars/defaults/aipub-catalog.yml`)이 있으면 그 목록의 이름으로 점검하고, reloader 와 python 모듈의 이미지도 봅니다(python 은 계획에 들어 있을 때, 네트워크 오퍼레이터 이미지는 켰을 때만). 목록이 없는 예전 설치기 옆에서는 이 도구의 표를 씁니다.
    - helm으로 설치하는 단계(A1 `setup-network`, A3, A4, A5)가 파드를 기다리다 실패하면(`context deadline exceeded`, `ImagePullBackOff`, `ErrImagePull`, not ready), 흔한 원인이 사용자 레지스트리에 이미지가 없는 것이라고 말하고 확인 방법(컨트롤 플레인 노드에서 `kubectl -n <네임스페이스> get pods`)을 보입니다. 이번 실행이 K4를 건너뛰었거나 실행하지 않았으면 아카이브 경로를 넣고 이어서 실행하라고 덧붙입니다.
    - `k8s_cp_extra_files`가 가리키는 파일(JWKS 인증 설정 등)이 없다는 거부는 플레이북을 손으로 실행했을 때 납니다(이 도구의 단계는 아직 없는 파일을 `-e`로 뺌). 위저드로 실행하거나 그 단계 로그의 `-e`를 붙이라고 안내합니다. 빈 파일을 만들면 안 됩니다: 빈 인증 설정이 컨트롤 플레인 노드로 복사되면 apiserver가 뜨지 않습니다.
    - 실패한 실행 화면에서 `r`은 실패한 단계부터 이어서 실행(`실행`과 같음)입니다. `x`는 아래 "클러스터 초기화"의 조건에서만 나옵니다.

@@ -76,6 +76,7 @@ func (s *S9Install) loadPrev() {
 		s.opts.SiteWhy = plan.ResumedSite(prev, s.base.SiteWhy)
 		// and what the operator chose for it: 이어서 실행 runs that plan
 		s.opts.Monitoring, s.opts.ArchivePath = prev.Monitoring, prev.ArchivePath
+		s.opts.Python = prev.Python
 		s.archive.SetValue(prev.ArchivePath)
 	}
 }
@@ -406,6 +407,14 @@ func (s *S9Install) startRun(resume bool) tea.Cmd {
 			kept = append(kept, mon)
 		}
 		s.opts.Monitoring = s.last.Monitoring
+		if s.opts.Python != s.last.Python {
+			py := i18n.T("python services: don't install")
+			if s.last.Python {
+				py = i18n.T("python services: install")
+			}
+			kept = append(kept, py)
+		}
+		s.opts.Python = s.last.Python
 		if k4 := s.last.Step("K4"); k4 != nil && k4.Status == plan.StatusOK {
 			if plan.AbsArchive(s.archive.Value()) != s.last.ArchivePath {
 				kept = append(kept, i18n.T("archive path %s (K4 done)", s.last.ArchivePath))

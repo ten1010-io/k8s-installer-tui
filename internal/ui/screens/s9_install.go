@@ -46,6 +46,7 @@ import (
 const (
 	s9FocusArchive = iota
 	s9FocusMonitoring
+	s9FocusPython // only beside an installer that has the python module
 	s9FocusPlan
 	s9FocusNav
 )
@@ -243,6 +244,8 @@ func (s *S9Install) rebuild() {
 	// out with its CA
 	s.opts.JWKSCAReady = fileio.LookupCA(s.appState).PEM != ""
 	s.opts.StorageVars = plan.ReadStorageVars(s.paths.AipubVars)
+	s.opts.ReloaderOff = plan.ReadReloaderOff(s.paths.AipubVars)
+	s.opts.NetworkOperator = s.appState.PythonNetworkOperatorEnabled
 	s.steps = plan.Build(s.appState, s.opts)
 	// wrapped here, so that the viewport counts the lines it shows and scrolls to
 	// the last of them (it would wrap a long line itself and cut what overflows)
@@ -268,6 +271,9 @@ func (s *S9Install) next(i int) int {
 	if i == s9FocusMonitoring && !s.appState.AipubEnabled {
 		i++
 	}
+	if i == s9FocusPython && !s.pythonOffered() {
+		i++
+	}
 	if i == s9FocusPlan && s.planFits() {
 		i++
 	}
@@ -277,6 +283,9 @@ func (s *S9Install) next(i int) int {
 func (s *S9Install) prev(i int) int {
 	i--
 	if i == s9FocusPlan && s.planFits() {
+		i--
+	}
+	if i == s9FocusPython && !s.pythonOffered() {
 		i--
 	}
 	if i == s9FocusMonitoring && !s.appState.AipubEnabled {
@@ -771,6 +780,10 @@ func (s *S9Install) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.opts.Monitoring = !s.opts.Monitoring
 				s.rebuild()
 				return s, nil
+			case s9FocusPython:
+				s.opts.Python = !s.opts.Python
+				s.rebuild()
+				return s, nil
 			case s9FocusNav:
 				if s.navIdx == 0 {
 					return s, Prev()
@@ -860,13 +873,21 @@ func (s *S9Install) View() string {
 		return FitView(view, above+1, above+3, s.width, s.height)
 	}
 	n := strings.Count(top, "\n")
-	start, end := n-1, n // 모니터링
+	// the inputs are the last lines of top: the archive path, then monitoring
+	// (with AIPub), then the python services (with an installer that has them)
+	inputs := 1
+	if s.appState.AipubEnabled {
+		inputs++
+	}
+	if s.pythonOffered() {
+		inputs++
+	}
+	start, end := n-1, n // the last input
 	switch s.focusIdx {
 	case s9FocusArchive:
-		start, end = n-1, n
-		if s.appState.AipubEnabled {
-			start, end = n-2, n-1
-		}
+		start, end = n-inputs, n-inputs+1
+	case s9FocusMonitoring:
+		start, end = n-inputs+1, n-inputs+2
 	case s9FocusPlan:
 		start, end = n+1, n+2+s.planVP.Height // the plan and the line under it
 	case s9FocusNav:
@@ -905,6 +926,14 @@ func (s *S9Install) top() string {
 			mon = styles.RadioOn() + " " + i18n.T("Install")
 		}
 		b.WriteString(RenderSectionHeader(i18n.T("Monitoring"), f == s9FocusMonitoring) + "  " + mon + "\n")
+	}
+	if s.pythonOffered() {
+		// A6 setup-python and A7 setup-aipub again; off, they stay in the plan as skipped
+		py := styles.RadioOff() + " " + i18n.T("Don't install")
+		if s.opts.Python {
+			py = styles.RadioOn() + " " + i18n.T("Install")
+		}
+		b.WriteString(RenderSectionHeader(i18n.T("Python services"), f == s9FocusPython) + "  " + py + "\n")
 	}
 	return b.String() // its last line is blank
 }
@@ -1027,4 +1056,10 @@ func (s *S9Install) bottom() string {
 	}
 	b.WriteString("\n" + RenderNavButtons(i18n.T("Back"), run, prevFocused, runFocused, s.width))
 	return b.String()
+}
+
+// pythonOffered reports whether the screen offers the python services: AIPub is
+// installed and the installer has setup-python.yml (plan.Options.HasPython).
+func (s *S9Install) pythonOffered() bool {
+	return s.appState.AipubEnabled && s.opts.HasPython()
 }

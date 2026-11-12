@@ -75,6 +75,7 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 		opts.Existing, opts.AipubInstalled = prev.Existing, prev.AipubInstalled
 		opts.SiteWhy = plan.ResumedSite(prev, opts.SiteWhy)
 		opts.Monitoring = prev.Monitoring
+		opts.Python = prev.Python
 		// a K4 that did not succeed runs with the --archive of this start, before
 		// the step the last run stopped at; one that did keeps its archive
 		if k4Kept {
@@ -118,6 +119,8 @@ func installHeadless(paths fileio.Paths, s *state.AppState, opts plan.Options, r
 	opts.SiteDir = savedIn
 	opts.JWKSCAReady = fileio.LookupCA(s).PEM != ""
 	opts.StorageVars = plan.ReadStorageVars(paths.AipubVars)
+	opts.ReloaderOff = plan.ReadReloaderOff(paths.AipubVars)
+	opts.NetworkOperator = s.PythonNetworkOperatorEnabled
 
 	// Ctrl-C: the first stops after the running steps, the second now; SIGTERM
 	// and SIGHUP (the ssh session dropped) now. Nothing runs past this program
@@ -256,6 +259,9 @@ func keptFromLast(prev *plan.RunState, o plan.Options, k4Kept bool) []string {
 	}
 	if o.Monitoring != prev.Monitoring {
 		out = append(out, fmt.Sprintf("--no-monitoring=%t", !prev.Monitoring))
+	}
+	if o.Python != prev.Python {
+		out = append(out, fmt.Sprintf("--no-python=%t", !prev.Python))
 	}
 	if k4Kept && o.ArchivePath != prev.ArchivePath {
 		out = append(out, i18n.T("--archive %s (K4 done)", prev.ArchivePath))

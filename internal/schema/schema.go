@@ -122,6 +122,7 @@ var Groups = []struct{ Name, Title string }{
 	{"app", "AIPub app"},
 	{"deploy", "Deploy tools"},
 	{"monitoring", "Monitoring"},
+	{"python", "Python services"},
 }
 
 // Classes of k8s-installer a change to an existing cluster is refused for or

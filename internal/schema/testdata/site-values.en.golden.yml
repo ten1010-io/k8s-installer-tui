@@ -133,6 +133,7 @@ aipub_load_balancers: [{name: "lb1", vip: "192.168.0.100", nodes: ["node1"]}] # 
 # aipub_cilium_envoy_idle_timeout_seconds: 300 # ○ cilium envoy idle timeout in seconds
 # aipub_cilium_hubble_relay_enabled: false # ○ Install hubble relay
 # aipub_cilium_hubble_ui_enabled: false # ○ Install hubble ui
+# aipub_multus_enabled: null          # ○ Install multus (unset: follows aipub_python_network_operator_enabled)
 aipub_ingress_zone: "aipub.example.com" # ✅ AIPub domain (example: aipub.example.com)
 # preflight: DNS for `*.<this domain>` must point to the ingress VIP for access from outside
 
@@ -174,6 +175,7 @@ aipub_harbor_local_pv_node: "node1"   # ✅ (required when aipub_ha_mode=false) 
 # aipub_monitoring_helmfile_bin: null # ○ helmfile the monitoring uses (default: the same as aipub_app_helmfile_bin)
 # aipub_monitoring_kustomize_bin: null # ○ kustomize the monitoring uses (default: the kustomize next to helmfile)
 # aipub_monitoring_helmfile_dry_run: false # ○ Run helmfile as a dry run only
+# aipub_python_deploy_tool: "installer" # ○ python deploy tool
 
 ### Monitoring ──────────────────────────────
 # aipub_monitoring_storage_class_name: null # ○ Monitoring volume StorageClass (default aipub_ha_mode_storage_class)
@@ -190,6 +192,24 @@ aipub_harbor_local_pv_node: "node1"   # ✅ (required when aipub_ha_mode=false) 
 # aipub_monitoring_opensearch_disk_watermark_low: "85%" # ○ OpenSearch disk watermark low
 # aipub_monitoring_opensearch_disk_watermark_high: "90%" # ○ OpenSearch disk watermark high
 # aipub_monitoring_opensearch_disk_watermark_flood_stage: "95%" # ○ OpenSearch disk watermark flood_stage
+
+### Python services ─────────────────────────
+# aipub_python_coaster_cluster_name: "cluster1" # ○ Cluster name the coaster license keys were issued for
+# aipub_python_coaster_gpu_nodes: []  # ○ GPU nodes, by kubernetes node name (coaster labels them)
+# aipub_python_coaster_license_keys: null # ○ coaster license keys by node name (unset: patched by hand after the install)
+# aipub_python_workload_gateway_load_balancer: null # ○ Load balancer of the workload Gateway (unset: the one of the ingress, on 8080/8443)
+# aipub_python_cluster_volume_storage_classes: null # ○ Storage classes wcm makes ClusterVolumes on (RWX, Immediate)
+# aipub_python_wcm_tcp_visibility_enabled: true # ○ Show the TCP services of a workload to its project
+# aipub_python_wcm_llm_label_propagation_enabled: true # ○ Pass the LLM labels on to the workloads
+# aipub_python_extra_values: null     # ○ Extra values files of the python chart, on the node the installer runs on
+# aipub_python_project_controller_replicas: 1 # ○ project-controller replicas after the python services (0: scale by hand)
+# aipub_python_network_operator_enabled: false # ○ Install aipub-network-operator (InfiniBand sites), and multus with setup-network
+# aipub_python_network_operator_ib_nodes: null # ○ InfiniBand nodes and their fabric name (required with the network operator)
+# aipub_python_network_operator_ib_pfs: null # ○ InfiniBand ports given to the pods, by node (required with the network operator)
+# aipub_python_network_operator_default_ipoib_cidr: "10.250.0.0/16" # ○ IP range of the pods on InfiniBand (empty: RDMA only)
+# aipub_python_network_operator_mode: "pf" # ○ Network operator mode (pf, or vf for SR-IOV)
+# aipub_python_network_operator_num_vfs_per_pf: 8 # ○ VFs per PF, as set in the firmware (vf mode)
+# aipub_python_network_operator_sm_nodes: null # ○ Nodes that run opensm and their priority (vf mode)
 
 
 # ============================================================

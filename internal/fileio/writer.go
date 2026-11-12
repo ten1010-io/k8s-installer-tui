@@ -440,6 +440,10 @@ func renderAipubVars(existing []byte, s *state.AppState) ([]byte, error) {
 	setKey(top, "aipub_harbor_redis_storage_size", quoted(s.HarborRedisStorageSize))
 	setKey(top, "aipub_harbor_trivy_storage_size", quoted(s.HarborTrivyStorageSize))
 
+	// python: the example of aipub-installer sets the cluster name, so it is a key
+	// of every site file; the rest of the python section is optional
+	setKey(top, "aipub_python_coaster_cluster_name", quoted(s.PythonCoasterClusterName))
+
 	setOptionalAipub(top, s)
 
 	return encodeDoc(top)

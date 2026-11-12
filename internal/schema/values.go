@@ -240,6 +240,14 @@ func aipubValue(s *state.AppState, key string) (any, bool) {
 		return s.MonitoringApiReplicas, true
 	case "aipub_monitoring_cp_nodes":
 		return append([]string{}, s.MonitoringCpNodes...), true
+	case "aipub_python_coaster_cluster_name":
+		return s.PythonCoasterClusterName, true
+	case "aipub_python_coaster_gpu_nodes":
+		return append([]string{}, s.PythonCoasterGpuNodes...), true
+	case "aipub_python_deploy_tool":
+		return s.PythonDeployTool, true
+	case "aipub_python_network_operator_enabled":
+		return s.PythonNetworkOperatorEnabled, true
 	}
 	return nil, false
 }

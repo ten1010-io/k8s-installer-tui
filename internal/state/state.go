@@ -96,6 +96,14 @@ type AppState struct {
 	// on, by node name; empty: every k8s control plane node
 	MonitoringCpNodes []string
 
+	// S5c: the python services (files/aipub/vars.yml, setup-python.yml), written
+	// only when changed. Whether they are installed is a choice of the run
+	// (plan.Options), not a variable: aipub-installer has none for it
+	PythonCoasterClusterName     string   // aipub_python_coaster_cluster_name
+	PythonCoasterGpuNodes        []string // aipub_python_coaster_gpu_nodes, by node name
+	PythonDeployTool             string   // aipub_python_deploy_tool: installer | dag | helmfile
+	PythonNetworkOperatorEnabled bool     // aipub_python_network_operator_enabled (InfiniBand sites)
+
 	// S6: Certificate mode (files/aipub/vars.yml → aipub_cert_mode)
 	AipubCertMode string
 }
@@ -138,6 +146,9 @@ func DefaultState() *AppState {
 		MonitoringMetricsRetentionPeriod: "180d",
 		MonitoringRightsizingEnabled:     true,
 		MonitoringApiReplicas:            2,
+
+		PythonCoasterClusterName: "cluster1",
+		PythonDeployTool:         "installer",
 
 		// The authentication of AIPub on a new site (aipub-installer k8s-jwks:
 		// "A new install has no webhook")

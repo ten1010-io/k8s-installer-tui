@@ -211,6 +211,11 @@ type aipubYAML struct {
 	MonRightsizing         *bool    `yaml:"aipub_monitoring_rightsizing_enabled"`
 	MonApiReplicas         int      `yaml:"aipub_monitoring_api_replicas"`
 	MonCpNodes             []string `yaml:"aipub_monitoring_cp_nodes"`
+
+	PyClusterName     string   `yaml:"aipub_python_coaster_cluster_name"`
+	PyGpuNodes        []string `yaml:"aipub_python_coaster_gpu_nodes"`
+	PyDeployTool      string   `yaml:"aipub_python_deploy_tool"`
+	PyNetworkOperator *bool    `yaml:"aipub_python_network_operator_enabled"`
 }
 
 type varsYAML struct {
@@ -377,6 +382,15 @@ func applyAipub(a aipubYAML, s *state.AppState) {
 	}
 	if len(a.MonCpNodes) > 0 {
 		s.MonitoringCpNodes = a.MonCpNodes
+	}
+
+	setIf(&s.PythonCoasterClusterName, a.PyClusterName)
+	if len(a.PyGpuNodes) > 0 {
+		s.PythonCoasterGpuNodes = a.PyGpuNodes
+	}
+	setIf(&s.PythonDeployTool, a.PyDeployTool)
+	if a.PyNetworkOperator != nil {
+		s.PythonNetworkOperatorEnabled = *a.PyNetworkOperator
 	}
 }
 
